@@ -73,3 +73,40 @@ the live rollback snapshot is fetched, durably written to D1, and audited before
 the first mutation. Every action carries its observed values, policy version,
 rollback plan, actor, and idempotency key. Controls remove ingress or pause work;
 they do not delete resources or storage.
+
+## Deployment fuse
+
+`@standardagents/brolly-runtime` is the preferred precise actuator. Brolly keeps
+one canonical fuse manifest per integrated Worker in D1 and publishes it as the
+Worker's `BROLLY_FUSE` secret. A publish creates a new Worker version. The
+runtime checks that environment binding synchronously; it never performs a
+network or storage lookup while enforcing the fuse.
+
+The manifest contains a generation, an optional whole-Worker quarantine, and a
+bounded map of exact 64-character Durable Object IDs. It is rejected before it
+reaches Cloudflare if it would exceed the 5 KB binding limit. Applying or
+resuming one target preserves all other active targets in that Worker. Resume
+is explicit by default because stopped telemetry cannot prove that the
+underlying runaway behavior has been repaired.
+
+Cloudflare's deployment unit remains the Worker script. Exact matching means
+only the selected object is denied after rollout, but unrelated active objects
+in that script may restart as the version changes. Brolly exposes that
+collateral lifecycle risk in confirmation UI and audit records.
+
+## Configuration evidence
+
+Runtime readiness is modeled per Worker and per Durable Object namespace, not
+as one account boolean. Cloudflare's namespace inventory supplies the owning
+script, class, and storage backend. Inventory metadata is merged into existing
+asset metadata so authoritative Cloudflare fields can refresh without erasing
+operator tiers or fuse declarations.
+
+`GET /api/configuration` joins scoped assets with cached verification records
+stored under `configuration_verification:<worker-script>` settings keys.
+`POST /api/configuration/verify` accepts up to 20 inventoried Worker names and
+performs bounded, read-only Cloudflare checks for secret presence, deployment
+identity, and the runtime marker in deployed content. Namespace readiness then
+inherits only the status of its resolved owning Worker. These checks are kept
+outside the automatic monitor because bundle downloads are useful after a
+deployment or operator request, not every minute.

@@ -9,11 +9,14 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(
       `SELECT i.*,a.name AS asset_name,a.parent_id,a.scope,a.tier,a.metadata_json,
+        p.tier AS parent_tier,p.metadata_json AS parent_metadata_json,
         (SELECT unit FROM metric_samples s WHERE s.account_id=i.account_id AND s.family=i.family AND s.asset_id=i.asset_id AND s.metric=i.metric ORDER BY s.end_at DESC LIMIT 1) AS unit,
         (SELECT id FROM actions x WHERE x.incident_id=i.id ORDER BY x.updated_at DESC LIMIT 1) AS action_id,
         (SELECT state FROM actions x WHERE x.incident_id=i.id ORDER BY x.updated_at DESC LIMIT 1) AS action_state,
         (SELECT kind FROM actions x WHERE x.incident_id=i.id ORDER BY x.updated_at DESC LIMIT 1) AS action_kind
-       FROM incidents i LEFT JOIN assets a ON a.account_id=i.account_id AND a.family=i.family AND a.asset_id=i.asset_id
+       FROM incidents i
+       LEFT JOIN assets a ON a.account_id=i.account_id AND a.family=i.family AND a.asset_id=i.asset_id
+       LEFT JOIN assets p ON p.account_id=a.account_id AND p.family=a.family AND p.asset_id=a.parent_id
        WHERE i.status!='resolved' AND i.metric!='telemetry_coverage'
        ORDER BY CASE i.severity WHEN 'emergency' THEN 0 WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,i.last_seen DESC LIMIT 250`,
     ).all<Row>(),
@@ -82,7 +85,7 @@ export async function onboardingData(env: Env): Promise<Record<string, unknown>>
     env.DB.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT family,metric,state FROM metric_coverage`).all<{ family: string; metric: string; state: string }>(),
-    env.DB.prepare(`SELECT family,asset_id,name,scope FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all<{ family: "workers" | "durable_objects"; asset_id: string; name: string | null; scope: "resource" | "namespace" }>(),
+    env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all<{ family: "workers" | "durable_objects"; asset_id: string; name: string | null; scope: "resource" | "namespace"; metadata_json: string }>(),
   ]);
   const policy = readPolicy(policyRow?.value);
   const coverage = coverageResult.results;
@@ -102,6 +105,7 @@ export async function onboardingData(env: Env): Promise<Record<string, unknown>>
         id: asset.asset_id,
         name: asset.name ?? asset.asset_id,
         scope: asset.scope,
+        tags: parseJson(asset.metadata_json ?? "{}"),
         protection: definition && definition.metrics.every(metric => protectedMetrics.some(item => item.metric === metric && item.state === "healthy")) ? "active" : "coverage_gap",
       };
     }),
@@ -143,13 +147,16 @@ function incidentView(row: Row): Record<string, unknown> {
   const metric = String(row.metric);
   const windowMs = incidentWindow(String(row.incident_key));
   const unit = row.unit == null ? inferredUnit(metric) : String(row.unit);
-  const tags = parseJson(String(row.metadata_json ?? "{}"));
+  const parentTags = parseJson(String(row.parent_metadata_json ?? "{}"));
+  const tags = { ...parentTags, ...parseJson(String(row.metadata_json ?? "{}")) };
+  const directTier = row.tier == null ? "unclassified" : String(row.tier);
+  const tier = directTier !== "unclassified" ? directTier : row.parent_tier == null ? directTier : String(row.parent_tier);
   return {
     id: String(row.id), key: String(row.incident_key), status: String(row.status), severity: String(row.severity),
     family: String(row.family), familyLabel: familyLabel(String(row.family)), assetId: String(row.asset_id),
     assetName: row.asset_name == null ? null : String(row.asset_name), parentId: row.parent_id == null ? null : String(row.parent_id),
     scope: row.scope == null ? (row.family === "durable_objects" ? "object" : "resource") : String(row.scope),
-    tier: row.tier == null ? "unclassified" : String(row.tier), tags,
+    tier, tags,
     metric, metricLabel: metricLabel(metric), unit, windowMs,
     observed: Number(row.observed), threshold: row.threshold_value == null ? null : Number(row.threshold_value),
     expected: row.expected == null ? null : Number(row.expected), reason: String(row.reason), proposedAction: String(row.proposed_action),

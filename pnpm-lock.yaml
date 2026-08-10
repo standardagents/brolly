@@ -32,6 +32,9 @@ importers:
       '@standardagents/brolly-notifiers':
         specifier: workspace:*
         version: link:../../packages/notifiers
+      '@standardagents/brolly-runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       react:
         specifier: ^19.2.8
         version: 19.2.8

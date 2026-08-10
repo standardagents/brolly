@@ -1,6 +1,83 @@
 import type { ControlAction } from "@standardagents/brolly-core";
+import { BROLLY_FUSE_BINDING, BROLLY_FUSE_VERSION, type BrollyFuseManifest, type BrollyQuarantine } from "@standardagents/brolly-runtime";
 import type { Env } from "./env.js";
 import { operationalToken } from "./credentials.js";
+
+const FUSE_SETTING_PREFIX = "deployment_fuse:";
+const MAX_FUSE_BYTES = 5_000;
+
+/**
+ * Apply or clear a deployment-carried fuse. The only external operation is the
+ * one-time Cloudflare control-plane secret update; instrumented runtimes never
+ * call Brolly or any storage service while enforcing it.
+ */
+export async function executeDeploymentFuseControl(
+  env: Env,
+  action: ControlAction,
+  workerScript: string,
+  requestedAction: "quarantine" | "resume" = "quarantine",
+): Promise<{ workerScript: string; manifest: BrollyFuseManifest }> {
+  if (!/^[A-Za-z0-9_-]+$/.test(workerScript)) throw new Error("Owning Worker script name is invalid");
+  if (action.asset.tier === "control_plane") throw new Error("Control-plane assets cannot be stopped");
+  if (action.asset.family !== "workers" && (action.asset.family !== "durable_objects" || action.asset.scope !== "object")) {
+    throw new Error("Deployment fuses support Worker scripts and exact Durable Object IDs only");
+  }
+  if (action.asset.family === "durable_objects" && !/^[a-f0-9]{64}$/i.test(action.asset.id)) {
+    throw new Error("Exact Durable Object quarantine requires a 64-character object ID");
+  }
+
+  const key = `${FUSE_SETTING_PREFIX}${workerScript}`;
+  const row = await env.DB.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(key).first<{ value: string }>();
+  const current = parseStoredFuse(row?.value);
+  const manifest: BrollyFuseManifest = {
+    version: BROLLY_FUSE_VERSION,
+    generation: current.generation + 1,
+    ...(current.worker ? { worker: current.worker } : {}),
+    ...(current.objects && Object.keys(current.objects).length ? { objects: { ...current.objects } } : {}),
+  };
+  const quarantine: BrollyQuarantine = {
+    actionId: action.id,
+    incidentId: action.incidentId,
+    reason: action.reason.slice(0, 500),
+    appliedAt: Date.now(),
+  };
+
+  if (action.asset.family === "workers") {
+    if (requestedAction === "quarantine") manifest.worker = quarantine;
+    else if (manifest.worker?.actionId === action.id) delete manifest.worker;
+    else if (manifest.worker) throw new Error(`Worker quarantine belongs to newer action ${manifest.worker.actionId}; refusing to clear it with ${action.id}`);
+  } else {
+    manifest.objects ??= {};
+    if (requestedAction === "quarantine") manifest.objects[action.asset.id] = quarantine;
+    else if (manifest.objects[action.asset.id]?.actionId === action.id) delete manifest.objects[action.asset.id];
+    else if (manifest.objects[action.asset.id]) throw new Error(`Object quarantine belongs to newer action ${manifest.objects[action.asset.id]!.actionId}; refusing to clear it with ${action.id}`);
+    if (Object.keys(manifest.objects).length === 0) delete manifest.objects;
+  }
+
+  const encoded = JSON.stringify(manifest);
+  if (new TextEncoder().encode(encoded).byteLength > MAX_FUSE_BYTES) {
+    throw new Error("BROLLY_FUSE would exceed Cloudflare's 5 KB binding limit; quarantine the Worker or clear inactive object quarantines first");
+  }
+  const token = await operationalToken(env);
+  await cf(env, token, `/accounts/${env.BROLLY_ACCOUNT_ID}/workers/scripts/${encodeURIComponent(workerScript)}/secrets`, {
+    method: "PUT",
+    body: JSON.stringify({ name: BROLLY_FUSE_BINDING, text: encoded, type: "secret_text" }),
+  });
+  await env.DB.prepare(
+    `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+  ).bind(key, encoded, Date.now()).run();
+  return { workerScript, manifest };
+}
+
+function parseStoredFuse(value?: string): BrollyFuseManifest {
+  if (!value) return { version: BROLLY_FUSE_VERSION, generation: 0 };
+  try {
+    const parsed = JSON.parse(value) as BrollyFuseManifest;
+    if (parsed.version === BROLLY_FUSE_VERSION && Number.isSafeInteger(parsed.generation) && parsed.generation >= 0) return parsed;
+  } catch { /* replace corrupt control-plane state with a new generation */ }
+  return { version: BROLLY_FUSE_VERSION, generation: 0 };
+}
 
 export async function executeRuntimeControl(
   env: Env,

@@ -20,7 +20,7 @@ export interface OnboardingData {
   complete: boolean;
   policy: Policy;
   families: Array<{ family: string; label: string; metrics: string[]; protection: "active" | "coverage_gap" }>;
-  scopedAssets: Array<{ key: string; family: "workers" | "durable_objects"; id: string; name: string; scope: "resource" | "namespace"; protection: "active" | "coverage_gap" }>;
+  scopedAssets: Array<{ key: string; family: "workers" | "durable_objects"; id: string; name: string; scope: "resource" | "namespace"; protection: "active" | "coverage_gap"; tags: Record<string, string> }>;
 }
 
 export interface Incident {
@@ -40,6 +40,11 @@ export interface CoverageItem {
 export interface SpendCategory { family: string; label: string; estimatedUsd: number; updatedAt: number; coverage: string }
 export interface SpendPoint { at: number; totalUsd: number; categories: Record<string, number> }
 
+export interface ControlActionRow {
+  id: string; incidentId: string; family: string; assetId: string; kind: string; state: string;
+  reason: string; error: string | null; createdAt: number; updatedAt: number;
+}
+
 export interface DashboardData {
   generatedAt: number;
   account: { id: string; timezone: string };
@@ -58,15 +63,44 @@ export interface DashboardData {
     families: Array<{ family: string; label: string; assets: number; lastSeen: number; cloudflareUrl: string; expectedMetrics: number; healthyMetrics: number; gaps: number }>;
     tiers: Record<string, number>;
   };
-  actions: Array<{
-    id: string; incidentId: string; family: string; assetId: string; kind: string; state: string;
-    reason: string; error: string | null; createdAt: number; updatedAt: number;
-  }>;
+  actions: ControlActionRow[];
 }
 
 export interface Asset {
   accountId: string; family: string; id: string; parentId: string | null; name: string | null; scope: string;
   tier: AssetTier; tags: Record<string, string>; discoveredAt: number; seenAt: number; incidentCount: number; lastSignalAt: number | null;
+}
+
+export type ConfigurationStatus = "configured" | "partial" | "not_configured" | "error";
+export interface ConfigurationCheck {
+  state: "pass" | "fail" | "unknown" | "error";
+  label: string;
+  detail: string;
+}
+export interface ConfigurationWorker {
+  id: string; name: string; tier: AssetTier; tags: Record<string, string>; seenAt: number;
+  declaredInstalled: boolean; namespaceCount: number; checkedAt: number | null;
+  deploymentId: string | null; versionId: string | null; status: ConfigurationStatus;
+  checks: {
+    inventory: ConfigurationCheck; declared: ConfigurationCheck; apiAccess: ConfigurationCheck;
+    fuseSecret: ConfigurationCheck; runtimeBundle: ConfigurationCheck; activeDeployment: ConfigurationCheck;
+  };
+}
+export interface ConfigurationNamespace {
+  id: string; name: string; tier: AssetTier; tags: Record<string, string>; seenAt: number;
+  className: string | null; storage: string | null; ownerWorker: string | null;
+  declaredOwner: string | null; discoveredOwner: string | null; status: ConfigurationStatus;
+  checks: { inventory: ConfigurationCheck; owner: ConfigurationCheck; constructor: ConfigurationCheck; worker: ConfigurationCheck };
+}
+export interface ConfigurationData {
+  generatedAt: number;
+  connected: boolean;
+  summary: {
+    workers: number; configuredWorkers: number; namespaces: number; configuredNamespaces: number;
+    partial: number; needsAttention: number; lastVerifiedAt: number | null;
+  };
+  workers: ConfigurationWorker[];
+  namespaces: ConfigurationNamespace[];
 }
 
 export type NotificationKind = "discord" | "slack" | "twilio";

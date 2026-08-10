@@ -31,8 +31,11 @@ export class Store {
         `INSERT INTO assets(account_id,family,asset_id,parent_id,name,scope,tier,metadata_json,discovered_at,seen_at)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
          ON CONFLICT(account_id,family,asset_id) DO UPDATE SET parent_id=excluded.parent_id,name=excluded.name,scope=excluded.scope,
-           tier=CASE WHEN excluded.tier='control_plane' THEN 'control_plane' ELSE assets.tier END,seen_at=excluded.seen_at
-         WHERE (excluded.tier='control_plane' AND assets.tier!='control_plane') OR assets.seen_at < excluded.seen_at - 3600000`,
+           tier=CASE WHEN excluded.tier='control_plane' THEN 'control_plane' ELSE assets.tier END,
+           metadata_json=json_patch(assets.metadata_json,excluded.metadata_json),seen_at=excluded.seen_at
+         WHERE (excluded.tier='control_plane' AND assets.tier!='control_plane')
+            OR json_patch(assets.metadata_json,excluded.metadata_json) != assets.metadata_json
+            OR assets.seen_at < excluded.seen_at - 3600000`,
       ).bind(asset.accountId, asset.family, asset.id, asset.parentId ?? null, asset.name ?? null, asset.scope, asset.tier, JSON.stringify(asset.tags ?? {}), now));
     await this.runBatches(statements);
   }
@@ -68,11 +71,18 @@ export class Store {
     this.chargeMeta(result.meta);
     const policies = new Map(result.results.map(row => [row.asset_id, row]));
     for (const sample of samples) {
-      const policy = policies.get(sample.asset.id);
-      if (!policy) continue;
-      let tags: Record<string, string> = {};
-      try { tags = JSON.parse(policy.metadata_json) as Record<string, string>; } catch { /* optional metadata */ }
-      sample.asset = { ...sample.asset, tier: policy.tier, name: policy.name ?? sample.asset.name, tags };
+      const direct = policies.get(sample.asset.id);
+      const parent = sample.asset.parentId ? policies.get(sample.asset.parentId) : undefined;
+      if (!direct && !parent) continue;
+      const parentTags = parseTags(parent?.metadata_json);
+      const directTags = parseTags(direct?.metadata_json);
+      const tier = direct?.tier && direct.tier !== "unclassified" ? direct.tier : parent?.tier ?? direct?.tier ?? sample.asset.tier;
+      sample.asset = {
+        ...sample.asset,
+        tier,
+        name: direct?.name ?? sample.asset.name,
+        tags: { ...parentTags, ...directTags },
+      };
     }
   }
 
@@ -104,20 +114,30 @@ export class Store {
   }
 
   async ensureRuntimeAction(incident: Incident): Promise<ControlAction> {
-    const idempotencyKey = `${incident.id}:${incident.severity}:runtime_quarantine`;
+    const fuseInstalled = incident.asset.tags?.brollyFuse === "true";
+    const kind: ControlAction["kind"] = incident.asset.family === "queues"
+      ? "pause_consumer"
+      : incident.asset.family === "workers" && !fuseInstalled
+        ? "disable_trigger"
+        : "runtime_quarantine";
+    const idempotencyKey = `${incident.id}:${incident.severity}:${kind}`;
     const existing = await this.db.prepare(`SELECT * FROM actions WHERE idempotency_key=?1 LIMIT 1`).bind(idempotencyKey).first<Record<string, unknown>>();
     this.chargeRows(existing ? 1 : 0);
     if (existing) return actionFromRow(existing, incident.asset);
     const id = crypto.randomUUID();
     const now = Date.now();
-    const rollback = { runtimeUrl: incident.asset.tags?.runtimeUrl, action: "resume" };
+    const rollback = {
+      runtimeUrl: incident.asset.tags?.runtimeUrl,
+      workerScript: incident.asset.family === "workers" ? incident.asset.id : incident.asset.tags?.workerScript,
+      action: "resume",
+    };
     const result = await this.db.prepare(
       `INSERT INTO actions(id,incident_id,idempotency_key,account_id,family,asset_id,kind,state,reason,observed_json,rollback_json,actor,created_at,updated_at)
-       VALUES(?1,?2,?3,?4,?5,?6,'runtime_quarantine','prepared',?7,?8,?9,'brolly-policy',?10,?10)`,
-    ).bind(id, incident.id, idempotencyKey, incident.asset.accountId, incident.asset.family, incident.asset.id, incident.reason, JSON.stringify({ [incident.metric]: incident.observed }), JSON.stringify(rollback), now).run();
+       VALUES(?1,?2,?3,?4,?5,?6,?7,'prepared',?8,?9,?10,'brolly-policy',?11,?11)`,
+    ).bind(id, incident.id, idempotencyKey, incident.asset.accountId, incident.asset.family, incident.asset.id, kind, incident.reason, JSON.stringify({ [incident.metric]: incident.observed }), JSON.stringify(rollback), now).run();
     this.chargeMeta(result.meta);
     await this.audit("brolly-policy", "action.prepare", id, { incidentId: incident.id, severity: incident.severity, rollback });
-    return { id, incidentId: incident.id, asset: incident.asset, kind: "runtime_quarantine", state: "prepared", reason: incident.reason, observed: { [incident.metric]: incident.observed }, rollback, actor: "brolly-policy", createdAt: now };
+    return { id, incidentId: incident.id, asset: incident.asset, kind, state: "prepared", reason: incident.reason, observed: { [incident.metric]: incident.observed }, rollback, actor: "brolly-policy", createdAt: now };
   }
 
   async resolveIncident(key: string): Promise<void> {
@@ -170,6 +190,11 @@ export class Store {
       for (const result of results) this.chargeMeta(result.meta);
     }
   }
+}
+
+function parseTags(value?: string): Record<string, string> {
+  if (!value) return {};
+  try { return JSON.parse(value) as Record<string, string>; } catch { return {}; }
 }
 
 function actionFromRow(row: Record<string, unknown>, asset: AssetRef): ControlAction {

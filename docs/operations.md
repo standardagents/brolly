@@ -65,30 +65,52 @@ Before enabling automatic controls:
 5. Run controls in `observe` mode, then `approval`, before enabling `automatic`.
 6. Test stop and rollback for each actuator.
 
-The guard has three bounded, reversible actuators. Runtime quarantine asks a
-cooperating Durable Object to persistently reject new work and cancel its
-alarm. Queue pause records the queue's current settings before setting
+The guard has three bounded, reversible actuators. Runtime quarantine publishes
+a secret-backed deployment fuse that makes one exact Durable Object or one
+instrumented Worker reject application work without a runtime lookup. Queue pause records the queue's current settings before setting
 `delivery_paused`. Worker ingress disable records Cron Triggers, workers.dev
 state, zone routes, and custom domains before removing them. The rollback snapshot is committed
 to D1 and audited before any Cloudflare mutation starts. Brolly never deletes a
 Worker, queue, Durable Object, or its stored data.
 
 Automatic actions are deliberately narrower: only classified `standard` or
-`disposable` Durable Objects with a registered runtime URL can be quarantined
-automatically. Worker and queue controls always require an explicit operator
-action. `control_plane`, `critical`, and `unclassified` assets cannot be stopped
-through the normal action endpoint.
+`disposable` Durable Objects and Workers marked with a tested
+`@standardagents/brolly-runtime` fuse can be quarantined automatically at an
+emergency threshold. Broader trigger removal and queue controls always require
+an explicit operator action. `control_plane`, `critical`, and `unclassified`
+assets cannot be stopped through the normal action endpoint.
 
-Exact-object quarantine is customer-visible downtime for that object: current
-execution is aborted, its alarm is removed, and normal execution/message calls
-return HTTP 423 until resume. Stored state is preserved and sibling objects are
-unaffected. Operators should assume the interrupted client operation needs a
-retry after resume. If a runtime has not installed the signed control endpoint,
-there is no exact-object actuator; disabling its parent Worker has a
-namespace-wide/user-wide blast radius and must be reviewed as a different
-control.
+Exact-object quarantine is customer-visible downtime for that object. Worker
+ingress can return HTTP 503 before waking it, and the constructor throws before
+application handlers run. Stored state is preserved and sibling IDs are not
+denied, although a Worker-version rollout may restart other live objects in the
+same script. Recovery is manual by default so a stopped spike cannot flap back
+on automatically. If a runtime has not installed the fuse, there is no
+exact-object actuator; disabling its parent Worker has a namespace-wide or
+user-wide blast radius and must be reviewed as a different control.
 
 `brolly status`, `brolly incidents`, `brolly stop`, and `brolly resume` call the guard Worker with the local recovery token stored mode `0600` in `~/.brolly/config.json`; they do not depend on a browser session.
+
+## Configuration verification
+
+The dashboard's **Configuration** page is the readiness inventory for runtime
+controls. Workers and Durable Object namespaces are evaluated independently so
+partial rollouts remain visible. Cloudflare namespace inventory supplies the
+authoritative owning Worker and class; operator declarations are retained
+separately and mismatches are surfaced rather than silently overwritten.
+
+A live refresh is operator-initiated and cached in D1. It uses three
+control-plane reads per Worker: secrets, deployments, and deployed script
+content. Each API request accepts at most 20 Workers, processes at most three
+Workers concurrently, times out individual Cloudflare calls after ten seconds,
+and scans no more than 5 MB of a deployed bundle. **Refresh all** chunks larger
+accounts into those bounded requests. Configuration refresh is not part of the
+automatic minute monitor and never invokes customer Workers or Durable Objects.
+
+Cached evidence includes the check time, active deployment/version IDs, secret
+presence, and runtime-marker result. A new inventory scan can add resources
+without affecting the statuses of already verified Workers; the new rows begin
+as not configured or partial until explicitly declared and refreshed.
 
 Notification targets are capped at 20 deliveries per hour. Twilio targets are
 additionally capped at five SMS messages per day. Incident notifications roll
@@ -104,12 +126,15 @@ a destination, **Pause** to stop delivery without losing its encrypted config,
 and the severity menu to change escalation without re-entering secrets. Saving
 a target does not emit a test message.
 
-Recent actions on the overview are operator controls, not a passive log. Open a
-row to see its target, reason, timestamps, provider link, current state, and any
-failure. A `prepared` action can be approved and executed there; a `succeeded`
-action can be restored from its rollback snapshot. A failed action also exposes
+Control actions on the **Incidents & controls** page (the overview shows the
+five most recent) are operator controls, not a passive log. Open a row to see
+its target, reason, timestamps, provider link, current state, and any failure.
+A `prepared` action can be approved and executed there; a `succeeded` action
+can be restored from its rollback snapshot. A failed action also exposes
 rollback because a provider mutation may have completed before a later step
 failed. Every execute or restore still requires a confirmation in the browser.
+Resuming a legacy signed-runtime quarantine can optionally release its forensic
+hold; the deployment-fuse path ignores that flag.
 
 ## Dashboard development
 

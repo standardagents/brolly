@@ -55,10 +55,24 @@ export class CloudflareClient {
             ?? stringValue(row.name) ?? stringValue(row.namespace_id);
           if (!id) continue;
           const name = stringValue(row.name) ?? stringValue(row.queue_name) ?? stringValue(row.title) ?? id;
+          const tags: Record<string, string> = {};
+          if (family === "durable_objects") {
+            const workerScript = stringValue(row.script);
+            const className = stringValue(row.class);
+            if (workerScript) tags.cloudflareWorkerScript = workerScript;
+            if (className) tags.durableObjectClass = className;
+            if (typeof row.use_sqlite === "boolean") tags.durableObjectStorage = row.use_sqlite ? "SQLite" : "key-value";
+          }
+          if (family === "workers") {
+            const etag = stringValue(row.etag);
+            const modifiedOn = stringValue(row.modified_on);
+            if (etag) tags.cloudflareEtag = etag;
+            if (modifiedOn) tags.cloudflareModifiedOn = modifiedOn;
+          }
           assets.push({
             accountId: this.env.BROLLY_ACCOUNT_ID, family, id,
             name,
-            scope, tier: name === "brolly-guard" ? "control_plane" : "unclassified",
+            scope, tier: name === "brolly-guard" ? "control_plane" : "unclassified", tags,
           });
         }
         return {

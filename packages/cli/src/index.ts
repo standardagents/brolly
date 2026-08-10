@@ -55,7 +55,8 @@ async function install(): Promise<void> {
   const guardUrl = process.env.BROLLY_GUARD_URL ?? deployed.guardUrl;
   await saveConfig({ guardUrl, accountId, adminToken, installedAt: Date.now() });
   console.log(`Brolly is deployed at ${guardUrl}`);
-  console.log(`Configure this public key on integrated AgentBuilder runtimes as BROLLY_CONTROL_PUBLIC_KEY_JWK:\n${JSON.stringify(deployed.publicControlJwk)}`);
+  console.log(`Legacy signed-control public key (only for runtimes using the pre-fuse endpoint):\n${JSON.stringify(deployed.publicControlJwk)}`);
+  console.log(`\nTo make any Worker or Durable Object stoppable:\n  pnpm add @standardagents/brolly-runtime\n  printf '%s' '{"version":1,"generation":0,"objects":{}}' | pnpm wrangler secret put BROLLY_FUSE\nThen add brollyWorker(env) at Worker ingress and brollyDurableObject(ctx, env) immediately after super(ctx, env) in each Durable Object constructor.`);
   if (!process.env.BROLLY_BILLING_TOKEN) {
     console.log("Authoritative invoice reconciliation is not enabled. Create a Billing Read token from Cloudflare's account-owned token template and rerun with BROLLY_BILLING_TOKEN set.");
   }
@@ -71,7 +72,7 @@ async function guardRequest(path: string, init: RequestInit = {}): Promise<unkno
 async function prepareOrStop(execute: boolean): Promise<void> {
   const incidentId = process.argv[3];
   const runtimeUrl = positional(4);
-  if (!incidentId) throw new Error(`Usage: brolly ${execute ? "stop" : "prepare"} <incident-id> [runtime-url] [--kind=runtime_quarantine|pause_consumer|disable_trigger]`);
+  if (!incidentId) throw new Error(`Usage: brolly ${execute ? "stop" : "prepare"} <incident-id> [legacy-runtime-url] [--kind=runtime_quarantine|pause_consumer|disable_trigger]`);
   const kind = option("--kind=");
   const body = { incidentId, runtimeUrl, execute, ...(kind ? { kind } : {}) };
   console.log(JSON.stringify(await guardRequest("/api/actions", { method: "POST", body: JSON.stringify(body) }), null, 2));
@@ -80,17 +81,18 @@ async function prepareOrStop(execute: boolean): Promise<void> {
 async function resumeAction(): Promise<void> {
   const id = process.argv[3];
   const runtimeUrl = positional(4);
-  if (!id) throw new Error("Usage: brolly resume <action-id> [runtime-url] [--release-forensic-hold]");
+  if (!id) throw new Error("Usage: brolly resume <action-id> [legacy-runtime-url] [--release-forensic-hold]");
   const body = { runtimeUrl, releaseForensicHold: process.argv.includes("--release-forensic-hold") };
   console.log(JSON.stringify(await guardRequest(`/api/actions/${encodeURIComponent(id)}/resume`, { method: "POST", body: JSON.stringify(body) }), null, 2));
 }
 
 async function classifyAsset(): Promise<void> {
   const [family, id, tier] = process.argv.slice(3, 6);
-  if (!family || !id || !tier) throw new Error("Usage: brolly classify <family> <asset-id> <control_plane|critical|standard|disposable> [--runtime-url=URL] [--project-id=ID]");
+  if (!family || !id || !tier) throw new Error("Usage: brolly classify <family> <asset-id> <control_plane|critical|standard|disposable> [--worker-script=NAME]");
   const runtimeUrl = option("--runtime-url=");
+  const workerScript = option("--worker-script=");
   const projectId = option("--project-id=");
-  const tags = { ...(runtimeUrl ? { runtimeUrl } : {}), ...(projectId ? { projectId } : {}) };
+  const tags = { ...(runtimeUrl ? { runtimeUrl } : {}), ...(projectId ? { projectId } : {}), ...(workerScript ? { workerScript, brollyFuse: "true" } : {}) };
   console.log(JSON.stringify(await guardRequest(`/api/assets/${encodeURIComponent(family)}/${encodeURIComponent(id)}`, {
     method: "PATCH", body: JSON.stringify({ tier, tags }),
   }), null, 2));
@@ -134,7 +136,7 @@ Usage:
   brolly status       Show sentinel status and current incidents
   brolly incidents    List incidents
   brolly run          Request one bounded monitoring pass
-  brolly classify     Assign an asset safety tier and optional runtime URL
+  brolly classify     Assign a safety tier and optional owning Worker script
   brolly prepare      Prepare a reversible action from an incident
   brolly stop         Prepare and execute a reversible action from an incident
   brolly resume       Roll back an action (forensic holds require explicit release)

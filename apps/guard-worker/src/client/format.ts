@@ -30,8 +30,17 @@ export function duration(value: number | null): string {
   return `${value / 60_000} min`;
 }
 
+export function dataSize(value: number): string {
+  if (value >= 1_000_000_000) return `${number(value / 1_000_000_000)} GB`;
+  if (value >= 1_000_000) return `${number(value / 1_000_000)} MB`;
+  if (value >= 1_000) return `${number(value / 1_000)} KB`;
+  return `${number(value)} bytes`;
+}
+
 export function measurement(value: number, unit: string, windowMs: number | null): string {
-  const rendered = unit === "usd" ? money(value) : `${number(value)} ${unit === "rows" ? "rows" : unit === "requests" ? "requests" : unit}`;
+  const rendered = unit === "usd" ? money(value)
+    : unit === "bytes" ? dataSize(value)
+      : `${number(value)} ${unit === "rows" ? "rows" : unit === "requests" ? "requests" : unit}`;
   return `${rendered} in ${duration(windowMs)}`;
 }
 
@@ -41,4 +50,12 @@ export function metricTitle(metric: string): string {
 
 export function normalizeNumericDraft(value: string): string {
   return value.replace(/^0+(?=\d)/, "");
+}
+
+export function compactId(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
+export function shortId(value: string): string {
+  return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-6)}` : value;
 }

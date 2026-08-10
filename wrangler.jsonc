@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "brolly-guard",
-  "main": "src/index.ts",
+  "main": "apps/guard-worker/src/index.ts",
   "compatibility_date": "2026-08-08",
   "assets": {
     "not_found_handling": "single-page-application",
@@ -13,7 +13,7 @@
       "binding": "DB",
       "database_name": "brolly-guard",
       "database_id": "REPLACE_DURING_INSTALL",
-      "migrations_dir": "migrations"
+      "migrations_dir": "apps/guard-worker/migrations"
     }
   ],
   "vars": {

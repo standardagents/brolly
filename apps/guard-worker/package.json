@@ -6,6 +6,7 @@
   "dependencies": {
     "@standardagents/brolly-core": "workspace:*",
     "@standardagents/brolly-notifiers": "workspace:*",
+    "@standardagents/brolly-runtime": "workspace:*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -13,7 +14,9 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "deploy": "pnpm build && wrangler deploy --config dist/brolly_guard/wrangler.json",
+    "deploy": "pnpm build && pnpm db:migrate:remote && pnpm deploy:built",
+    "deploy:built": "wrangler deploy --config dist/brolly_guard/wrangler.json",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config ../../wrangler.jsonc",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

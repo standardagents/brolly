@@ -98,10 +98,14 @@ describe("Cloudflare durable object telemetry", () => {
         const page = Number(url.searchParams.get("page") ?? "1");
         return Response.json({ success: true, result: [{ id: `worker-${page}` }], result_info: { page, per_page: 1, total_pages: 2 } });
       }
+      if (url.pathname.endsWith("/workers/durable_objects/namespaces")) {
+        return Response.json({ success: true, result: [{ id: "namespace-1", name: "Rooms", script: "worker-1", class: "Room", use_sqlite: true }], result_info: { page: 1, per_page: 100, total_pages: 1 } });
+      }
       return Response.json({ success: true, result: [], result_info: { page: 1, per_page: 100, total_pages: 1 } });
     }));
     const result = await new CloudflareClient(env, new RunBudget()).inventory();
     expect(result.assets.filter(asset => asset.family === "workers").map(asset => asset.id)).toEqual(["worker-1", "worker-2"]);
+    expect(result.assets.find(asset => asset.id === "namespace-1")?.tags).toEqual({ cloudflareWorkerScript: "worker-1", durableObjectClass: "Room", durableObjectStorage: "SQLite" });
     expect(result.coverage.find(item => item.family === "workers")).toMatchObject({ metric: "asset_inventory", state: "healthy" });
   });
 

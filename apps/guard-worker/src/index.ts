@@ -1,9 +1,10 @@
 import type { Env } from "./env.js";
 import { runMonitor } from "./monitor.js";
-import { executeCloudflareControl, executeRuntimeControl, prepareCloudflareControl, rollbackCloudflareControl } from "./control.js";
+import { executeCloudflareControl, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl, rollbackCloudflareControl } from "./control.js";
 import { DEFAULT_POLICY, METRIC_CATALOG, assetBudgetKey, type AssetRef, type ControlAction, type Policy } from "@standardagents/brolly-core";
 import { sealJson } from "./credentials.js";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
+import { configurationData, refreshConfiguration } from "./configuration.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -23,22 +24,56 @@ export default {
       return Response.json(await assetList(request, env));
     }
 
+    if (url.pathname === "/api/configuration" && request.method === "GET") {
+      return Response.json(await configurationData(env));
+    }
+
+    if (url.pathname === "/api/configuration/verify" && request.method === "POST") {
+      const body = await request.json<{ workerScripts?: string[] }>();
+      try {
+        const result = await refreshConfiguration(env, body.workerScripts ?? []);
+        await audit(env.DB, "admin", "configuration.verify", body.workerScripts?.join(",") ?? "", { workers: body.workerScripts?.length ?? 0 });
+        return Response.json(result);
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
+    }
+
     if (url.pathname === "/api/onboarding" && request.method === "GET") {
       return Response.json(await onboardingData(env));
     }
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {
-      const body = await request.json<{ policy: Policy }>();
+      const body = await request.json<{ policy: Policy; integrations?: Array<{ family: "workers" | "durable_objects"; id: string; workerScript?: string; installed: boolean }> }>();
       if (!validPolicy(body.policy, true)) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered warning ≤ critical ≤ emergency" }, { status: 400 });
-      const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<{ family: string; asset_id: string; scope: AssetRef["scope"] }>();
+      const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<{ family: string; asset_id: string; scope: AssetRef["scope"]; metadata_json: string }>();
       const missingScopedBudgets = scopedAssets.results.filter(asset => !body.policy.assetDailySpend?.[assetBudgetKey({ family: asset.family, scope: asset.scope, id: asset.asset_id })]);
       if (missingScopedBudgets.length) return Response.json({ error: `Set limits for every discovered Worker and Durable Object namespace (${missingScopedBudgets.length} missing)` }, { status: 400 });
       const now = Date.now();
+      const knownAssets = new Map(scopedAssets.results.map(asset => [`${asset.family}:${asset.asset_id}`, asset]));
+      const integrationStatements: D1PreparedStatement[] = [];
+      for (const integration of body.integrations ?? []) {
+        const asset = knownAssets.get(`${integration.family}:${integration.id}`);
+        if (!asset) return Response.json({ error: `Unknown runtime integration target ${integration.family}/${integration.id}` }, { status: 400 });
+        const workerScript = integration.workerScript?.trim();
+        if (workerScript && !/^[A-Za-z0-9_-]+$/.test(workerScript)) return Response.json({ error: `Invalid Worker script name for ${integration.id}` }, { status: 400 });
+        let tags: Record<string, string>;
+        try { tags = JSON.parse(asset.metadata_json || "{}") as Record<string, string>; } catch { tags = {}; }
+        if (integration.installed && workerScript) {
+          tags.workerScript = workerScript;
+          tags.brollyFuse = "true";
+        } else {
+          delete tags.workerScript;
+          delete tags.brollyFuse;
+        }
+        integrationStatements.push(env.DB.prepare(`UPDATE assets SET metadata_json=?3,seen_at=?4 WHERE family=?1 AND asset_id=?2 AND account_id=?5`).bind(integration.family, integration.id, JSON.stringify(tags), now, env.BROLLY_ACCOUNT_ID));
+      }
       await env.DB.batch([
         env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(body.policy), now),
         env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('onboarding_complete','true',?1) ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at`).bind(now),
       ]);
-      await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { mode: body.policy.mode, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, thresholds: body.policy.thresholds.length });
+      for (let index = 0; index < integrationStatements.length; index += 100) await env.DB.batch(integrationStatements.slice(index, index + 100));
+      await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { mode: body.policy.mode, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, runtimeIntegrations: body.integrations?.filter(item => item.installed).length ?? 0, thresholds: body.policy.thresholds.length });
       return Response.json({ ok: true, policy: body.policy });
     }
 
@@ -78,7 +113,7 @@ export default {
     }
 
     if (url.pathname === "/api/actions" && request.method === "POST") {
-      const body = await request.json<{ incidentId: string; runtimeUrl?: string; execute?: boolean; kind?: ControlAction["kind"] }>();
+      const body = await request.json<{ incidentId: string; runtimeUrl?: string; workerScript?: string; execute?: boolean; kind?: ControlAction["kind"] }>();
       const incident = await env.DB.prepare(`SELECT * FROM incidents WHERE id=?1 LIMIT 1`).bind(body.incidentId).first<Record<string, unknown>>();
       if (!incident) return Response.json({ error: "Incident not found" }, { status: 404 });
       const assetRow = await env.DB.prepare(`SELECT * FROM assets WHERE account_id=?1 AND family=?2 AND asset_id=?3 LIMIT 1`).bind(incident.account_id, incident.family, incident.asset_id).first<Record<string, unknown>>();
@@ -88,14 +123,18 @@ export default {
       }
       const now = Date.now();
       const id = crypto.randomUUID();
-      const kind = body.kind ?? (asset.family === "queues" ? "pause_consumer" : asset.family === "workers" ? "disable_trigger" : "runtime_quarantine");
-      const expectedKind = asset.family === "queues" ? "pause_consumer" : asset.family === "workers" ? "disable_trigger" : asset.family === "durable_objects" ? "runtime_quarantine" : null;
-      if (!expectedKind || kind !== expectedKind) return Response.json({ error: `Control ${kind} is not valid for ${asset.family}` }, { status: 400 });
-      if (kind === "runtime_quarantine" && body.execute && !body.runtimeUrl) return Response.json({ error: "Runtime URL is required" }, { status: 400 });
+      const fuseInstalled = asset.tags?.brollyFuse === "true";
+      const configuredWorkerScript = body.workerScript ?? (fuseInstalled ? (asset.tags?.workerScript ?? (asset.family === "workers" ? asset.id : undefined)) : undefined);
+      const kind = body.kind ?? (asset.family === "queues" ? "pause_consumer" : configuredWorkerScript ? "runtime_quarantine" : asset.family === "workers" ? "disable_trigger" : "runtime_quarantine");
+      const validKind = asset.family === "queues" ? kind === "pause_consumer"
+        : asset.family === "workers" ? kind === "disable_trigger" || kind === "runtime_quarantine"
+          : asset.family === "durable_objects" ? kind === "runtime_quarantine" : false;
+      if (!validKind) return Response.json({ error: `Control ${kind} is not valid for ${asset.family}` }, { status: 400 });
+      if (kind === "runtime_quarantine" && body.execute && !configuredWorkerScript && !body.runtimeUrl) return Response.json({ error: "Owning Worker script is required" }, { status: 400 });
       const action: ControlAction = {
         id, incidentId: body.incidentId, asset, kind, state: "prepared",
         reason: String(incident.reason), observed: { [String(incident.metric)]: Number(incident.observed) },
-        rollback: { ...(body.runtimeUrl ? { runtimeUrl: body.runtimeUrl } : {}), action: "resume" }, actor: "admin", createdAt: now,
+        rollback: { ...(body.runtimeUrl ? { runtimeUrl: body.runtimeUrl } : {}), ...(configuredWorkerScript ? { workerScript: configuredWorkerScript } : {}), action: "resume" }, actor: "admin", createdAt: now,
       };
       await env.DB.prepare(
         `INSERT INTO actions(id,incident_id,idempotency_key,account_id,family,asset_id,kind,state,reason,observed_json,rollback_json,actor,created_at,updated_at)
@@ -103,7 +142,7 @@ export default {
       ).bind(id, body.incidentId, asset.accountId, asset.family, asset.id, action.kind, action.reason, JSON.stringify(action.observed), JSON.stringify(action.rollback), now).run();
       await audit(env.DB, "admin", "action.prepare", id, action);
       if (!body.execute) return Response.json({ ok: true, action }, { status: 201 });
-      return runAction(env, action, body.runtimeUrl, "quarantine", false);
+      return runAction(env, action, { runtimeUrl: body.runtimeUrl, workerScript: configuredWorkerScript }, "quarantine", false);
     }
 
     const actionMatch = url.pathname.match(/^\/api\/actions\/([^/]+)\/(execute|resume)$/);
@@ -111,17 +150,18 @@ export default {
       const id = actionMatch[1]!;
       const row = await env.DB.prepare(`SELECT * FROM actions WHERE id=?1 LIMIT 1`).bind(id).first<Record<string, unknown>>();
       if (!row) return Response.json({ error: "Action not found" }, { status: 404 });
-      const rollback = JSON.parse(String(row.rollback_json)) as { runtimeUrl?: string };
-      const body = await request.json<{ runtimeUrl?: string; releaseForensicHold?: boolean }>().catch(() => ({} as { runtimeUrl?: string; releaseForensicHold?: boolean }));
+      const rollback = JSON.parse(String(row.rollback_json)) as { runtimeUrl?: string; workerScript?: string };
+      const body = await request.json<{ runtimeUrl?: string; workerScript?: string; releaseForensicHold?: boolean }>().catch(() => ({} as { runtimeUrl?: string; workerScript?: string; releaseForensicHold?: boolean }));
       const runtimeUrl = body.runtimeUrl ?? rollback.runtimeUrl;
-      if (row.kind === "runtime_quarantine" && !runtimeUrl) return Response.json({ error: "Runtime URL is required" }, { status: 400 });
+      const workerScript = body.workerScript ?? rollback.workerScript ?? (row.family === "workers" ? String(row.asset_id) : undefined);
+      if (row.kind === "runtime_quarantine" && !runtimeUrl && !workerScript) return Response.json({ error: "Owning Worker script is required" }, { status: 400 });
       const assetRow = await env.DB.prepare(`SELECT * FROM assets WHERE account_id=?1 AND family=?2 AND asset_id=?3 LIMIT 1`).bind(row.account_id, row.family, row.asset_id).first<Record<string, unknown>>();
       const action: ControlAction = {
         id: String(row.id), incidentId: String(row.incident_id), asset: assetFromRows(row, assetRow), kind: row.kind as ControlAction["kind"],
         state: row.state as ControlAction["state"], reason: String(row.reason), observed: JSON.parse(String(row.observed_json)), rollback,
         actor: "admin", createdAt: Number(row.created_at),
       };
-      return runAction(env, action, runtimeUrl, actionMatch[2] === "resume" ? "resume" : "quarantine", body.releaseForensicHold === true);
+      return runAction(env, action, { runtimeUrl, workerScript }, actionMatch[2] === "resume" ? "resume" : "quarantine", body.releaseForensicHold === true);
     }
 
     if (url.pathname === "/api/targets" && request.method === "GET") {
@@ -179,7 +219,7 @@ export default {
 
     const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/([^/]+)$/);
     if (assetMatch && request.method === "PATCH") {
-      const body = await request.json<{ tier: AssetRef["tier"]; tags?: Record<string, string>; name?: string }>();
+      const body = await request.json<{ tier: AssetRef["tier"]; tags?: Record<string, string | null>; name?: string }>();
       if (!["control_plane", "critical", "standard", "disposable", "unclassified"].includes(body.tier)) {
         return Response.json({ error: "Invalid asset tier" }, { status: 400 });
       }
@@ -202,16 +242,20 @@ export default {
   },
 };
 
-async function runAction(env: Env, action: ControlAction, runtimeUrl: string | undefined, requested: "quarantine" | "resume", release: boolean): Promise<Response> {
+async function runAction(env: Env, action: ControlAction, control: { runtimeUrl?: string; workerScript?: string }, requested: "quarantine" | "resume", release: boolean): Promise<Response> {
   const startState = requested === "resume" ? "running" : "approved";
   await env.DB.prepare(`UPDATE actions SET state=?2,updated_at=?3 WHERE id=?1`).bind(action.id, startState, Date.now()).run();
-  await audit(env.DB, "admin", `action.${requested}.start`, action.id, { runtimeUrl, releaseForensicHold: release, kind: action.kind });
+  await audit(env.DB, "admin", `action.${requested}.start`, action.id, { ...control, releaseForensicHold: release, kind: action.kind });
   try {
     let detail = JSON.stringify({ ok: true });
     if (action.kind === "runtime_quarantine") {
-      const response = await executeRuntimeControl(env, action, runtimeUrl!, requested, release);
-      detail = await response.text();
-      if (!response.ok) throw new Error(`Runtime returned ${response.status}: ${detail}`);
+      if (control.workerScript) {
+        detail = JSON.stringify(await executeDeploymentFuseControl(env, action, control.workerScript, requested));
+      } else {
+        const response = await executeRuntimeControl(env, action, control.runtimeUrl!, requested, release);
+        detail = await response.text();
+        if (!response.ok) throw new Error(`Runtime returned ${response.status}: ${detail}`);
+      }
     } else if (requested === "resume") {
       await rollbackCloudflareControl(env, action);
     } else {

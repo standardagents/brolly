@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlAction } from "@standardagents/brolly-core";
-import { executeCloudflareControl, executeRuntimeControl, prepareCloudflareControl, rollbackCloudflareControl } from "../src/control.js";
+import { executeCloudflareControl, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl, rollbackCloudflareControl } from "../src/control.js";
 import type { Env } from "../src/env.js";
 
 const env = {
@@ -36,6 +36,45 @@ function response(result: unknown): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("reversible Cloudflare controls", () => {
+  it("deploys and clears an exact-object fuse without touching other objects", async () => {
+    const statements: Array<{ sql: string; values: unknown[] }> = [];
+    let storedFuse: string | undefined;
+    const db = {
+      prepare(sql: string) {
+        const statement = {
+          values: [] as unknown[],
+          bind(...values: unknown[]) { this.values = values; return this; },
+          async first() { return storedFuse ? { value: storedFuse } : null; },
+          async run() {
+            statements.push({ sql, values: this.values });
+            if (sql.includes("INSERT INTO settings")) storedFuse = String(this.values[1]);
+            return { meta: { changes: 1 } };
+          },
+        };
+        return statement;
+      },
+    } as unknown as D1Database;
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return response({ name: "BROLLY_FUSE", type: "secret_text" });
+    }));
+    const pending = action("runtime_quarantine");
+    pending.asset = { ...pending.asset, family: "durable_objects", id: "a".repeat(64), scope: "object" };
+    const applied = await executeDeploymentFuseControl({ ...env, DB: db }, pending, "chat-worker");
+    expect(applied.manifest.objects?.["a".repeat(64)]).toMatchObject({ actionId: "action-1" });
+    expect(calls[0]?.url).toContain("/workers/scripts/chat-worker/secrets");
+    const request = JSON.parse(String(calls[0]?.init?.body)) as { name: string; text: string; type: string };
+    expect(request).toMatchObject({ name: "BROLLY_FUSE", type: "secret_text" });
+    expect(JSON.parse(request.text)).toMatchObject({ version: 1, generation: 1 });
+    expect(statements.some(item => item.sql.includes("INSERT INTO settings"))).toBe(true);
+
+    const cleared = await executeDeploymentFuseControl({ ...env, DB: db }, pending, "chat-worker", "resume");
+    expect(cleared.manifest.generation).toBe(2);
+    expect(cleared.manifest.objects).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
   it("captures queue settings separately from the mutating pause", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {

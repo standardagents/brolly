@@ -4,7 +4,7 @@ import { CloudflareClient } from "./cloudflare.js";
 import type { Env } from "./env.js";
 import { Store } from "./store.js";
 import { openJson } from "./credentials.js";
-import { executeRuntimeControl } from "./control.js";
+import { executeDeploymentFuseControl, executeRuntimeControl } from "./control.js";
 
 export async function runMonitor(env: Env): Promise<void> {
   const budget = new RunBudget();
@@ -265,14 +265,21 @@ async function handleEvaluation(store: Store, evaluation: Evaluation, dailySumma
   if (evaluation.action !== "notify") {
     const action = await store.ensureRuntimeAction(incident);
     const runtimeUrl = incident.asset.tags?.runtimeUrl;
-    if (evaluation.action === "stop" && env && runtimeUrl && action.state === "prepared") {
+    const workerScript = incident.asset.family === "workers" ? incident.asset.id : incident.asset.tags?.workerScript;
+    const deploymentFuseReady = incident.asset.tags?.brollyFuse === "true" && Boolean(workerScript);
+    const legacyRuntimeReady = Boolean(runtimeUrl);
+    if (evaluation.action === "stop" && env && action.kind === "runtime_quarantine" && (deploymentFuseReady || legacyRuntimeReady) && action.state === "prepared") {
       await store.setActionState(action.id, "approved");
-      await store.audit("brolly-policy", "action.quarantine.start", action.id, { runtimeUrl, incidentId: incident.id });
+      await store.audit("brolly-policy", "action.quarantine.start", action.id, { workerScript, runtimeUrl, incidentId: incident.id });
       try {
-        const response = await executeRuntimeControl(env, action, runtimeUrl, "quarantine");
-        if (!response.ok) throw new Error(`Runtime returned ${response.status}: ${await response.text()}`);
+        if (deploymentFuseReady) {
+          await executeDeploymentFuseControl(env, action, workerScript!, "quarantine");
+        } else {
+          const response = await executeRuntimeControl(env, action, runtimeUrl!, "quarantine");
+          if (!response.ok) throw new Error(`Runtime returned ${response.status}: ${await response.text()}`);
+        }
         await store.setActionState(action.id, "succeeded");
-        await store.audit("brolly-policy", "action.quarantine.succeeded", action.id, { runtimeUrl });
+        await store.audit("brolly-policy", "action.quarantine.succeeded", action.id, { workerScript, runtimeUrl });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await store.setActionState(action.id, "failed", message);
