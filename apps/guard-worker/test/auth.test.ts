@@ -40,7 +40,12 @@ describe("Cloudflare OAuth authentication", () => {
     expect(authorization.origin).toBe("https://dash.cloudflare.com");
     expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorization.searchParams.get("redirect_uri")).toBe("https://oauth.brolly.example/oauth/callback");
-    expect(authorization.searchParams.get("scope")).toContain("workers-scripts.write");
+    const scopes = authorization.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain("workers-scripts.write");
+    expect(scopes).toContain("workers-kv-storage.read");
+    expect(scopes).not.toContain("workers-kv-storage.metadata_read");
+    expect(scopes).not.toContain("openid");
+    expect(scopes).not.toContain("offline_access");
     expect(response!.headers.get("set-cookie")).toContain("brolly_oauth_state=");
     expect(response!.headers.get("set-cookie")).toContain("HttpOnly");
     expect(writes.some(write => write.sql.includes("INSERT INTO oauth_states"))).toBe(true);

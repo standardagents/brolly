@@ -11,23 +11,21 @@ const SESSION_COOKIE = "brolly_session";
 const STATE_COOKIE = "brolly_oauth_state";
 
 export const BROLLY_OAUTH_SCOPES = [
-  "openid",
-  "offline_access",
   "user-details.read",
   "memberships.read",
   "account-settings.read",
   "account-analytics.read",
   "workers-scripts.read",
   "workers-scripts.write",
-  "workers-kv-storage.metadata_read",
-  "workers-r2.metadata_read",
-  "d1.metadata_read",
-  "queues.metadata_read",
+  "workers-kv-storage.read",
+  "workers-r2.read",
+  "d1.read",
+  "queues.read",
   "queues.write",
   "vectorize.read",
   "query-cache.read",
-  "pages.metadata_read",
-  "aig.metadata_read",
+  "page.read",
+  "aig.read",
   "zone.read",
 ] as const;
 

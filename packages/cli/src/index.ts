@@ -33,12 +33,15 @@ async function install(): Promise<void> {
   const clientId = process.env.BROLLY_OAUTH_CLIENT_ID ?? BROLLY_PUBLIC_OAUTH_CLIENT_ID;
   console.log("Opening Cloudflare to authorize Brolly. Brolly will ask you to choose exactly one account.");
   const scopes = (process.env.BROLLY_OAUTH_SCOPES ?? [
-    "openid", "offline_access", "user-details.read", "memberships.read", "account-settings.read", "account-analytics.read",
-    "workers-scripts.read", "workers-scripts.write", "workers-kv-storage.metadata_read", "workers-r2.metadata_read",
-    "d1.metadata_read", "d1.write", "queues.metadata_read", "queues.write", "vectorize.read", "query-cache.read",
-    "pages.metadata_read", "aig.metadata_read", "zone.read",
+    "user-details.read", "memberships.read", "account-settings.read", "account-analytics.read",
+    "workers-scripts.read", "workers-scripts.write", "workers-kv-storage.read", "workers-r2.read",
+    "d1.read", "d1.write", "queues.read", "queues.write", "vectorize.read", "query-cache.read",
+    "page.read", "aig.read", "zone.read",
   ].join(" ")).trim().split(/\s+/);
-  const oauth = await authorizeCloudflare(clientId, scopes, openUrl);
+  const oauth = await authorizeCloudflare(clientId, scopes, async url => {
+    console.log(`If Cloudflare did not open automatically, visit:\n${url}`);
+    await openUrl(url);
+  });
   const accounts = await cloudflare<Array<{ id: string; name: string }>>(oauth.accessToken, "/accounts");
   if (accounts.length !== 1 && !process.env.BROLLY_ACCOUNT_ID) {
     console.log(accounts.map(account => `${account.id}\t${account.name}`).join("\n"));
