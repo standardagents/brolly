@@ -2,7 +2,7 @@
 
 Brolly runs inside the protected Cloudflare account so it remains available during an incident. A scheduled Worker acquires a short D1 lease, refreshes inventory, polls bounded telemetry adapters, persists compact samples, evaluates policy, and fans out deduplicated incidents. The dashboard and CLI use the same audited action API.
 
-The control plane consists of `brolly-guard`, its D1 database, OAuth credentials, and at least one notification channel. Those assets are always allowlisted. A local CLI with a recovery secret remains the break-glass path if the dashboard is unavailable.
+The control plane consists of `brolly-guard`, its D1 database, OAuth credentials, and at least one notification channel. Those assets are always allowlisted. Browser sessions use a hashed, 12-hour, HttpOnly cookie; OAuth grants and notifier credentials are AES-GCM encrypted before entering D1. A local CLI bearer token remains an optional break-glass path if the dashboard is unavailable.
 
 The `apps/guard-worker` project is a full-stack Cloudflare Vite application.
 Vite 8 builds a React client and the Worker in separate environments;
@@ -47,8 +47,8 @@ levels:
   billable fast-telemetry meter.
 
 First-run completion is stored in D1 as `onboarding_complete`. A new browser
-does not bypass setup, and local storage contains only the dashboard admin
-token. Existing policies without `familyDailySpend` are migrated in the wizard
+does not bypass setup, and the browser never receives or stores the break-glass
+admin token. Existing policies without `familyDailySpend` are migrated in the wizard
 by merging conservative defaults before saving.
 
 Scoped budgets take precedence over family defaults. Per-object Durable Object
@@ -63,16 +63,17 @@ visible coverage gap rather than being double-counted.
 | Tier | Default response |
 | --- | --- |
 | `control_plane` | Alert only; never auto-stop |
-| `critical` | Alert and require explicit approval |
+| `critical` | Alert only; reclassify only after blast-radius review |
 | `standard` | Alert, prepare action, optional auto-stop at emergency threshold |
 | `disposable` | Alert, optional reversible auto-stop |
 | `unclassified` | Treat as critical until classified |
 
-An action record is written before any actuator runs. For Cloudflare controls,
-the live rollback snapshot is fetched, durably written to D1, and audited before
-the first mutation. Every action carries its observed values, policy version,
-rollback plan, actor, and idempotency key. Controls remove ingress or pause work;
-they do not delete resources or storage.
+An action record is written before any actuator runs. Execution rechecks that
+the incident is an emergency seen within the last 30 minutes, is not resolved,
+and that the target has not become protected since preparation. Actions use
+compare-and-set state transitions so double-clicks and retries cannot execute
+the same stop twice. Controls deploy a fuse or pause queue delivery; they do not
+delete resources, routes, domains, or storage.
 
 ## Deployment fuse
 
@@ -94,6 +95,15 @@ only the selected object is denied after rollout, but unrelated active objects
 in that script may restart as the version changes. Brolly exposes that
 collateral lifecycle risk in confirmation UI and audit records.
 
+Automatic execution requires two consecutive emergency observations from a
+raw usage meter. Billing reconciliation and projected-dollar estimates can
+alert and prepare evidence, but cannot authorize an automatic mutation. The
+actuator coalesces up to 15 exact-object changes into one Worker deployment and
+has three independent circuit breakers: five Workers per monitor pass, one
+automatic deployment per Worker per five minutes, and twelve automatic
+deployments per account per hour. A current successful configuration check
+(less than 24 hours old) is mandatory.
+
 ## Configuration evidence
 
 Runtime readiness is modeled per Worker and per Durable Object namespace, not
@@ -104,9 +114,9 @@ operator tiers or fuse declarations.
 
 `GET /api/configuration` joins scoped assets with cached verification records
 stored under `configuration_verification:<worker-script>` settings keys.
-`POST /api/configuration/verify` accepts up to 20 inventoried Worker names and
+`POST /api/configuration/verify` accepts up to five inventoried Worker names and
 performs bounded, read-only Cloudflare checks for secret presence, deployment
-identity, and the runtime marker in deployed content. Namespace readiness then
+identity, and the runtime marker in at most the first 1 MB of deployed content. Namespace readiness then
 inherits only the status of its resolved owning Worker. These checks are kept
 outside the automatic monitor because bundle downloads are useful after a
 deployment or operator request, not every minute.

@@ -44,6 +44,15 @@ describe("policy", () => {
     expect(result).toMatchObject({ severity: "emergency", action: "prepare_stop", observed: 5 });
   });
 
+  it("never auto-stops from an estimated dollar projection alone", () => {
+    const threshold = DEFAULT_POLICY.thresholds.find(item => item.metric === "projected_daily_cost_usd")!;
+    const result = evaluateSample(
+      { asset, metric: "projected_daily_cost_usd", unit: "usd", value: 50, start: 0, end: 86_400_000, source: "graphql" },
+      threshold, [], { ...DEFAULT_POLICY, mode: "automatic" },
+    );
+    expect(result).toMatchObject({ severity: "emergency", action: "prepare_stop" });
+  });
+
   it("uses the product-family daily budget for account-level spend", () => {
     const result = evaluateProjectedDailySpend(
       { ...asset, id: "account", scope: "account", tier: "control_plane" }, 7,

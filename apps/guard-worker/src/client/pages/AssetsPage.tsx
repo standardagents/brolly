@@ -191,7 +191,8 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
   onChanged: () => Promise<void>;
 }) {
   const [tier, setTier] = useState<AssetTier>(asset.tier);
-  const [workerScript, setWorkerScript] = useState(asset.tags.workerScript ?? "");
+  const owningWorker = asset.family === "workers" ? asset.id : asset.tags.cloudflareWorkerScript ?? "";
+  const [fuseInstalled, setFuseInstalled] = useState(asset.tags.brollyFuse === "true");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -203,11 +204,7 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
     setError("");
     setSaved(false);
     try {
-      const tags = fuseCapable
-        ? workerScript.trim()
-          ? { workerScript: workerScript.trim(), brollyFuse: "true" }
-          : { workerScript: null, brollyFuse: null }
-        : {};
+      const tags = fuseCapable ? { brollyFuse: fuseInstalled ? "true" : null } : {};
       await api(`/api/assets/${encodeURIComponent(asset.family)}/${encodeURIComponent(asset.id)}`, token, {
         method: "PATCH",
         body: JSON.stringify({ tier, tags }),
@@ -275,19 +272,17 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
           <small>{tierDescription(tier)}</small>
         </label>
         {fuseCapable && (
-          <label>
-            Owning Worker script (runtime fuse)
-            <input
-              type="text"
-              value={workerScript}
-              onChange={event => setWorkerScript(event.target.value)}
-              placeholder={asset.family === "workers" ? asset.id : "my-worker"}
-            />
+          <div>
+            <strong>Owning Worker</strong>
+            <p><code>{owningWorker || "Not reported by Cloudflare"}</code></p>
+            <label className="runtime-confirm">
+              <input type="checkbox" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed
+            </label>
             <small>
-              Set this only after installing @standardagents/brolly-runtime and the BROLLY_FUSE secret in that Worker.
+              Worker ownership comes from Cloudflare inventory and cannot be typed or overridden. Confirm the fuse only after installing @standardagents/brolly-runtime and BROLLY_FUSE.
               Verify the installation on the <button type="button" className="link-button inline" onClick={() => { onClose(); onNavigate("configuration"); }}>Configuration page</button>.
             </small>
-          </label>
+          </div>
         )}
         {error && <p className="form-error">{error}</p>}
         {saved && <p className="form-success" role="status">Classification saved.</p>}

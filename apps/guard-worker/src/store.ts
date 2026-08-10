@@ -114,12 +114,9 @@ export class Store {
   }
 
   async ensureRuntimeAction(incident: Incident): Promise<ControlAction> {
-    const fuseInstalled = incident.asset.tags?.brollyFuse === "true";
     const kind: ControlAction["kind"] = incident.asset.family === "queues"
       ? "pause_consumer"
-      : incident.asset.family === "workers" && !fuseInstalled
-        ? "disable_trigger"
-        : "runtime_quarantine";
+      : "runtime_quarantine";
     const idempotencyKey = `${incident.id}:${incident.severity}:${kind}`;
     const existing = await this.db.prepare(`SELECT * FROM actions WHERE idempotency_key=?1 LIMIT 1`).bind(idempotencyKey).first<Record<string, unknown>>();
     this.chargeRows(existing ? 1 : 0);
@@ -127,8 +124,7 @@ export class Store {
     const id = crypto.randomUUID();
     const now = Date.now();
     const rollback = {
-      runtimeUrl: incident.asset.tags?.runtimeUrl,
-      workerScript: incident.asset.family === "workers" ? incident.asset.id : incident.asset.tags?.workerScript,
+      workerScript: incident.asset.family === "workers" ? incident.asset.id : incident.asset.tags?.cloudflareWorkerScript,
       action: "resume",
     };
     const result = await this.db.prepare(
@@ -148,6 +144,13 @@ export class Store {
   async setActionState(actionId: string, state: ControlAction["state"], error?: string): Promise<void> {
     const result = await this.db.prepare(`UPDATE actions SET state=?2,error=?3,updated_at=?4 WHERE id=?1`).bind(actionId, state, error ?? null, Date.now()).run();
     this.chargeMeta(result.meta);
+  }
+
+  async claimActionState(actionId: string, expected: ControlAction["state"], next: ControlAction["state"]): Promise<boolean> {
+    const result = await this.db.prepare(`UPDATE actions SET state=?3,error=NULL,updated_at=?4 WHERE id=?1 AND state=?2`)
+      .bind(actionId, expected, next, Date.now()).run();
+    this.chargeMeta(result.meta);
+    return Number(result.meta.changes ?? 0) === 1;
   }
 
   async audit(actor: string, action: string, target: string, detail: unknown): Promise<void> {

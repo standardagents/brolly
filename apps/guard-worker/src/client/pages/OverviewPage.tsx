@@ -267,7 +267,7 @@ function LocalPreviewPanel({ connection, scanError, onNavigate }: {
         </div>
         <div>
           <strong>To connect</strong>
-          <p>Run <code>pnpm dlx @standardagents/brolly install</code> against your account so BROLLY_ACCOUNT_ID and OAuth credentials are installed, then use <em>Scan now</em>.</p>
+          <p>Deploy Brolly, open its URL, and choose <em>Continue with Cloudflare</em> to authorize exactly one account, then use <em>Scan now</em>.</p>
         </div>
       </div>
       {(connection.errors.length > 0 || scanError) && (

@@ -328,18 +328,9 @@ function RuntimeIntegrationMap({ assets, values, onChange }: {
             <div className="runtime-map-row namespace" key={asset.key}>
               <span>
                 <ProductIcon family="durable_objects" />
-                <span><strong>{asset.name}</strong><small>Enter the deployed Worker script that owns this namespace.</small></span>
+                <span><strong>{asset.name}</strong><small>Cloudflare reports the Worker that owns this namespace.</small></span>
               </span>
-              <label className="runtime-worker-field">
-                <span>Owning Worker</span>
-                <input
-                  type="text"
-                  list="brolly-worker-scripts"
-                  value={values[asset.key]?.workerScript ?? ""}
-                  onChange={event => update(asset.key, { workerScript: event.target.value })}
-                  placeholder="my-worker"
-                />
-              </label>
+              <span className="runtime-worker-field"><span>Owning Worker</span><code>{values[asset.key]?.workerScript || "Not reported"}</code></span>
               <label className="runtime-confirm">
                 <input
                   type="checkbox"
@@ -352,12 +343,11 @@ function RuntimeIntegrationMap({ assets, values, onChange }: {
           ))}
         </div>
       )}
-      <datalist id="brolly-worker-scripts">{workers.map(worker => <option value={worker.id} key={worker.id} />)}</datalist>
       {!assets.length && (
         <p className="empty-small">No Worker scripts or Durable Object namespaces were discovered. Finish setup for alerts, run a scan, then return to Budgets to map the runtime fuse.</p>
       )}
       <div className="runtime-map-note">
-        <strong>Automatic mode is fail-safe:</strong> Brolly only deploys a fuse for a resource marked installed with an owning Worker. Missing mappings produce an alert and coverage gap—not a guessed deployment.
+        <strong>Automatic mode is fail-safe:</strong> Brolly only uses Cloudflare's ownership mapping, a recent successful runtime verification, and two consecutive emergency samples. Missing evidence produces an alert—not a guessed deployment.
       </div>
     </section>
   );
@@ -375,7 +365,7 @@ function preparePolicy(policy: Policy, families: string[], scopedAssets: Onboard
 
 function prepareRuntimeIntegrations(assets: OnboardingData["scopedAssets"]): Record<string, RuntimeIntegration> {
   return Object.fromEntries(assets.map(asset => [asset.key, {
-    workerScript: asset.tags.workerScript ?? asset.tags.cloudflareWorkerScript ?? (asset.family === "workers" ? asset.id : ""),
+    workerScript: asset.tags.cloudflareWorkerScript ?? (asset.family === "workers" ? asset.id : ""),
     installed: asset.tags.brollyFuse === "true",
   }]));
 }

@@ -14,12 +14,10 @@
   "cloudflare": {
     "bindings": {
       "DB": { "description": "Brolly's D1 database. Cloudflare will provision it automatically." },
-      "BROLLY_ACCOUNT_ID": { "description": "The Cloudflare account ID whose billable assets Brolly should monitor." },
-      "BROLLY_ADMIN_TOKEN": { "description": "A private dashboard token. Generate one with `openssl rand -base64 32`." },
-      "CLOUDFLARE_OAUTH_TOKEN": { "description": "A token for this account with Account Read and Workers Scripts Write access." },
+      "BROLLY_ACCOUNT_ID": { "description": "Filled automatically after the first Cloudflare sign-in. Leave the onboarding placeholder unchanged." },
       "BROLLY_CREDENTIAL_KEY": { "description": "Encrypts notification credentials at rest. Generate one with `openssl rand -base64 32`." },
-      "BROLLY_CONTROL_PRIVATE_KEY_JWK": { "description": "Optional legacy runtime signing key. Deployment-fuse controls do not require it." },
-      "CLOUDFLARE_BILLING_TOKEN": { "description": "Optional separate Billing Read token for daily authoritative invoice reconciliation." }
+      "BROLLY_OAUTH_CLIENT_ID": { "description": "Brolly's publisher-owned public Cloudflare OAuth client. Installers should not replace this value." },
+      "BROLLY_OAUTH_REDIRECT_URI": { "description": "Brolly's verified OAuth relay. Installers should not replace this value." }
     }
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, forgetToken, rememberToken, savedToken } from "./api";
+import { api, authSession, logoutSession } from "./api";
 import { AppShell } from "./components/layout";
 import { connectionHealth } from "./lib/health";
 import { BudgetWizard } from "./onboarding/BudgetWizard";
@@ -15,10 +15,12 @@ import type { DashboardData, Incident, OnboardingData } from "./types";
 
 export default function App() {
   const docsPage = window.location.pathname === "/docs";
-  const [token, setToken] = useState(savedToken());
+  const [token, setToken] = useState("");
+  const [oauthConfigured, setOauthConfigured] = useState(true);
+  const [credentialStorageReady, setCredentialStorageReady] = useState(true);
   const [onboarding, setOnboarding] = useState<OnboardingData | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(Boolean(token));
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [route, navigate] = useRoute();
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -42,7 +44,6 @@ export default function App() {
       if (setup.complete) await loadDashboard(activeToken);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      forgetToken();
       setToken("");
       setOnboarding(null);
       setDashboard(null);
@@ -51,7 +52,21 @@ export default function App() {
     }
   }, [loadDashboard]);
 
-  useEffect(() => { if (token && !docsPage) void bootstrap(token); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (docsPage) return;
+    void authSession().then(session => {
+      setOauthConfigured(session.oauthConfigured);
+      setCredentialStorageReady(session.credentialStorageReady);
+      if (session.authenticated) {
+        setToken("session");
+        return bootstrap("session");
+      }
+      setLoading(false);
+    }).catch(cause => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setLoading(false);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (docsPage || !token || !onboarding?.complete) return;
@@ -59,14 +74,8 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [loadDashboard, onboarding?.complete, token]);
 
-  async function login(nextToken: string) {
-    rememberToken(nextToken);
-    setToken(nextToken);
-    await bootstrap(nextToken);
-  }
-
-  function logout() {
-    forgetToken();
+  async function logout() {
+    await logoutSession();
     setToken("");
     setOnboarding(null);
     setDashboard(null);
@@ -99,7 +108,8 @@ export default function App() {
   }
 
   if (docsPage) return <DocsPage />;
-  if (!token) return <LoginPage onLogin={login} error={error} />;
+  if (loading && !token) return <LoadingScreen />;
+  if (!token) return <LoginPage error={error} oauthConfigured={oauthConfigured} credentialStorageReady={credentialStorageReady} />;
   if (loading && !onboarding) return <LoadingScreen />;
   if (onboarding && (!onboarding.complete || wizardOpen)) {
     return (
@@ -118,7 +128,7 @@ export default function App() {
       />
     );
   }
-  if (!dashboard) return error ? <LoginPage onLogin={login} error={error} /> : <LoadingScreen />;
+  if (!dashboard) return error ? <LoginPage error={error} oauthConfigured={oauthConfigured} credentialStorageReady={credentialStorageReady} /> : <LoadingScreen />;
 
   const connection = connectionHealth(dashboard);
 
@@ -131,7 +141,7 @@ export default function App() {
       scanning={scanning}
       onScan={() => void scan()}
       onBudgets={() => void openWizard(0)}
-      onLogout={logout}
+      onLogout={() => void logout()}
     >
       {route === "overview" && (
         <OverviewPage

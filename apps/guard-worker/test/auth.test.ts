@@ -1,0 +1,75 @@
+import { describe, expect, it } from "vitest";
+import { authRoute, authenticate, configuredEnv } from "../src/auth.js";
+import type { Env } from "../src/env.js";
+
+function database(first: (sql: string, values: unknown[]) => unknown = () => null) {
+  const writes: Array<{ sql: string; values: unknown[] }> = [];
+  const db = {
+    prepare(sql: string) {
+      const statement = {
+        values: [] as unknown[],
+        bind(...values: unknown[]) { this.values = values; return this; },
+        async first() { return first(sql, this.values); },
+        async run() { writes.push({ sql, values: this.values }); return { meta: { changes: 1 } }; },
+      };
+      return statement;
+    },
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      return Promise.all(statements.map(statement => statement.run()));
+    },
+  } as unknown as D1Database;
+  return { db, writes };
+}
+
+function environment(db: D1Database): Env {
+  return {
+    DB: db,
+    BROLLY_ACCOUNT_ID: "REPLACE_DURING_OAUTH_ONBOARDING",
+    BROLLY_OAUTH_CLIENT_ID: "public-client-id",
+    BROLLY_OAUTH_REDIRECT_URI: "https://oauth.brolly.example/oauth/callback",
+    BROLLY_CREDENTIAL_KEY: "a".repeat(43),
+  };
+}
+
+describe("Cloudflare OAuth authentication", () => {
+  it("starts a one-time PKCE login with the Brolly permission set", async () => {
+    const { db, writes } = database();
+    const response = await authRoute(new Request("https://guard.example/api/auth/login"), environment(db));
+    expect(response?.status).toBe(302);
+    const authorization = new URL(response!.headers.get("location")!);
+    expect(authorization.origin).toBe("https://dash.cloudflare.com");
+    expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorization.searchParams.get("redirect_uri")).toBe("https://oauth.brolly.example/oauth/callback");
+    expect(authorization.searchParams.get("scope")).toContain("workers-scripts.write");
+    expect(response!.headers.get("set-cookie")).toContain("brolly_oauth_state=");
+    expect(response!.headers.get("set-cookie")).toContain("HttpOnly");
+    expect(writes.some(write => write.sql.includes("INSERT INTO oauth_states"))).toBe(true);
+  });
+
+  it("uses an HttpOnly session and rejects cross-origin mutations", async () => {
+    const now = Date.now();
+    const { db } = database(sql => sql.includes("FROM auth_sessions") ? {
+      user_id: "user-1", email: "operator@example.com", display_name: "Operator", account_id: "account-1", expires_at: now + 60_000,
+    } : null);
+    const env = environment(db);
+    const sameOrigin = new Request("https://guard.example/api/run", { method: "POST", headers: { cookie: "brolly_session=session", origin: "https://guard.example" } });
+    await expect(authenticate(sameOrigin, env)).resolves.toMatchObject({ kind: "session", accountId: "account-1" });
+    const crossOrigin = new Request("https://guard.example/api/run", { method: "POST", headers: { cookie: "brolly_session=session", origin: "https://attacker.example" } });
+    await expect(authenticate(crossOrigin, env)).resolves.toBeNull();
+    const logout = await authRoute(new Request("https://guard.example/api/auth/logout", { method: "POST", headers: { cookie: "brolly_session=session", origin: "https://attacker.example" } }), env);
+    expect(logout?.status).toBe(403);
+  });
+
+  it("hydrates the account selected during OAuth instead of trusting the deploy placeholder", async () => {
+    const { db } = database(sql => sql.includes("key='account_id'") ? { value: "account-from-oauth" } : null);
+    await expect(configuredEnv(environment(db))).resolves.toMatchObject({ BROLLY_ACCOUNT_ID: "account-from-oauth" });
+  });
+
+  it("does not let the shared callback probe local or private-looking origins", async () => {
+    const { db } = database();
+    const state = `random.${Buffer.from("http://127.0.0.1:8787").toString("base64url")}`;
+    const response = await authRoute(new Request(`https://oauth.brolly.example/oauth/callback?state=${state}&code=code`), environment(db));
+    expect(response?.status).toBe(400);
+    await expect(response?.text()).resolves.toContain("public HTTPS installation");
+  });
+});

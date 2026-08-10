@@ -8,4 +8,4 @@ const root = resolve(cli, '../..');
 await mkdir(resolve(cli, 'worker'), { recursive: true });
 await cp(resolve(root, 'apps/guard-worker/dist/brolly_guard/index.js'), resolve(cli, 'worker/index.js'));
 await cp(resolve(root, 'apps/guard-worker/dist/client'), resolve(cli, 'worker/client'), { recursive: true });
-await cp(resolve(root, 'apps/guard-worker/migrations/0001_initial.sql'), resolve(cli, 'worker/0001_initial.sql'));
+await cp(resolve(root, 'apps/guard-worker/migrations'), resolve(cli, 'worker/migrations'), { recursive: true });

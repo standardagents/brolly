@@ -131,22 +131,22 @@ export function DocsPage() {
             <section id="quick-start" className="docs-doc-section">
               <p className="docs-section-label">Quick start</p>
               <h2>Deploy Brolly into one account</h2>
-              <p>Deploy to Cloudflare creates your own copy of Brolly, provisions the required D1 database, collects the account variables and secrets, runs its migrations, and deploys the guard Worker and dashboard.</p>
+              <p>Deploy to Cloudflare creates your own copy of Brolly, provisions the required D1 database, runs its migrations, and deploys the guard Worker and dashboard. Brolly learns the protected account only after you authorize it with Cloudflare.</p>
               <div className="docs-callout orange">
                 <div><Icon name="shield" /><span><strong>Deploy on your Cloudflare account</strong><small>Cloudflare will show every resource and secret before it builds.</small></span></div>
                 <a href={DEPLOY_URL} target="_blank" rel="noreferrer">Deploy to Cloudflare</a>
               </div>
               <ol className="docs-numbered">
-                <li><span>1</span><div><strong>Connect GitHub and choose one Cloudflare account.</strong><p>Cloudflare creates a copy of the public Brolly repository that you own and can update independently.</p></div></li>
-                <li><span>2</span><div><strong>Review bindings and secrets.</strong><p>Choose the Worker name, enter your account ID and monitoring token, and generate the admin and encryption secrets described in the setup form.</p></div></li>
-                <li><span>3</span><div><strong>Build, migrate, and deploy.</strong><p>Workers Builds provisions D1, applies Brolly’s schema, deploys the Worker, and gives you its URL. First login then walks through every spending limit.</p></div></li>
+                <li><span>1</span><div><strong>Connect GitHub and deploy your copy.</strong><p>Cloudflare creates a copy of the public Brolly repository that you own and can update independently.</p></div></li>
+                <li><span>2</span><div><strong>Generate the encryption secret.</strong><p><code>BROLLY_CREDENTIAL_KEY</code> encrypts OAuth and notification credentials. The account ID and Cloudflare access token are not deployment form fields.</p></div></li>
+                <li><span>3</span><div><strong>Continue with Cloudflare.</strong><p>Open the deployed dashboard, authorize exactly one account, review the requested scopes, then set limits for every discovered product, Worker, and namespace.</p></div></li>
               </ol>
               <h3>Prefer the terminal?</h3>
-              <p>The CLI performs the equivalent OAuth-guided installation and keeps the generated admin token in your local Brolly config.</p>
+              <p>The CLI performs the equivalent OAuth-guided installation and keeps an optional break-glass token in your local Brolly config. Browser sessions never receive that token.</p>
               <button type="button" className="docs-command docs-command-inline" onClick={() => void copyInstaller()} aria-label="Copy Brolly installer command">
                 <span className="docs-prompt">$</span><code>{INSTALL_COMMAND}</code><span className="docs-copy-state">{copied ? "Copied" : "Copy"}</span>
               </button>
-              <p className="docs-prerequisite"><strong>CLI prerequisite:</strong> until Brolly ships its shared public OAuth application ID in the package, set <code>BROLLY_OAUTH_CLIENT_ID</code> to your registered Cloudflare PKCE client before running this command.</p>
+              <p className="docs-prerequisite"><strong>No OAuth setup required:</strong> the CLI uses Brolly's publisher-owned public OAuth client and a fixed local PKCE callback. You authorize the account in Cloudflare; no API token or client ID is pasted into Brolly.</p>
               <div className="docs-callout neutral"><Icon name="info" /><p><strong>Billing reconciliation is optional.</strong> Cloudflare does not expose Billing Read through the OAuth scope catalog. Add a manually created Billing Read token for authoritative invoice comparison; fast telemetry and coverage alerts work without it.</p></div>
             </section>
 
@@ -157,7 +157,7 @@ export function DocsPage() {
               <div className="docs-table-wrap"><table><thead><tr><th>Mode</th><th>What Brolly does</th><th>Best for</th></tr></thead><tbody>
                 <tr><td><span className="docs-mode observe">Observe</span></td><td>Detects and notifies. Never prepares or executes a stop.</td><td>Initial rollout and policy tuning</td></tr>
                 <tr><td><span className="docs-mode approval">Approval</span></td><td>Prepares a reversible action; a person explicitly executes it.</td><td>Production default</td></tr>
-                <tr><td><span className="docs-mode automatic">Automatic</span></td><td>Acts only at emergency thresholds on classified, supported resources.</td><td>Tested, disposable workloads</td></tr>
+                <tr><td><span className="docs-mode automatic">Automatic</span></td><td>Acts only after two fresh raw-usage emergencies on classified, recently verified fuse targets.</td><td>Tested, disposable workloads</td></tr>
               </tbody></table></div>
               <div className="docs-callout warning"><Icon name="alert" /><p><strong>Control-plane and critical assets are alert-only.</strong> Brolly, its D1 database, and notification path cannot be automatically stopped. Unclassified resources are treated as critical.</p></div>
             </section>
@@ -200,6 +200,7 @@ export function DocsPage() {
                 <li><Icon name="check" /><span><strong>No invented precision.</strong> Namespace- and account-scoped meters stay labeled at their real scope.</span></li>
                 <li><Icon name="check" /><span><strong>No silent blind spots.</strong> Permission errors, delayed data, and absent collectors become coverage gaps.</span></li>
                 <li><Icon name="check" /><span><strong>No untested automation.</strong> Automatic controls require an emergency threshold, safe classification, and a supported reversible lever.</span></li>
+                <li><Icon name="check" /><span><strong>No deployment storms.</strong> Per-pass, per-Worker, and account-hour circuit breakers bound automatic fuse rollouts.</span></li>
               </ul>
             </section>
 

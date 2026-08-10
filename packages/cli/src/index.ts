@@ -7,6 +7,8 @@ import { authorizeCloudflare } from "./oauth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { deployGuard } from "./install.js";
 
+const BROLLY_PUBLIC_OAUTH_CLIENT_ID = "5690968d2377c6200202668946420dec";
+
 const command = process.argv[2] ?? "help";
 
 try {
@@ -28,10 +30,14 @@ try {
 }
 
 async function install(): Promise<void> {
-  const clientId = process.env.BROLLY_OAUTH_CLIENT_ID;
-  if (!clientId) throw new Error("Set BROLLY_OAUTH_CLIENT_ID to the public Cloudflare OAuth client ID");
+  const clientId = process.env.BROLLY_OAUTH_CLIENT_ID ?? BROLLY_PUBLIC_OAUTH_CLIENT_ID;
   console.log("Opening Cloudflare to authorize Brolly. Brolly will ask you to choose exactly one account.");
-  const scopes = (process.env.BROLLY_OAUTH_SCOPES ?? "account.read workers-platform.write").trim().split(/\s+/);
+  const scopes = (process.env.BROLLY_OAUTH_SCOPES ?? [
+    "openid", "offline_access", "user-details.read", "memberships.read", "account-settings.read", "account-analytics.read",
+    "workers-scripts.read", "workers-scripts.write", "workers-kv-storage.metadata_read", "workers-r2.metadata_read",
+    "d1.metadata_read", "d1.write", "queues.metadata_read", "queues.write", "vectorize.read", "query-cache.read",
+    "pages.metadata_read", "aig.metadata_read", "zone.read",
+  ].join(" ")).trim().split(/\s+/);
   const oauth = await authorizeCloudflare(clientId, scopes, openUrl);
   const accounts = await cloudflare<Array<{ id: string; name: string }>>(oauth.accessToken, "/accounts");
   if (accounts.length !== 1 && !process.env.BROLLY_ACCOUNT_ID) {
@@ -47,7 +53,7 @@ async function install(): Promise<void> {
   const adminToken = randomBytes(32).toString("base64url");
   console.log(`Created D1 database ${database.name} (${database.uuid}).`);
   const deployed = await deployGuard({
-    accountId, clientId, oauth, databaseId: database.uuid, adminToken,
+    accountId, accountName: accounts.find(account => account.id === accountId)!.name, clientId, oauth, databaseId: database.uuid, adminToken,
     billingToken: process.env.BROLLY_BILLING_TOKEN,
     timezone: process.env.BROLLY_TIMEZONE,
     summaryHour: process.env.BROLLY_DAILY_SUMMARY_HOUR,
@@ -71,30 +77,23 @@ async function guardRequest(path: string, init: RequestInit = {}): Promise<unkno
 
 async function prepareOrStop(execute: boolean): Promise<void> {
   const incidentId = process.argv[3];
-  const runtimeUrl = positional(4);
-  if (!incidentId) throw new Error(`Usage: brolly ${execute ? "stop" : "prepare"} <incident-id> [legacy-runtime-url] [--kind=runtime_quarantine|pause_consumer|disable_trigger]`);
-  const kind = option("--kind=");
-  const body = { incidentId, runtimeUrl, execute, ...(kind ? { kind } : {}) };
+  if (!incidentId) throw new Error(`Usage: brolly ${execute ? "stop" : "prepare"} <incident-id>`);
+  const body = { incidentId, execute };
   console.log(JSON.stringify(await guardRequest("/api/actions", { method: "POST", body: JSON.stringify(body) }), null, 2));
 }
 
 async function resumeAction(): Promise<void> {
   const id = process.argv[3];
-  const runtimeUrl = positional(4);
-  if (!id) throw new Error("Usage: brolly resume <action-id> [legacy-runtime-url] [--release-forensic-hold]");
-  const body = { runtimeUrl, releaseForensicHold: process.argv.includes("--release-forensic-hold") };
+  if (!id) throw new Error("Usage: brolly resume <action-id>");
+  const body = {};
   console.log(JSON.stringify(await guardRequest(`/api/actions/${encodeURIComponent(id)}/resume`, { method: "POST", body: JSON.stringify(body) }), null, 2));
 }
 
 async function classifyAsset(): Promise<void> {
   const [family, id, tier] = process.argv.slice(3, 6);
-  if (!family || !id || !tier) throw new Error("Usage: brolly classify <family> <asset-id> <control_plane|critical|standard|disposable> [--worker-script=NAME]");
-  const runtimeUrl = option("--runtime-url=");
-  const workerScript = option("--worker-script=");
-  const projectId = option("--project-id=");
-  const tags = { ...(runtimeUrl ? { runtimeUrl } : {}), ...(projectId ? { projectId } : {}), ...(workerScript ? { workerScript, brollyFuse: "true" } : {}) };
+  if (!family || !id || !tier) throw new Error("Usage: brolly classify <family> <asset-id> <control_plane|critical|standard|disposable>");
   console.log(JSON.stringify(await guardRequest(`/api/assets/${encodeURIComponent(family)}/${encodeURIComponent(id)}`, {
-    method: "PATCH", body: JSON.stringify({ tier, tags }),
+    method: "PATCH", body: JSON.stringify({ tier }),
   }), null, 2));
 }
 
@@ -107,13 +106,10 @@ async function setMode(): Promise<void> {
 
 async function addTarget(): Promise<void> {
   const [kind, configFile, minimumSeverity = "warning"] = process.argv.slice(3, 6);
-  if (!kind || !configFile) throw new Error("Usage: brolly target <discord|slack|webhook|resend|postmark|twilio> <config-json-file> [minimum-severity]");
+  if (!kind || !configFile) throw new Error("Usage: brolly target <discord|slack|resend|postmark|twilio> <config-json-file> [minimum-severity]");
   const config = JSON.parse(await readFile(configFile, "utf8")) as Record<string, unknown>;
   console.log(JSON.stringify(await guardRequest("/api/targets", { method: "POST", body: JSON.stringify({ kind, config, minimumSeverity }) }), null, 2));
 }
-
-function option(prefix: string): string | undefined { return process.argv.find(value => value.startsWith(prefix))?.slice(prefix.length); }
-function positional(index: number): string | undefined { const value = process.argv[index]; return value?.startsWith("--") ? undefined : value; }
 
 async function cloudflare<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers } });

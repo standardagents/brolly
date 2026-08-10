@@ -118,17 +118,10 @@ discovered** to:
 3. Confirm the constructor guard is installed for that namespace's classes.
 
 Unchecked or unmapped resources continue to generate alerts, but Brolly will
-not claim that it can quarantine them. You can save the same mapping from the
-CLI:
-
-```bash
-brolly classify durable_objects NAMESPACE_ID standard \
-  --worker-script=my-worker
-```
-
-The namespace tier and Worker mapping are inherited by subsequently observed
-object IDs. You can also classify one already-observed 64-character object ID
-to override its namespace. Do this before enabling automatic mode.
+not claim that it can quarantine them. The owning Worker comes only from
+Cloudflare namespace inventory; neither the UI nor CLI can override it. The
+namespace tier and verified integration are inherited by subsequently observed
+object IDs. Do this before enabling automatic mode.
 
 ## Verify the installation in Brolly
 
@@ -179,11 +172,17 @@ At an eligible emergency threshold:
 5. The Worker and constructor guards enforce the new generation locally.
 
 If the package-installed confirmation or Worker mapping is absent, automatic
-mode stops at an audited prepared action and sends the incident notification.
-It does not guess a script name or deploy an unverified fuse.
+mode sends the incident notification without mutating Cloudflare. It does not
+guess a script name or deploy an unverified fuse.
 
 The manifest is capped below Cloudflare's 5 KB per-binding limit. It contains
 only active emergency quarantines, not Brolly's policy database.
+
+Automatic execution additionally requires two consecutive fresh emergency
+observations from a raw usage meter and a successful configuration refresh in
+the last 24 hours. It never acts from projected dollars or delayed billing
+data. Changes for the same Worker are coalesced and bounded; independent
+per-pass, per-Worker, and per-account circuit breakers stop deployment storms.
 
 ## Recovery
 
@@ -199,6 +198,12 @@ during rollout even though only the selected ID is denied. Existing synchronous
 JavaScript cannot be interrupted at an arbitrary instruction; the fuse protects
 subsequent construction and events.
 
+Cloudflare may retry a failed Durable Object alarm. A constructor quarantine
+therefore prevents the application work but can still produce the platform's
+bounded alarm retry attempts. Put the caller-side `brollyWorker` check on every
+entry point you control, and treat alarm-heavy objects as a separate service
+impact during incident review.
+
 ## Runtime cost and failure behavior
 
 The guards do not call Brolly, Cloudflare's API, Service Bindings, KV, D1, or
@@ -207,5 +212,7 @@ plane when applying or clearing the secret. Malformed fuse data is ignored
 rather than turning a configuration mistake into an account outage; Brolly's
 deployment action records Cloudflare failures and alerts the operator.
 
-The previous signed runtime endpoint remains supported as a legacy fallback,
-but new installations should use the deployment fuse.
+The previous signed callback endpoint is not reachable from Brolly's action API.
+It was retired because arbitrary external callback targets are not an acceptable
+control-plane trust boundary. New and existing actions require the deployment
+fuse and Cloudflare's authoritative Worker mapping.

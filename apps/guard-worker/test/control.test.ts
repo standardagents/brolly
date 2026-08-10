@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlAction } from "@standardagents/brolly-core";
-import { executeCloudflareControl, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl, rollbackCloudflareControl } from "../src/control.js";
+import { executeCloudflareControl, executeDeploymentFuseBatch, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl } from "../src/control.js";
 import type { Env } from "../src/env.js";
 
 const env = {
@@ -25,6 +25,7 @@ function action(kind: ControlAction["kind"]): ControlAction {
       id: kind === "pause_consumer" ? "jobs" : "runaway-worker",
       scope: "resource",
       tier: "standard",
+      tags: kind === "runtime_quarantine" ? { brollyFuse: "true" } : undefined,
     },
   };
 }
@@ -36,7 +37,7 @@ function response(result: unknown): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("reversible Cloudflare controls", () => {
-  it("deploys and clears an exact-object fuse without touching other objects", async () => {
+  it("coalesces exact-object quarantines into one Worker deployment and clears only the owning action", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     let storedFuse: string | undefined;
     const db = {
@@ -44,7 +45,10 @@ describe("reversible Cloudflare controls", () => {
         const statement = {
           values: [] as unknown[],
           bind(...values: unknown[]) { this.values = values; return this; },
-          async first() { return storedFuse ? { value: storedFuse } : null; },
+          async first() {
+            if (sql.includes("FROM assets")) return { tier: "standard", metadata_json: "{}" };
+            return storedFuse ? { value: storedFuse } : null;
+          },
           async run() {
             statements.push({ sql, values: this.values });
             if (sql.includes("INSERT INTO settings")) storedFuse = String(this.values[1]);
@@ -60,9 +64,11 @@ describe("reversible Cloudflare controls", () => {
       return response({ name: "BROLLY_FUSE", type: "secret_text" });
     }));
     const pending = action("runtime_quarantine");
-    pending.asset = { ...pending.asset, family: "durable_objects", id: "a".repeat(64), scope: "object" };
-    const applied = await executeDeploymentFuseControl({ ...env, DB: db }, pending, "chat-worker");
+    pending.asset = { ...pending.asset, family: "durable_objects", id: "a".repeat(64), scope: "object", tags: { cloudflareWorkerScript: "chat-worker", brollyFuse: "true" } };
+    const second = { ...pending, id: "action-2", incidentId: "incident-2", asset: { ...pending.asset, id: "b".repeat(64) } };
+    const applied = await executeDeploymentFuseBatch({ ...env, DB: db }, [pending, second], "chat-worker");
     expect(applied.manifest.objects?.["a".repeat(64)]).toMatchObject({ actionId: "action-1" });
+    expect(applied.manifest.objects?.["b".repeat(64)]).toMatchObject({ actionId: "action-2" });
     expect(calls[0]?.url).toContain("/workers/scripts/chat-worker/secrets");
     const request = JSON.parse(String(calls[0]?.init?.body)) as { name: string; text: string; type: string };
     expect(request).toMatchObject({ name: "BROLLY_FUSE", type: "secret_text" });
@@ -71,8 +77,47 @@ describe("reversible Cloudflare controls", () => {
 
     const cleared = await executeDeploymentFuseControl({ ...env, DB: db }, pending, "chat-worker", "resume");
     expect(cleared.manifest.generation).toBe(2);
-    expect(cleared.manifest.objects).toBeUndefined();
+    expect(cleared.manifest.objects?.["a".repeat(64)]).toBeUndefined();
+    expect(cleared.manifest.objects?.["b".repeat(64)]).toMatchObject({ actionId: "action-2" });
     expect(calls).toHaveLength(2);
+  });
+
+  it("fails closed before Cloudflare mutation when stored fuse state is corrupt", async () => {
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind() { return this; },
+          async first() {
+            if (sql.includes("FROM assets")) return { tier: "standard", metadata_json: "{}" };
+            if (sql.includes("FROM settings")) return { value: "not-json" };
+            return null;
+          },
+          async run() { return { meta: { changes: 1 } }; },
+        };
+      },
+    } as unknown as D1Database;
+    const cloudflare = vi.fn();
+    vi.stubGlobal("fetch", cloudflare);
+    await expect(executeDeploymentFuseControl({ ...env, DB: db }, action("runtime_quarantine"), "runaway-worker"))
+      .rejects.toThrow("corrupt");
+    expect(cloudflare).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the owning Worker safety tier before deploying a fuse", async () => {
+    const db = {
+      prepare(sql: string) {
+        return {
+          bind() { return this; },
+          async first() { return sql.includes("FROM assets") ? { tier: "critical", metadata_json: "{}" } : null; },
+          async run() { return { meta: { changes: 1 } }; },
+        };
+      },
+    } as unknown as D1Database;
+    const cloudflare = vi.fn();
+    vi.stubGlobal("fetch", cloudflare);
+    await expect(executeDeploymentFuseControl({ ...env, DB: db }, action("runtime_quarantine"), "runaway-worker"))
+      .rejects.toThrow("protected as critical");
+    expect(cloudflare).not.toHaveBeenCalled();
   });
 
   it("captures queue settings separately from the mutating pause", async () => {
@@ -89,7 +134,7 @@ describe("reversible Cloudflare controls", () => {
     expect(JSON.parse(String(calls[1]!.init!.body))).toEqual({ settings: { delivery_delay: 5, delivery_paused: true } });
   });
 
-  it("uses the API's array body for cron disable and rollback", async () => {
+  it("refuses the legacy route-deleting Worker shutdown", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
@@ -101,16 +146,8 @@ describe("reversible Cloudflare controls", () => {
     }));
     const pending = action("disable_trigger");
     pending.rollback = await prepareCloudflareControl(env, pending);
-    await executeCloudflareControl(env, pending);
-    const disable = calls.find(call => call.url.includes("/schedules") && call.init?.method === "PUT");
-    expect(JSON.parse(String(disable!.init!.body))).toEqual([]);
-    expect(calls.some(call => call.url.endsWith("/workers/domains/domain-1") && call.init?.method === "DELETE")).toBe(true);
-    calls.length = 0;
-    await rollbackCloudflareControl(env, pending);
-    const restore = calls.find(call => call.url.includes("/schedules") && call.init?.method === "PUT");
-    expect(JSON.parse(String(restore!.init!.body))).toEqual([{ cron: "*/5 * * * *" }]);
-    const restoredDomain = calls.find(call => call.url.endsWith("/workers/domains") && call.init?.method === "PUT");
-    expect(JSON.parse(String(restoredDomain!.init!.body))).toMatchObject({ hostname: "app.example.com", service: "runaway-worker", zone_id: "zone-1" });
+    await expect(executeCloudflareControl(env, pending)).rejects.toThrow("Route-deleting Worker shutdown is retired");
+    expect(calls.some(call => call.init?.method === "DELETE")).toBe(false);
   });
 
   it("signs exact-object runtime controls with a verifiable ES256 token", async () => {

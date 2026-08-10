@@ -62,7 +62,7 @@ export function coverageGuidance(item: CoverageItem): { summary: string; fix?: s
   if (parsed.code === 7003 || /could not route/i.test(parsed.message)) {
     return {
       summary: "Cloudflare could not route this account inventory request.",
-      fix: "Verify BROLLY_ACCOUNT_ID and reinstall Brolly into that same Cloudflare account.",
+      fix: "Reconnect Cloudflare from Brolly and authorize the same account this installation already protects.",
     };
   }
   if (parsed.code === 9106 || /authentication failed/i.test(parsed.message)) {

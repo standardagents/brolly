@@ -3,6 +3,8 @@ import { createServer } from "node:http";
 
 export interface OAuthResult { accessToken: string; refreshToken?: string; expiresIn?: number }
 
+export const CLI_OAUTH_REDIRECT_URI = "http://127.0.0.1:8976/callback";
+
 export async function authorizeCloudflare(clientId: string, scopes: string[], open: (url: string) => Promise<void>): Promise<OAuthResult> {
   const verifier = base64url(randomBytes(48));
   const challenge = base64url(createHash("sha256").update(verifier).digest());
@@ -49,10 +51,8 @@ function callbackServer(expectedState: string): Promise<{ server: ReturnType<typ
       resolveCode(value);
     });
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") return reject(new Error("Could not bind OAuth callback"));
-      resolve({ server, redirectUri: `http://127.0.0.1:${address.port}/callback`, code });
+    server.listen(8976, "127.0.0.1", () => {
+      resolve({ server, redirectUri: CLI_OAUTH_REDIRECT_URI, code });
     });
   });
 }

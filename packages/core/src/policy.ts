@@ -43,7 +43,10 @@ export function evaluateSample(
   const severity: Severity | null = absolute ?? (anomalous ? "warning" : null);
   if (!severity) return null;
 
-  const action = controlAction(sample.asset, severity, policy);
+  const estimatedSpend = sample.metric === "projected_daily_cost_usd" || sample.source === "billing" || sample.metric.endsWith("_cost_usd");
+  const action = estimatedSpend
+    ? policy.mode === "observe" ? "notify" : "prepare_stop"
+    : controlAction(sample.asset, severity, policy);
   return {
     key: [sample.asset.accountId, sample.asset.family, sample.asset.id, sample.metric, threshold.windowMs].join(":"),
     asset: sample.asset,
@@ -68,7 +71,10 @@ export function evaluateProjectedDailySpend(asset: AssetRef, usd: number, policy
     key: `${asset.accountId}:${asset.family}:${asset.scope}:${asset.id}:projected_daily_cost_usd`, asset, metric: threshold.metric,
     severity, observed: usd, threshold: thresholdForSeverity(threshold, severity),
     reason: `Projected ${asset.family === "account" ? "monitored account" : asset.family} spend crossed the ${severity} threshold`,
-    action: controlAction(asset, severity, policy),
+    // GraphQL pricing is an estimate rather than an invoice-grade billing
+    // measure. It may prepare an operator-reviewed action, but must never be
+    // the sole signal for an automatic shutdown.
+    action: policy.mode === "observe" ? "notify" : "prepare_stop",
   };
 }
 

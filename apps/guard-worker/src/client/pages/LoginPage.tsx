@@ -1,43 +1,20 @@
-import { useState, type FormEvent } from "react";
 import { Brand } from "../components/ui";
 
-export function LoginPage({ onLogin, error }: { onLogin: (token: string) => Promise<void>; error: string }) {
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!value.trim()) return;
-    setBusy(true);
-    try {
-      await onLogin(value.trim());
-    } finally {
-      setBusy(false);
-    }
-  }
-
+export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { error: string; oauthConfigured: boolean; credentialStorageReady: boolean }) {
   return (
     <main className="auth-shell">
       <section className="auth-card">
         <Brand large />
         <p className="eyebrow">Cloudflare cost control</p>
         <h1>See the spike.<br />Stop the spend.</h1>
-        <p className="auth-copy">Sign in with the admin token created when this Brolly guard was installed.</p>
-        <form onSubmit={submit}>
-          <label htmlFor="admin-token">Brolly admin token</label>
-          <input
-            id="admin-token"
-            type="password"
-            autoFocus
-            autoComplete="current-password"
-            value={value}
-            onChange={event => setValue(event.target.value)}
-            placeholder="Paste token"
-          />
-          {error && <p className="form-error">{error}</p>}
-          <button className="button primary full" disabled={busy || !value.trim()}>{busy ? "Checking…" : "Open Brolly"}</button>
-        </form>
-        <p className="fine-print">The token stays in this browser. Brolly never sends it to a third party. <a className="link-button inline" href="/docs">Learn how Brolly works.</a></p>
+        <p className="auth-copy">Use Cloudflare to prove who you are and choose the one account this Brolly installation should protect.</p>
+        {error && <p className="form-error">{error}</p>}
+        {!oauthConfigured && <p className="form-error">This Brolly release is missing its publisher OAuth client. The installer does not need to create one.</p>}
+        {!credentialStorageReady && <p className="form-error">Credential encryption is missing. Add <code>BROLLY_CREDENTIAL_KEY</code> as a Worker secret before signing in.</p>}
+        {oauthConfigured && credentialStorageReady
+          ? <a className="button primary full" href="/api/auth/login">Continue with Cloudflare</a>
+          : <button className="button primary full" type="button" disabled>Continue with Cloudflare</button>}
+        <p className="fine-print">Cloudflare shows the exact account and permissions before you approve access. Brolly stores an encrypted, revocable OAuth grant in your own D1 database. <a className="link-button inline" href="/docs">Learn how Brolly works.</a></p>
       </section>
       <div className="auth-art" aria-hidden="true">
         <div className="radar-ring one" />

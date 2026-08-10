@@ -3,8 +3,8 @@ import { operationalToken } from "./credentials.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 const VERIFICATION_PREFIX = "configuration_verification:";
-const MAX_WORKERS_PER_REFRESH = 20;
-const MAX_BUNDLE_SCAN_BYTES = 5_000_000;
+const MAX_WORKERS_PER_REFRESH = 5;
+const MAX_BUNDLE_SCAN_BYTES = 1_000_000;
 const RUNTIME_MARKER = "BROLLY_QUARANTINED";
 
 type CheckState = "pass" | "fail" | "unknown" | "error";
@@ -64,7 +64,7 @@ export async function configurationData(env: Env): Promise<Record<string, unknow
   const namespacesByWorker = new Map<string, AssetRow[]>();
   for (const namespace of namespaceRows) {
     const tags = parseTags(namespace.metadata_json);
-    const owner = tags.workerScript ?? tags.cloudflareWorkerScript;
+    const owner = tags.cloudflareWorkerScript;
     if (owner) namespacesByWorker.set(owner, [...(namespacesByWorker.get(owner) ?? []), namespace]);
   }
 
@@ -93,19 +93,19 @@ export async function configurationData(env: Env): Promise<Record<string, unknow
   const workerMap = new Map(workers.map(worker => [worker.id, worker]));
   const namespaces = namespaceRows.map(row => {
     const tags = parseTags(row.metadata_json);
-    const declaredOwner = tags.workerScript;
     const discoveredOwner = tags.cloudflareWorkerScript;
-    const owner = declaredOwner ?? discoveredOwner;
+    const declaredOwner = undefined;
+    const owner = discoveredOwner;
     const ownerWorker = owner ? workerMap.get(owner) : undefined;
-    const ownerMismatch = Boolean(declaredOwner && discoveredOwner && declaredOwner !== discoveredOwner);
+    const ownerMismatch = false;
     const constructorConfirmed = tags.brollyFuse === "true";
     const checks = {
       inventory: pass("Discovered", "Durable Object namespace is present in Cloudflare inventory."),
       owner: ownerMismatch
-        ? fail("Owner mismatch", `Brolly is configured for ${declaredOwner}, but Cloudflare reports ${discoveredOwner}.`)
+        ? fail("Owner mismatch", "The stored owner does not match Cloudflare inventory.")
         : owner
           ? pass("Owner mapped", `Cloudflare associates this namespace with ${owner}.`)
-          : unknown("Owner unknown", "Cloudflare did not return an owning Worker and no manual mapping is saved."),
+          : unknown("Owner unknown", "Cloudflare did not return an owning Worker. Brolly will not accept a manual override."),
       constructor: constructorConfirmed
         ? pass("Constructor confirmed", "An operator confirmed brollyDurableObject(ctx, env) is installed for this namespace.")
         : unknown("Constructor not confirmed", "The namespace remains alert-only until the constructor guard is confirmed."),
@@ -146,6 +146,13 @@ export async function refreshConfiguration(env: Env, workerScripts: string[]): P
   if (!scripts.length) throw new Error("Choose at least one Worker to refresh");
   if (scripts.length > MAX_WORKERS_PER_REFRESH) throw new Error(`Refresh at most ${MAX_WORKERS_PER_REFRESH} Workers per request`);
   for (const script of scripts) if (!/^[A-Za-z0-9_-]+$/.test(script)) throw new Error(`Invalid Worker script name: ${script}`);
+  const now = Date.now();
+  const lease = await env.DB.prepare(
+    `INSERT INTO cron_lease(name,holder,expires_at) VALUES('configuration-refresh',?1,?2)
+     ON CONFLICT(name) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at
+     WHERE cron_lease.expires_at<?3`,
+  ).bind(crypto.randomUUID(), now + 55_000, now).run();
+  if (Number(lease.meta.changes ?? 0) !== 1) throw new Error("A configuration refresh already ran in the last minute. Cached evidence is shown until the cooldown ends.");
   const known = await env.DB.prepare(`SELECT asset_id FROM assets WHERE account_id=?1 AND family='workers' AND scope='resource' LIMIT 2500`).bind(env.BROLLY_ACCOUNT_ID).all<{ asset_id: string }>();
   const knownScripts = new Set(known.results.map(row => row.asset_id));
   for (const script of scripts) if (!knownScripts.has(script)) throw new Error(`Worker is not in Brolly inventory: ${script}`);

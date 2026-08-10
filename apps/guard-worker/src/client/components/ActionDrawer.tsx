@@ -24,7 +24,7 @@ export function actionStateDescription(state: string): string {
     approved: "The operator approved the stop and Brolly is beginning the change.",
     running: "Brolly is applying or rolling back the control. Refresh before taking another action.",
     succeeded: "The stop completed and its rollback snapshot is available.",
-    failed: "The last operation did not complete. Review the error and use rollback if any live state may have changed.",
+    failed: "The last operation did not complete. Review the error and Cloudflare's live state before preparing another action.",
     rolled_back: "Brolly restored the saved pre-action state and completed the rollback.",
   };
   return descriptions[state] ?? "Review the audit state before making another change.";
@@ -33,7 +33,7 @@ export function actionStateDescription(state: string): string {
 export function actionKindLabel(kind: string): string {
   const labels: Record<string, string> = {
     runtime_quarantine: "Runtime quarantine",
-    disable_trigger: "Disable Worker ingress",
+    disable_trigger: "Retired Worker ingress control",
     pause_consumer: "Pause queue consumer",
   };
   return labels[kind] ?? metricTitle(kind);
@@ -48,22 +48,20 @@ export function ActionDrawer({ action, incident, token, onClose, onChanged }: {
 }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [releaseHold, setReleaseHold] = useState(false);
   const stopped = action.state === "succeeded";
-  const canExecute = action.state === "prepared";
-  const canRestore = action.state === "succeeded" || action.state === "failed";
+  const canExecute = action.state === "prepared" || action.state === "failed";
+  const canRestore = action.state === "succeeded";
 
   async function run(kind: "execute" | "resume") {
     const restoring = kind === "resume";
     const warning = restoring
       ? `Restore service for ${actionKindLabel(action.kind)}?\n\nBrolly will use the rollback state saved before this action. For a Durable Object, this clears quarantine and allows work to run again.`
-      : `Execute this prepared ${actionKindLabel(action.kind)} control now?\n\nThis changes live service. Brolly will retain the rollback snapshot so the action can be reversed.`;
+      : `${action.state === "failed" ? "Retry" : "Execute"} this ${actionKindLabel(action.kind)} control now?\n\nThis may change live service. Brolly will retain the desired state so the action can be retried or reversed.`;
     if (!window.confirm(warning)) return;
     setBusy(kind);
     setError("");
     try {
-      const body = restoring && releaseHold ? { releaseForensicHold: true } : {};
-      await api(`/api/actions/${encodeURIComponent(action.id)}/${kind}`, token, { method: "POST", body: JSON.stringify(body) });
+      await api(`/api/actions/${encodeURIComponent(action.id)}/${kind}`, token, { method: "POST", body: "{}" });
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -120,28 +118,15 @@ export function ActionDrawer({ action, incident, token, onClose, onChanged }: {
         <h3>Available control</h3>
         {canExecute && (
           <>
-            <p>This action is only prepared. No live service change has happened yet.</p>
+            <p>{action.state === "failed" ? "The previous Cloudflare request did not complete conclusively. Retrying reapplies the same desired fuse state; inspect Cloudflare first if the target status is uncertain." : "This action is only prepared. No live service change has happened yet."}</p>
             <button type="button" className="button danger full" disabled={Boolean(busy)} onClick={() => void run("execute")}>
-              {busy === "execute" ? "Stopping…" : "Approve and stop service"}
+              {busy === "execute" ? "Stopping…" : action.state === "failed" ? "Retry stop" : "Approve and stop service"}
             </button>
           </>
         )}
         {canRestore && (
           <>
-            <p>
-              {action.state === "failed"
-                ? "The previous operation failed. A rollback can still restore any state that changed before the failure."
-                : "This control is active. Restore the pre-action configuration to return the resource to service."}
-            </p>
-            {action.kind === "runtime_quarantine" && (
-              <label className="checkbox-row">
-                <input type="checkbox" checked={releaseHold} onChange={event => setReleaseHold(event.target.checked)} />
-                <span>
-                  Also release the forensic hold
-                  <small>Applies only to legacy signed-runtime integrations; the deployment fuse ignores it. A forensic hold keeps cleanup and resume blocked in the runtime until an operator explicitly releases it.</small>
-                </span>
-              </label>
-            )}
+            <p>This control is active. Restore the pre-action configuration to return the resource to service.</p>
             <button type="button" className="button primary full" disabled={Boolean(busy)} onClick={() => void run("resume")}>
               {busy === "resume" ? "Restoring…" : action.kind === "runtime_quarantine" ? "Release quarantine and resume" : "Restore service from rollback"}
             </button>

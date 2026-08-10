@@ -1,7 +1,7 @@
 import { webcrypto } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { encryptCredentials } from "../src/install.js";
-import { createPkcePair } from "../src/oauth.js";
+import { CLI_OAUTH_REDIRECT_URI, createPkcePair } from "../src/oauth.js";
 
 describe("Brolly installer cryptography", () => {
   it("creates an RFC 7636 PKCE verifier/challenge pair", () => {
@@ -9,6 +9,10 @@ describe("Brolly installer cryptography", () => {
     expect(pair.verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
     expect(pair.challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(pair.challenge).not.toBe(pair.verifier);
+  });
+
+  it("uses the redirect URI registered on Brolly's publisher OAuth client", () => {
+    expect(CLI_OAUTH_REDIRECT_URI).toBe("http://127.0.0.1:8976/callback");
   });
 
   it("writes AES-GCM envelopes readable by the Worker", async () => {

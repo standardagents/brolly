@@ -5,6 +5,9 @@ describe("notification configuration", () => {
   it("requires webhook URLs for Discord and Slack", () => {
     expect(validateNotificationConfig("discord", {})).toContain("webhook URL");
     expect(validateNotificationConfig("slack", { url: "https://hooks.slack.com/services/example" })).toBeNull();
+    expect(validateNotificationConfig("slack", { url: "https://attacker.example/services/example" })).toContain("hooks.slack.com");
+    expect(validateNotificationConfig("discord", { url: "http://discord.com/api/webhooks/1/2" })).toContain("HTTPS");
+    expect(validateNotificationConfig("discord", { url: "https://discord.com.evil.example/api/webhooks/1/2" })).toContain("discord.com");
   });
 
   it("requires every Twilio SMS credential", () => {

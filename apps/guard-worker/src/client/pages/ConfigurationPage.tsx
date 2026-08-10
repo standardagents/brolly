@@ -29,10 +29,10 @@ export function ConfigurationPage({ data, connection, token, onNavigate, onEditI
     setError("");
     try {
       let next = config;
-      for (let index = 0; index < workerScripts.length; index += 20) {
+      for (let index = 0; index < workerScripts.length; index += 5) {
         next = await api<ConfigurationData>("/api/configuration/verify", token, {
           method: "POST",
-          body: JSON.stringify({ workerScripts: workerScripts.slice(index, index + 20) }),
+          body: JSON.stringify({ workerScripts: workerScripts.slice(index, index + 5) }),
         });
       }
       if (next) setConfig(next);
@@ -86,7 +86,7 @@ function ConnectionSection({ data, connection }: { data: DashboardData; connecti
           {connection.kind !== "connected" && (
             <p className="recovery-note">
               <strong>To repair:</strong> {connection.kind === "local"
-                ? <>run <code>pnpm dlx @standardagents/brolly install</code> so this Worker receives a real BROLLY_ACCOUNT_ID and OAuth credentials, then scan.</>
+                ? <>deploy Brolly, open its URL, and choose <em>Continue with Cloudflare</em> to authorize exactly one account, then scan.</>
                 : "reconnect the Cloudflare account or replace the expired/revoked credential, then run an account scan."}
             </p>
           )}

@@ -37,7 +37,7 @@ export function ControlCapabilities() {
           <div>
             <strong>One Worker script</strong>
             <span className="capability-pill broad">Broad impact</span>
-            <p>An installed Worker guard can reject every entry point through the same fuse. Without the package, Brolly can only remove supported routes, domains, and triggers after saving rollback state.</p>
+            <p>An installed Worker guard can reject every instrumented entry point through the same fuse. Without the package, Brolly remains alert-only; it will not remove routes, domains, triggers, or the Worker.</p>
           </div>
         </article>
         <article>
@@ -53,7 +53,7 @@ export function ControlCapabilities() {
           <div>
             <strong>Account-wide "kill every object"</strong>
             <span className="capability-pill unavailable">Not exposed by Cloudflare</span>
-            <p>Cloudflare has no generic account API to terminate every Durable Object instance, and Brolly must not imply otherwise. The broadest fallback is disabling known Worker ingress/triggers, which can cause a major outage and may not stop alarms already scheduled inside objects.</p>
+            <p>Cloudflare has no generic account API to terminate every Durable Object instance. Brolly deliberately has no broad route-deletion fallback: account-wide containment must be performed directly in Cloudflare with its outage impact reviewed.</p>
           </div>
         </article>
       </div>

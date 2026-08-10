@@ -42,12 +42,12 @@ The dashboard separates response and observability state:
 - **Current daily spend** is a gross rolling-24-hour telemetry estimate by
   product category. It is not an invoice and is labeled as such.
 
-When `BROLLY_ACCOUNT_ID` is still the installer placeholder, the dashboard is
-in **Local preview**. Live spend and inventory are explicitly labeled as
-unavailable/sample data, and scan errors show a readable connection diagnosis
-instead of raw provider JSON. A non-placeholder account with authentication or
-routing failures is marked **Cloudflare connection needs attention**. Do not
-treat either state as active protection.
+Before Cloudflare OAuth is completed, the dashboard is an unauthenticated local
+preview and live protection is inactive. A signed-in installation takes its
+account ID from the authorized Cloudflare account stored in D1, not from a
+browser field or mutable dashboard setting. Authentication or routing failures
+are shown as **Cloudflare connection needs attention** rather than raw provider
+JSON. Do not treat either state as active protection.
 
 On first authenticated login, complete all four budget steps. Brolly requires
 ordered account limits, a limit for every product family, a limit for every
@@ -65,20 +65,26 @@ Before enabling automatic controls:
 5. Run controls in `observe` mode, then `approval`, before enabling `automatic`.
 6. Test stop and rollback for each actuator.
 
-The guard has three bounded, reversible actuators. Runtime quarantine publishes
+The guard has two bounded, reversible actuators. Runtime quarantine publishes
 a secret-backed deployment fuse that makes one exact Durable Object or one
-instrumented Worker reject application work without a runtime lookup. Queue pause records the queue's current settings before setting
-`delivery_paused`. Worker ingress disable records Cron Triggers, workers.dev
-state, zone routes, and custom domains before removing them. The rollback snapshot is committed
-to D1 and audited before any Cloudflare mutation starts. Brolly never deletes a
-Worker, queue, Durable Object, or its stored data.
+instrumented Worker reject application work without a runtime lookup. Queue
+pause records the queue's current settings before setting `delivery_paused`.
+Legacy route/domain/trigger removal is retired and refused by the API. The
+rollback or desired fuse state is committed to D1 and audited before any
+Cloudflare mutation starts. Brolly never deletes a Worker, route, domain,
+queue, Durable Object, or stored data.
 
 Automatic actions are deliberately narrower: only classified `standard` or
 `disposable` Durable Objects and Workers marked with a tested
 `@standardagents/brolly-runtime` fuse can be quarantined automatically at an
-emergency threshold. Broader trigger removal and queue controls always require
-an explicit operator action. `control_plane`, `critical`, and `unclassified`
-assets cannot be stopped through the normal action endpoint.
+emergency threshold. The emergency must be observed twice, come from a raw
+usage meter, and remain fresh; projected cost and billing totals never trigger
+an automatic mutation. Verification must have passed in the last 24 hours.
+Brolly limits each monitor pass to five Worker rollouts, coalesces at most 15
+object actions per Worker, permits one automatic rollout per Worker per five
+minutes, and opens an account circuit breaker after 12 automatic rollouts in an
+hour. Queue controls always require an explicit operator action.
+`control_plane`, `critical`, and `unclassified` assets cannot be stopped.
 
 Exact-object quarantine is customer-visible downtime for that object. Worker
 ingress can return HTTP 503 before waking it, and the constructor throws before
@@ -89,7 +95,10 @@ on automatically. If a runtime has not installed the fuse, there is no
 exact-object actuator; disabling its parent Worker has a namespace-wide or
 user-wide blast radius and must be reviewed as a different control.
 
-`brolly status`, `brolly incidents`, `brolly stop`, and `brolly resume` call the guard Worker with the local recovery token stored mode `0600` in `~/.brolly/config.json`; they do not depend on a browser session.
+`brolly status`, `brolly incidents`, `brolly stop`, and `brolly resume` call the
+guard Worker with the optional break-glass token stored mode `0600` in
+`~/.brolly/config.json`; they do not depend on a browser session. Browser login
+uses Cloudflare OAuth and never exposes that token.
 
 ## Configuration verification
 
@@ -101,9 +110,9 @@ separately and mismatches are surfaced rather than silently overwritten.
 
 A live refresh is operator-initiated and cached in D1. It uses three
 control-plane reads per Worker: secrets, deployments, and deployed script
-content. Each API request accepts at most 20 Workers, processes at most three
+content. Each API request accepts at most five Workers, processes at most three
 Workers concurrently, times out individual Cloudflare calls after ten seconds,
-and scans no more than 5 MB of a deployed bundle. **Refresh all** chunks larger
+and scans no more than 1 MB of a deployed bundle. **Refresh all** chunks larger
 accounts into those bounded requests. Configuration refresh is not part of the
 automatic minute monitor and never invokes customer Workers or Durable Objects.
 
@@ -130,11 +139,12 @@ Control actions on the **Incidents & controls** page (the overview shows the
 five most recent) are operator controls, not a passive log. Open a row to see
 its target, reason, timestamps, provider link, current state, and any failure.
 A `prepared` action can be approved and executed there; a `succeeded` action
-can be restored from its rollback snapshot. A failed action also exposes
-rollback because a provider mutation may have completed before a later step
-failed. Every execute or restore still requires a confirmation in the browser.
-Resuming a legacy signed-runtime quarantine can optionally release its forensic
-hold; the deployment-fuse path ignores that flag.
+can be restored from its rollback snapshot. A failed stop retains its error and
+desired state and can be retried explicitly after checking Cloudflare; it cannot
+be resumed until one application succeeds. Every execute or restore requires confirmation in the
+browser. A prepared stop becomes invalid if its incident resolves, ages past 30
+minutes, or the target is reclassified; run a fresh scan and prepare a new
+action instead.
 
 ## Dashboard development
 

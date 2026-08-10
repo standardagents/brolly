@@ -17,9 +17,13 @@
     }
   ],
   "vars": {
-    "BROLLY_ACCOUNT_ID": "REPLACE_DURING_INSTALL",
+    "BROLLY_ACCOUNT_ID": "REPLACE_DURING_OAUTH_ONBOARDING",
     "BROLLY_TIMEZONE": "UTC",
-    "BROLLY_DAILY_SUMMARY_HOUR": "9"
+    "BROLLY_DAILY_SUMMARY_HOUR": "9",
+    "BROLLY_OAUTH_CLIENT_ID": "5690968d2377c6200202668946420dec",
+    "BROLLY_OAUTH_REDIRECT_URI": "https://brolly-guard.formkit.workers.dev/oauth/callback",
+    "BROLLY_SELF_WORKER_NAME": "brolly-guard"
   },
+  "limits": { "cpu_ms": 30000, "subrequests": 200 },
   "observability": { "enabled": true }
 }

@@ -1,20 +1,12 @@
-# Required. Choose a high-entropy token used to sign in to the Brolly dashboard.
-# Generate with: openssl rand -base64 32
-BROLLY_ADMIN_TOKEN=
-
-# Required. Cloudflare API token scoped to the account Brolly monitors.
-# Grant account analytics/read access plus only the write permissions needed for
-# the shutdown controls you intend to enable.
-CLOUDFLARE_OAUTH_TOKEN=
-
 # Required. Encrypts notification credentials stored in Brolly's D1 database.
 # Generate with: openssl rand -base64 32
 BROLLY_CREDENTIAL_KEY=
 
-# Optional. Legacy runtime-control signing key. Deployment-fuse controls do not
-# require it.
-BROLLY_CONTROL_PRIVATE_KEY_JWK=
+# Optional. Break-glass bearer token for local development and emergency CLI
+# access. Browser-based production installs authenticate through Cloudflare.
+# Generate with: openssl rand -base64 32
+BROLLY_ADMIN_TOKEN=
 
-# Optional. A separate account-owned token with Billing Read for authoritative
-# daily invoice reconciliation.
+# Optional. Separate account-owned token with Billing Read for authoritative
+# daily invoice reconciliation; Cloudflare OAuth does not expose this scope.
 CLOUDFLARE_BILLING_TOKEN=

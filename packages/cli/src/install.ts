@@ -1,5 +1,5 @@
 import { createCipheriv, generateKeyPairSync, randomBytes } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,17 +9,19 @@ import type { OAuthResult } from "./oauth.js";
 export interface InstallResult { guardUrl: string; publicControlJwk: JsonWebKey }
 
 export async function deployGuard(input: {
-  accountId: string; clientId: string; oauth: OAuthResult; databaseId: string; adminToken: string;
+  accountId: string; accountName: string; clientId: string; oauth: OAuthResult; databaseId: string; adminToken: string;
   billingToken?: string; timezone?: string; summaryHour?: string;
 }): Promise<InstallResult> {
   const packaged = resolve(dirname(fileURLToPath(import.meta.url)), "../worker");
   const sourceFallback = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/guard-worker");
   const workerPath = await firstReadable([join(packaged, "index.js"), join(sourceFallback, "dist/brolly_guard/index.js")]);
   const assetsPath = await firstReadableDirectory([join(packaged, "client"), join(sourceFallback, "dist/client")]);
-  const migrationPath = await firstReadable([join(packaged, "0001_initial.sql"), join(sourceFallback, "migrations/0001_initial.sql")]);
-  const migration = await readFile(migrationPath, "utf8");
-  for (const statement of migration.split(/;\s*(?:\n|$)/).map(value => value.trim()).filter(Boolean)) {
-    await d1Query(input.oauth.accessToken, input.accountId, input.databaseId, statement);
+  const migrationsPath = await firstReadableDirectory([join(packaged, "migrations"), join(sourceFallback, "migrations")]);
+  for (const filename of (await readdir(migrationsPath)).filter(name => /^\d+.*\.sql$/.test(name)).sort()) {
+    const migration = await readFile(join(migrationsPath, filename), "utf8");
+    for (const statement of migration.split(/;\s*(?:\n|$)/).map(value => value.trim()).filter(Boolean)) {
+      await d1Query(input.oauth.accessToken, input.accountId, input.databaseId, statement);
+    }
   }
 
   const credentialKey = randomBytes(32);
@@ -30,6 +32,12 @@ export async function deployGuard(input: {
   await d1Query(input.oauth.accessToken, input.accountId, input.databaseId,
     `INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`,
     ["oauth_credentials", credentialEnvelope, Date.now()]);
+  await d1Query(input.oauth.accessToken, input.accountId, input.databaseId,
+    `INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`,
+    ["account_id", input.accountId, Date.now()]);
+  await d1Query(input.oauth.accessToken, input.accountId, input.databaseId,
+    `INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`,
+    ["account_name", input.accountName, Date.now()]);
 
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const privateControlJwk = privateKey.export({ format: "jwk" });
@@ -42,7 +50,14 @@ export async function deployGuard(input: {
     triggers: { crons: ["* * * * *"] },
     assets: { directory: assetsPath, not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/health"] },
     d1_databases: [{ binding: "DB", database_name: "brolly-guard", database_id: input.databaseId }],
-    vars: { BROLLY_ACCOUNT_ID: input.accountId, BROLLY_TIMEZONE: input.timezone ?? "UTC", BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9", BROLLY_OAUTH_CLIENT_ID: input.clientId },
+    vars: {
+      BROLLY_ACCOUNT_ID: input.accountId,
+      BROLLY_TIMEZONE: input.timezone ?? "UTC",
+      BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9",
+      BROLLY_OAUTH_CLIENT_ID: input.clientId,
+      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-guard.formkit.workers.dev/oauth/callback",
+      BROLLY_SELF_WORKER_NAME: "brolly-guard",
+    },
     observability: { enabled: true },
   };
   await writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });

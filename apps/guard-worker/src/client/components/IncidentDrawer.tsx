@@ -16,7 +16,7 @@ function proposedControlText(incident: Incident): string {
   if (incident.family === "queues") return "Pause the queue consumer and retain rollback state.";
   return incident.tags.brollyFuse === "true"
     ? "Deploy a whole-Worker fuse and retain an explicit resume action."
-    : "Disable the Worker trigger and retain rollback state.";
+    : "This Worker is alert-only until the Brolly runtime fuse is installed and verified.";
 }
 
 export function IncidentDrawer({ incident, token, onClose, onChanged }: {
@@ -26,7 +26,8 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
   onChanged: () => Promise<void>;
 }) {
   const [tier, setTier] = useState<AssetTier>(incident.tier);
-  const [workerScript, setWorkerScript] = useState(incident.tags.workerScript ?? "");
+  const owningWorker = incident.family === "workers" ? incident.assetId : incident.tags.cloudflareWorkerScript ?? "";
+  const [fuseInstalled, setFuseInstalled] = useState(incident.tags.brollyFuse === "true");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -44,9 +45,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
   }
 
   function classificationTags() {
-    return workerScript.trim()
-      ? { workerScript: workerScript.trim(), brollyFuse: "true" }
-      : { workerScript: null, brollyFuse: null };
+    return { brollyFuse: fuseInstalled ? "true" : null };
   }
 
   async function classify() {
@@ -58,7 +57,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
 
   async function prepare() {
     await act("prepare", async () => {
-      if (tier !== incident.tier || workerScript !== (incident.tags.workerScript ?? "")) {
+      if (tier !== incident.tier || fuseInstalled !== (incident.tags.brollyFuse === "true")) {
         await api(`/api/assets/${encodeURIComponent(incident.family)}/${encodeURIComponent(incident.assetId)}`, token, {
           method: "PATCH",
           body: JSON.stringify({ tier, tags: classificationTags() }),
@@ -66,7 +65,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
       }
       return api("/api/actions", token, {
         method: "POST",
-        body: JSON.stringify({ incidentId: incident.id, workerScript: workerScript.trim() || undefined }),
+        body: JSON.stringify({ incidentId: incident.id }),
       });
     });
   }
@@ -78,7 +77,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
     if (!incident.action || !window.confirm(warning)) return;
     await act("execute", () => api(`/api/actions/${incident.action!.id}/execute`, token, {
       method: "POST",
-      body: JSON.stringify({ workerScript: workerScript.trim() || undefined }),
+      body: JSON.stringify({}),
     }));
   }
 
@@ -86,7 +85,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
     if (!incident.action || !window.confirm("Resume this asset using the stored rollback state?")) return;
     await act("resume", () => api(`/api/actions/${incident.action!.id}/resume`, token, {
       method: "POST",
-      body: JSON.stringify({ workerScript: workerScript.trim() || undefined }),
+      body: JSON.stringify({}),
     }));
   }
 
@@ -160,16 +159,12 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
           <small>{tierDescription(tier)}</small>
         </label>
         {fuseCapable && (
-          <label>
-            Owning Worker script
-            <input
-              type="text"
-              value={workerScript}
-              onChange={event => setWorkerScript(event.target.value)}
-              placeholder={incident.family === "workers" ? incident.assetId : "my-worker"}
-            />
-            <small>Enter this only after installing @standardagents/brolly-runtime and BROLLY_FUSE. Saving a script marks this resource as fuse-enabled; clearing it returns the resource to alert-only precise protection.</small>
-          </label>
+          <div>
+            <strong>Owning Worker</strong>
+            <p><code>{owningWorker || "Not reported by Cloudflare"}</code></p>
+            <label className="runtime-confirm"><input type="checkbox" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed</label>
+            <small>Brolly accepts only the ownership mapping returned by Cloudflare. Confirm this after installing the runtime and verify it on the Configuration page.</small>
+          </div>
         )}
         <button type="button" className="button secondary full" disabled={busy === "classify"} onClick={() => void classify()}>
           {busy === "classify" ? "Saving…" : "Save classification"}
@@ -188,7 +183,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
               <button
                 type="button"
                 className="button primary full"
-                disabled={!classified || (runtimeRequired && !workerScript.trim()) || Boolean(busy)}
+                disabled={!classified || (fuseCapable && (!owningWorker || !fuseInstalled)) || Boolean(busy)}
                 onClick={() => void prepare()}
               >
                 {busy === "prepare" ? "Preparing…" : "Prepare reversible stop"}
@@ -199,7 +194,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
                 {busy === "execute" ? "Executing…" : "Approve and stop"}
               </button>
             )}
-            {["succeeded", "failed"].includes(incident.action?.state ?? "") && (
+            {incident.action?.state === "succeeded" && (
               <button type="button" className="button primary full" disabled={Boolean(busy)} onClick={() => void resume()}>
                 {busy === "resume" ? "Resuming…" : "Resume from rollback"}
               </button>

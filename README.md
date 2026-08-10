@@ -48,8 +48,10 @@ Use **Deploy to Cloudflare** above, or run the guided installer:
 pnpm dlx @standardagents/brolly install
 ```
 
-The Cloudflare flow provisions Brolly's D1 database, requests its configuration
-and secrets, applies migrations, and deploys the dashboard and guard Worker.
+The Cloudflare flow provisions Brolly's D1 database and deploys the dashboard
+and guard Worker. On first visit, **Continue with Cloudflare** authorizes exactly
+one account; Brolly encrypts that revocable OAuth grant in your own D1 database
+and then asks for limits for every discovered product, Worker, and namespace.
 
 ## Precise shutdown
 
@@ -85,6 +87,13 @@ Durable Object storage operation on the hot path.
 Every monitoring pass stops at **150 Cloudflare API calls**, **25,000 Brolly D1
 row operations**, **20,000 samples**, or **45 seconds**. Brolly does not wake
 every Durable Object or query customer-object SQLite during a scan.
+
+Automatic quarantine is narrower still: two consecutive fresh emergency
+observations, an exact Worker or object target, a safe asset tier, successful
+runtime verification within 24 hours, and a current Cloudflare-owned Worker
+mapping are all required. Projected-dollar estimates never authorize an
+automatic stop. Brolly caps automatic rollouts at five Workers per monitor pass,
+one rollout per Worker per five minutes, and twelve per account per hour.
 
 ## Documentation
 
