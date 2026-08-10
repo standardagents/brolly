@@ -1,0 +1,9 @@
+# Installed by `brolly install`; never commit real values.
+BROLLY_ADMIN_TOKEN=
+CLOUDFLARE_OAUTH_TOKEN=
+BROLLY_CREDENTIAL_KEY=
+BROLLY_CONTROL_PRIVATE_KEY_JWK=
+
+# Optional authoritative invoice reconciliation.
+# Create a separate account-owned token with Billing Read.
+CLOUDFLARE_BILLING_TOKEN=

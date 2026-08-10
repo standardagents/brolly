@@ -1,0 +1,20 @@
+{
+  "name": "@standardagents/brolly-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "build": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && pnpm --filter @standardagents/brolly build",
+    "dev": "pnpm --filter @standardagents/brolly-guard dev",
+    "test": "vitest run",
+    "typecheck": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260808.1",
+    "@types/node": "^22.17.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.29.1"
+  }
+}

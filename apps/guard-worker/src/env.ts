@@ -1,0 +1,12 @@
+export interface Env {
+  DB: D1Database;
+  BROLLY_ACCOUNT_ID: string;
+  BROLLY_TIMEZONE?: string;
+  BROLLY_DAILY_SUMMARY_HOUR?: string;
+  BROLLY_ADMIN_TOKEN: string;
+  CLOUDFLARE_OAUTH_TOKEN: string;
+  BROLLY_OAUTH_CLIENT_ID?: string;
+  BROLLY_CREDENTIAL_KEY?: string;
+  CLOUDFLARE_BILLING_TOKEN?: string;
+  BROLLY_CONTROL_PRIVATE_KEY_JWK?: string;
+}

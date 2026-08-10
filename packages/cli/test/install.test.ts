@@ -1,0 +1,25 @@
+import { webcrypto } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { encryptCredentials } from "../src/install.js";
+import { createPkcePair } from "../src/oauth.js";
+
+describe("Brolly installer cryptography", () => {
+  it("creates an RFC 7636 PKCE verifier/challenge pair", () => {
+    const pair = createPkcePair();
+    expect(pair.verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    expect(pair.challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(pair.challenge).not.toBe(pair.verifier);
+  });
+
+  it("writes AES-GCM envelopes readable by the Worker", async () => {
+    const keyBytes = Buffer.alloc(32, 7);
+    const envelope = JSON.parse(encryptCredentials({ accessToken: "secret", expiresAt: 123 }, keyBytes)) as { iv: string; ciphertext: string };
+    const key = await webcrypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+    const plaintext = await webcrypto.subtle.decrypt(
+      { name: "AES-GCM", iv: Buffer.from(envelope.iv, "base64url") },
+      key,
+      Buffer.from(envelope.ciphertext, "base64url"),
+    );
+    expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual({ accessToken: "secret", expiresAt: 123 });
+  });
+});
