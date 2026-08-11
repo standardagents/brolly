@@ -236,7 +236,7 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
   .hero-copy { animation: rise .7s cubic-bezier(.16,1,.3,1) both; }
   .hero-visual { animation: rise .8s .08s cubic-bezier(.16,1,.3,1) both; }
   .story-track { animation: stories-scroll 88s linear infinite; }
-  .story-marquee:hover .story-track, .story-marquee:focus-within .story-track { animation-play-state: paused; }
+  .story-marquee:hover .story-track { animation-play-state: paused; }
   @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes stories-scroll { to { transform: translateX(-50%); } }
 }
