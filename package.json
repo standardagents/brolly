@@ -19,10 +19,7 @@
   "cloudflare": {
     "bindings": {
       "DB": { "description": "Brolly's D1 database. Cloudflare will provision it automatically." },
-      "BROLLY_ACCOUNT_ID": { "description": "Filled automatically after the first Cloudflare sign-in. Leave the onboarding placeholder unchanged." },
-      "BROLLY_CREDENTIAL_KEY": { "description": "Encrypts notification credentials at rest. Generate one with `openssl rand -base64 32`." },
-      "BROLLY_OAUTH_CLIENT_ID": { "description": "Brolly's publisher-owned public Cloudflare OAuth client. Installers should not replace this value." },
-      "BROLLY_OAUTH_REDIRECT_URI": { "description": "Brolly's verified OAuth relay. Installers should not replace this value." }
+      "BROLLY_CREDENTIAL_KEY": { "description": "The only required secret. Encrypts credentials at rest; generate one with `openssl rand -base64 32`." }
     }
   },
   "devDependencies": {

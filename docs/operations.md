@@ -59,6 +59,14 @@ changing accounts requires deliberately resetting the D1 binding and stored
 credentials or deploying a new Brolly instance. The CLI installer pre-binds its
 selected account before the Worker becomes available.
 
+The Deploy to Cloudflare form requires only the automatically provisioned D1
+binding and `BROLLY_CREDENTIAL_KEY`. The public OAuth client and relay are
+compiled into the release; the account ID is derived during first sign-in; and
+timezone/summary settings default to UTC and 09:00. Do not collect optional
+`BROLLY_ADMIN_TOKEN` or `CLOUDFLARE_BILLING_TOKEN` values during deployment.
+Operators who need break-glass CLI access or authoritative billing
+reconciliation can add those Worker secrets after the dashboard is running.
+
 On first authenticated login, complete all four budget steps. Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported

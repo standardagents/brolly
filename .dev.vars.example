@@ -1,12 +1,3 @@
-# Required. Encrypts notification credentials stored in Brolly's D1 database.
+# Required. Encrypts OAuth and notification credentials stored in Brolly's D1 database.
 # Generate with: openssl rand -base64 32
 BROLLY_CREDENTIAL_KEY=
-
-# Optional. Break-glass bearer token for local development and emergency CLI
-# access. Browser-based production installs authenticate through Cloudflare.
-# Generate with: openssl rand -base64 32
-BROLLY_ADMIN_TOKEN=
-
-# Optional. Separate account-owned token with Billing Read for authoritative
-# daily invoice reconciliation; Cloudflare OAuth does not expose this scope.
-CLOUDFLARE_BILLING_TOKEN=

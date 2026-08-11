@@ -51,6 +51,17 @@ describe("Cloudflare OAuth authentication", () => {
     expect(writes.some(write => write.sql.includes("INSERT INTO oauth_states"))).toBe(true);
   });
 
+  it("uses the publisher OAuth client without deploy-time OAuth fields", async () => {
+    const { db } = database();
+    const env = environment(db);
+    delete env.BROLLY_OAUTH_CLIENT_ID;
+    delete env.BROLLY_OAUTH_REDIRECT_URI;
+    const response = await authRoute(new Request("https://guard.example/api/auth/login"), env);
+    const authorization = new URL(response!.headers.get("location")!);
+    expect(authorization.searchParams.get("client_id")).toBe("5690968d2377c6200202668946420dec");
+    expect(authorization.searchParams.get("redirect_uri")).toBe("https://brolly-guard.formkit.workers.dev/oauth/callback");
+  });
+
   it("uses an HttpOnly session and rejects cross-origin mutations", async () => {
     const now = Date.now();
     const { db } = database(sql => sql.includes("FROM auth_sessions") ? {

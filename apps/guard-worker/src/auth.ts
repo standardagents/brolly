@@ -1,5 +1,6 @@
 import type { Env } from "./env.js";
 import { sealJson } from "./credentials.js";
+import { oauthClientId, oauthRedirectUri } from "./oauth-config.js";
 
 const AUTHORIZATION_ENDPOINT = "https://dash.cloudflare.com/oauth2/auth";
 const TOKEN_ENDPOINT = "https://dash.cloudflare.com/oauth2/token";
@@ -110,7 +111,7 @@ async function beginLogin(request: Request, env: Env): Promise<Response> {
   const state = `${stateSecret}.${encodeText(origin)}`;
   const verifier = randomToken(48);
   const challenge = encodeBytes(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  const redirectUri = env.BROLLY_OAUTH_REDIRECT_URI!;
+  const redirectUri = oauthRedirectUri(env);
   const now = Date.now();
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM oauth_states WHERE expires_at < ?1`).bind(now),
@@ -120,7 +121,7 @@ async function beginLogin(request: Request, env: Env): Promise<Response> {
   const authorization = new URL(AUTHORIZATION_ENDPOINT);
   authorization.search = new URLSearchParams({
     response_type: "code",
-    client_id: env.BROLLY_OAUTH_CLIENT_ID!,
+    client_id: oauthClientId(env),
     redirect_uri: redirectUri,
     scope: BROLLY_OAUTH_SCOPES.join(" "),
     state,
@@ -202,7 +203,7 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "authorization_code",
-      client_id: env.BROLLY_OAUTH_CLIENT_ID!,
+      client_id: oauthClientId(env),
       code,
       redirect_uri: row.redirect_uri,
       code_verifier: row.verifier,
@@ -268,15 +269,13 @@ async function logout(request: Request, env: Env): Promise<Response> {
 }
 
 function oauthReady(env: Env): boolean {
-  return Boolean(env.BROLLY_OAUTH_CLIENT_ID && !env.BROLLY_OAUTH_CLIENT_ID.startsWith("REPLACE_") && env.BROLLY_OAUTH_REDIRECT_URI);
+  return Boolean(oauthClientId(env) && oauthRedirectUri(env));
 }
 
-function oauthConfigurationError(env: Env): Response {
+function oauthConfigurationError(_env: Env): Response {
   return Response.json({
     error: "Cloudflare OAuth is not configured for this Brolly release.",
-    detail: !env.BROLLY_OAUTH_CLIENT_ID || env.BROLLY_OAUTH_CLIENT_ID.startsWith("REPLACE_")
-      ? "The Brolly publisher must set the shared public BROLLY_OAUTH_CLIENT_ID. Installers should never create their own OAuth application."
-      : "BROLLY_OAUTH_REDIRECT_URI is missing.",
+    detail: "This build does not contain Brolly's public OAuth client configuration.",
   }, { status: 503, headers: { "cache-control": "no-store" } });
 }
 

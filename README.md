@@ -43,13 +43,22 @@ inside your Cloudflare account.
 ## Install
 
 Use **Deploy to Cloudflare** above. The Cloudflare flow provisions Brolly's D1 database and deploys the dashboard
-and guard Worker. On first visit, **Continue with Cloudflare** authorizes exactly
+and guard Worker. The Cloudflare form asks only for the provisioned D1 binding
+and `BROLLY_CREDENTIAL_KEY`; generate the key with `openssl rand -base64 32`.
+Account ID, OAuth client, timezone, summary hour, optional billing access, and
+the optional break-glass token are not installation questions. On first visit,
+**Continue with Cloudflare** authorizes exactly
 one account. The first successful sign-in binds that Cloudflare account to the
 installation—not the individual user—until its D1 binding is deliberately reset
 or the instance is replaced. Later sign-ins must authorize the same account; any
 Cloudflare member able to grant Brolly's requested scopes for that account may
 sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
 and asks for limits for every discovered product, Worker, and namespace.
+
+Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
+`BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or
+`BROLLY_ADMIN_TOKEN` to the deployed Worker later; none is required to get to
+the dashboard.
 
 ## Precise shutdown
 

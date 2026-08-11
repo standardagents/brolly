@@ -1,4 +1,5 @@
 import type { Env } from "./env.js";
+import { oauthClientId } from "./oauth-config.js";
 
 interface StoredOAuth {
   accessToken: string;
@@ -12,7 +13,7 @@ export async function operationalToken(env: Env): Promise<string> {
   if (!row) return fallbackToken(env);
   const stored = await openJson<StoredOAuth>(row.value, env.BROLLY_CREDENTIAL_KEY);
   if (!stored.expiresAt || stored.expiresAt - Date.now() > 5 * 60_000) return stored.accessToken;
-  if (!stored.refreshToken || !env.BROLLY_OAUTH_CLIENT_ID) throw new Error("Cloudflare OAuth expired and cannot be refreshed; reconnect Cloudflare from Brolly");
+  if (!stored.refreshToken) throw new Error("Cloudflare OAuth expired and cannot be refreshed; reconnect Cloudflare from Brolly");
   const holder = crypto.randomUUID();
   const now = Date.now();
   const lease = await env.DB.prepare(
@@ -30,7 +31,7 @@ export async function operationalToken(env: Env): Promise<string> {
     const response = await fetch("https://dash.cloudflare.com/oauth2/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ grant_type: "refresh_token", client_id: env.BROLLY_OAUTH_CLIENT_ID, refresh_token: current.refreshToken }),
+      body: new URLSearchParams({ grant_type: "refresh_token", client_id: oauthClientId(env), refresh_token: current.refreshToken }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) throw new Error(`Cloudflare OAuth refresh failed (${response.status}); reconnect Cloudflare from Brolly`);

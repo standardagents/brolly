@@ -10,6 +10,8 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("@standardagents/brolly-runtime");
     expect(html).toContain("It binds the account—not the individual person");
     expect(html).toContain("A user who authorizes a different account is rejected");
+    expect(html).toContain("That is the entire deployment form");
+    expect(html).toContain("openssl rand -base64 32");
     expect(html).not.toContain("/api/auth/login");
     expect(html).not.toContain("<script");
   });

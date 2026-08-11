@@ -88,8 +88,8 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
           </article>
           <article className="session-card">
             <span>Browser session</span>
-            <strong>Admin token stored locally</strong>
-            <small>The token lives only in this browser's storage and is sent solely to this Worker.</small>
+            <strong>Cloudflare sign-in active</strong>
+            <small>A hashed, 12-hour HttpOnly session cookie authenticates this browser; no admin token is stored in browser storage.</small>
             <button type="button" className="button secondary" onClick={onLogout}><Icon name="logout" /> Sign out</button>
           </article>
         </div>
