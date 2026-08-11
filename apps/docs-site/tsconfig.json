@@ -3,6 +3,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM"],
+    "resolveJsonModule": true,
     "types": ["@cloudflare/workers-types"]
   },
   "include": ["src", "vite.config.ts"]

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import billingStories from "../../../docs/cloudflare-x-post-images/posts.json";
 
 const DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly";
 const GITHUB_URL = "https://github.com/standardagents/brolly";
@@ -11,15 +12,6 @@ const SERVICES = [
   ["queues", "Queues"],
   ["workers-ai", "Workers AI"],
   ["ai-gateway", "AI Gateway"],
-] as const;
-const BILLING_STORIES = [
-  { name: "Justin Schroeder", badge: "$8,846", file: "01-justin-schroeder-8846", url: "https://x.com/jpschroeder/status/2086144942657712500" },
-  { name: "Gabe Ragland", badge: "$16,000", file: "02-gabe-ragland-16000", url: "https://x.com/gabe_ragland/status/2086166786148594148" },
-  { name: "Steven Menke", badge: "$1,700", file: "03-steven-menke-1700", url: "https://x.com/Galorious_/status/2086433957789270223" },
-  { name: "will moss", badge: "20.2 trillion reads", file: "04-will-moss-20-trillion-reads", url: "https://x.com/itswillmoss/status/2044797874500681751" },
-  { name: "Dan Anderson", badge: "$22,000", file: "05-dan-anderson-22000", url: "https://x.com/droplister/status/2085083559736295485" },
-  { name: "Kill Switch", badge: "$91,316", file: "06-kill-switch-91316", url: "https://x.com/KillSwitchCloud/status/2062508433992229075" },
-  { name: "Andras Bacsai", badge: "$36,000", file: "07-andras-bacsai-36000", url: "https://x.com/heyandras/status/2050650346868051995" },
 ] as const;
 
 export function App() {
@@ -68,7 +60,7 @@ export function App() {
           <div>{SERVICES.map(([icon, label]) => <span key={icon}><img src={`/cloudflare-icons/${icon}.svg`} alt="" /><b>{label}</b></span>)}</div>
         </section>
 
-        <section className="stories" aria-labelledby="stories-title">
+        <section className="stories" id="stories" aria-labelledby="stories-title">
           <div className="stories-copy">
             <p className="eyebrow">Not hypothetical</p>
             <h2 id="stories-title">The bill should not be your first alert.</h2>
@@ -183,10 +175,11 @@ export function App() {
 function StoryGroup({ duplicate = false }: { duplicate?: boolean }) {
   return (
     <div className="story-group" aria-hidden={duplicate || undefined}>
-      {BILLING_STORIES.map((story, index) => {
+      {billingStories.map((story, index) => {
         const light = index % 2 === 1;
-        const suffix = light ? ".png" : "-dark.png";
         const mode = light ? "light" : "dark";
+        const postLength = story.text.length;
+        const textSize = postLength > 300 ? "compact" : postLength < 100 ? "large" : "";
         return (
           <a
             className={`story-card ${mode}`}
@@ -195,16 +188,20 @@ function StoryGroup({ duplicate = false }: { duplicate?: boolean }) {
             rel="noreferrer"
             tabIndex={duplicate ? -1 : undefined}
             aria-label={`${story.name}: ${story.badge} Cloudflare usage incident. View source on X.`}
-            key={`${story.file}-${mode}`}
+            key={`${story.slug}-${mode}`}
           >
-            <img
-              src={`/x-posts/${mode}/${story.file}${suffix}`}
-              alt={`${story.name} describing a ${story.badge} Cloudflare usage incident`}
-              width="1200"
-              height="675"
-              loading="lazy"
-              decoding="async"
-            />
+            <article>
+              <header className="story-card-head">
+                <img className="story-avatar" src={story.avatarFile} alt="" width="48" height="48" loading="lazy" decoding="async" />
+                <span className="story-identity"><strong>{story.name}</strong><small>{story.handle}</small></span>
+                <span className="story-x" aria-hidden="true">𝕏</span>
+              </header>
+              <div className="story-meta"><span>{story.category}</span><strong>{story.badge}</strong></div>
+              <div className={`story-post ${textSize}`}>
+                {story.text.trim().split(/\n\n+/).map((paragraph, paragraphIndex) => <p key={paragraphIndex}>{paragraph}</p>)}
+              </div>
+              <footer className="story-footer"><time>{story.date}</time><span>View post on X <b aria-hidden="true">↗</b></span></footer>
+            </article>
           </a>
         );
       })}
