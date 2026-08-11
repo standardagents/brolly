@@ -14,7 +14,7 @@ export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { 
         {oauthConfigured && credentialStorageReady
           ? <a className="button primary full" href="/api/auth/login">Continue with Cloudflare</a>
           : <button className="button primary full" type="button" disabled>Continue with Cloudflare</button>}
-        <p className="fine-print">Cloudflare shows the exact account and permissions before you approve access. Brolly stores an encrypted, revocable OAuth grant in your own D1 database. <a className="link-button inline" href="/docs">Learn how Brolly works.</a></p>
+        <p className="fine-print">Cloudflare shows the exact account and permissions before you approve access. Brolly stores an encrypted, revocable OAuth grant in your own D1 database. <a className="link-button inline" href="https://brolly.standardagents.ai/#how-it-works">Learn how Brolly works.</a></p>
       </section>
       <div className="auth-art" aria-hidden="true">
         <div className="radar-ring one" />

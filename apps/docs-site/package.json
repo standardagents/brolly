@@ -1,0 +1,23 @@
+{
+  "name": "@standardagents/brolly-docs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build && node scripts/prerender.mjs",
+    "deploy": "pnpm build && pnpm deploy:built",
+    "deploy:built": "wrangler deploy",
+    "deploy:ci": "wrangler deploy --config wrangler.ci.jsonc",
+    "dev": "pnpm build && wrangler dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "vite": "^8.2.1"
+  }
+}

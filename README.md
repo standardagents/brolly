@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly"><img src="https://deploy.workers.cloudflare.com/button" height="32" alt="Deploy to Cloudflare"></a>
   &nbsp;
-  <a href="docs/operations.md"><img src="https://img.shields.io/badge/Read_the_docs-202124?style=for-the-badge&logo=readthedocs&logoColor=white" height="32" alt="Read the docs"></a>
+  <a href="https://brolly.standardagents.ai"><img src="https://img.shields.io/badge/Read_the_docs-202124?style=for-the-badge&logo=readthedocs&logoColor=white" height="32" alt="Read the docs"></a>
 </p>
 
 <p align="center">
@@ -91,6 +91,7 @@ one rollout per Worker per five minutes, and twelve per account per hour.
 
 ## Documentation
 
+- [Brolly website and installation guide](https://brolly.standardagents.ai)
 - [Operations and emergency response](docs/operations.md)
 - [Runtime integration and exact-object quarantine](docs/runtime-integration.md)
 - [Architecture and safety model](docs/architecture.md)

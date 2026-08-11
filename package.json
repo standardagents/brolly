@@ -6,7 +6,9 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "build": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && pnpm --filter @standardagents/brolly build",
+    "build:docs": "pnpm --filter @standardagents/brolly-docs build",
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
+    "deploy:docs": "pnpm build:docs && pnpm --filter @standardagents/brolly-docs deploy:built",
     "dev": "pnpm --filter @standardagents/brolly-guard dev",
     "release:runtime": "node scripts/release-runtime.mjs",
     "release:runtime:dev": "node scripts/release-runtime.mjs --tag=dev",

@@ -24,6 +24,25 @@ importers:
         specifier: ^4.29.1
         version: 4.120.0(@cloudflare/workers-types@5.20260808.1)
 
+  apps/docs-site:
+    dependencies:
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: ^19.2.8
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.4
+        version: 19.2.4(@types/react@19.2.18)
+      vite:
+        specifier: ^8.2.1
+        version: 8.2.1(@types/node@22.20.1)(esbuild@0.28.1)
+
   apps/guard-worker:
     dependencies:
       '@standardagents/brolly-core':

@@ -1,0 +1,13 @@
+/*
+  Cache-Control: public, max-age=300
+  Content-Security-Policy: default-src 'none'; img-src 'self'; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; connect-src 'none'
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
+/styles.css
+  Cache-Control: public, max-age=86400
+
+/*.svg
+  Cache-Control: public, max-age=604800

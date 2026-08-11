@@ -5,7 +5,6 @@ import { connectionHealth } from "./lib/health";
 import { BudgetWizard } from "./onboarding/BudgetWizard";
 import { AssetsPage } from "./pages/AssetsPage";
 import { ConfigurationPage } from "./pages/ConfigurationPage";
-import { DocsPage } from "./pages/DocsPage";
 import { IncidentsPage } from "./pages/IncidentsPage";
 import { LoadingScreen, LoginPage } from "./pages/LoginPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -14,7 +13,6 @@ import { useRoute } from "./router";
 import type { DashboardData, Incident, OnboardingData } from "./types";
 
 export default function App() {
-  const docsPage = window.location.pathname === "/docs";
   const [token, setToken] = useState("");
   const [oauthConfigured, setOauthConfigured] = useState(true);
   const [credentialStorageReady, setCredentialStorageReady] = useState(true);
@@ -53,7 +51,6 @@ export default function App() {
   }, [loadDashboard]);
 
   useEffect(() => {
-    if (docsPage) return;
     void authSession().then(session => {
       setOauthConfigured(session.oauthConfigured);
       setCredentialStorageReady(session.credentialStorageReady);
@@ -69,7 +66,7 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (docsPage || !token || !onboarding?.complete) return;
+    if (!token || !onboarding?.complete) return;
     const interval = window.setInterval(() => void loadDashboard().catch(() => undefined), 60_000);
     return () => window.clearInterval(interval);
   }, [loadDashboard, onboarding?.complete, token]);
@@ -107,7 +104,6 @@ export default function App() {
     navigate("incidents");
   }
 
-  if (docsPage) return <DocsPage />;
   if (loading && !token) return <LoadingScreen />;
   if (!token) return <LoginPage error={error} oauthConfigured={oauthConfigured} credentialStorageReady={credentialStorageReady} />;
   if (loading && !onboarding) return <LoadingScreen />;

@@ -19,5 +19,12 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm dev
+pnpm build:docs
+pnpm deploy:docs
 pnpm release:runtime patch --dry-run --yes
 ```
+
+`apps/docs-site` is the universal public site for
+`brolly.standardagents.ai`. It is prerendered to static HTML and deployed by
+`.github/workflows/deploy-docs.yml` on pushes to `main`. It is intentionally
+not part of the customer Deploy to Cloudflare build in `pnpm build`.
