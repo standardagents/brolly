@@ -7,6 +7,7 @@
   "type": "module",
   "packageManager": "npm@11.6.2",
   "scripts": {
+    "build": "node scripts/verify-template.mjs",
     "deploy": "npm run db:migrate:remote && node scripts/deploy-guard.mjs wrangler.jsonc",
     "preview": "wrangler versions upload --config wrangler.jsonc",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc"

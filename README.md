@@ -12,6 +12,10 @@ The deploy command applies Brolly's D1 migrations, publishes the Worker and
 dashboard, and creates the credential-encryption secret if it does not already
 exist. Later deployments preserve that secret and all D1 data.
 
+The build command performs an offline integrity check of the checked-in Worker,
+dashboard, migrations, and Wrangler upload boundary. The application is already
+compiled, so this check does not fetch source or generate a second bundle.
+
 - Product and installation documentation: <https://brolly.standardagents.ai>
 - Source and contributions: <https://github.com/standardagents/brolly>
 - Runtime fuse: <https://www.npmjs.com/package/@standardagents/brolly-runtime>
