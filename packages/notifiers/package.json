@@ -1,6 +1,10 @@
 {
   "name": "@standardagents/brolly-notifiers",
   "version": "0.1.0",
+  "description": "Bounded Slack, Discord, email, and SMS notification adapters for Brolly",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/standardagents/brolly.git", "directory": "packages/notifiers" },
+  "publishConfig": { "access": "public" },
   "type": "module",
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",

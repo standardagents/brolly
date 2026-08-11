@@ -1,6 +1,10 @@
 {
   "name": "@standardagents/brolly-core",
   "version": "0.1.0",
+  "description": "Policy, incident, metric, and monitoring-budget primitives for Brolly",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/standardagents/brolly.git", "directory": "packages/core" },
+  "publishConfig": { "access": "public" },
   "type": "module",
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
