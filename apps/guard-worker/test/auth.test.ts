@@ -59,7 +59,7 @@ describe("Cloudflare OAuth authentication", () => {
     const response = await authRoute(new Request("https://guard.example/api/auth/login"), env);
     const authorization = new URL(response!.headers.get("location")!);
     expect(authorization.searchParams.get("client_id")).toBe("5690968d2377c6200202668946420dec");
-    expect(authorization.searchParams.get("redirect_uri")).toBe("https://brolly-guard.formkit.workers.dev/oauth/callback");
+    expect(authorization.searchParams.get("redirect_uri")).toBe("https://brolly-login.formkit.workers.dev/oauth/callback");
   });
 
   it("uses an HttpOnly session and rejects cross-origin mutations", async () => {
@@ -81,16 +81,16 @@ describe("Cloudflare OAuth authentication", () => {
     await expect(configuredEnv(environment(db))).resolves.toMatchObject({ BROLLY_ACCOUNT_ID: "account-from-oauth" });
   });
 
-  it("does not let the shared callback probe local or private-looking origins", async () => {
-    const { db } = database();
-    const state = `random.${Buffer.from("http://127.0.0.1:8787").toString("base64url")}`;
-    const response = await authRoute(new Request(`https://oauth.brolly.example/oauth/callback?state=${state}&code=code`), environment(db));
-    expect(response?.status).toBe(400);
-    expect(response?.headers.get("content-security-policy")).toContain("style-src 'self'");
-    const html = await response?.text();
-    expect(html).toContain("public HTTPS installation");
-    expect(html).toContain('href="/assets/index.css"');
-    expect(html).toContain("dark:bg-slate-950");
-    expect(html).not.toContain("<style>");
+  it("proves a live one-time state to the separate shared relay", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const { db } = database(sql => sql.includes("FROM oauth_states") ? { expires_at: expiresAt } : null);
+    const state = `random.${Buffer.from("https://guard.example").toString("base64url")}`;
+    const response = await authRoute(new Request(`https://guard.example/api/auth/relay/verify?state=${state}`), environment(db));
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toEqual({ callbackUrl: "https://guard.example/api/auth/callback" });
+
+    const wrongOrigin = await authRoute(new Request(`https://other.example/api/auth/relay/verify?state=${state}`), environment(db));
+    expect(wrongOrigin?.status).toBe(400);
+    expect(await authRoute(new Request(`https://guard.example/oauth/callback?state=${state}`), environment(db))).toBeNull();
   });
 });

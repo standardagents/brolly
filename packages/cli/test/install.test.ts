@@ -15,12 +15,12 @@ describe("Brolly installer cryptography", () => {
     expect(CLI_OAUTH_REDIRECT_URI).toBe("http://127.0.0.1:8976/callback");
   });
 
-  it("routes the shared OAuth callback through the Worker before static assets", () => {
+  it("does not package the publisher-owned OAuth relay into customer Workers", () => {
     const config = createWorkerConfig({
       accountId: "account", clientId: "client", databaseId: "database",
       workerPath: "/worker.js", assetsPath: "/assets",
     }) as { assets: { run_worker_first: string[] } };
-    expect(config.assets.run_worker_first).toContain("/oauth/callback");
+    expect(config.assets.run_worker_first).toEqual(["/api/*", "/health"]);
   });
 
   it("writes AES-GCM envelopes readable by the Worker", async () => {

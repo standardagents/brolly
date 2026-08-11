@@ -12,14 +12,14 @@ export function createWorkerConfig(input: { accountId: string; clientId: string;
   return {
     name: "brolly-guard", main: input.workerPath, compatibility_date: "2026-08-08", account_id: input.accountId,
     triggers: { crons: ["* * * * *"] },
-    assets: { directory: input.assetsPath, not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/oauth/callback", "/health"] },
+    assets: { directory: input.assetsPath, not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/health"] },
     d1_databases: [{ binding: "DB", database_name: "brolly-guard", database_id: input.databaseId }],
     vars: {
       BROLLY_ACCOUNT_ID: input.accountId,
       BROLLY_TIMEZONE: input.timezone ?? "UTC",
       BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9",
       BROLLY_OAUTH_CLIENT_ID: input.clientId,
-      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-guard.formkit.workers.dev/oauth/callback",
+      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-login.formkit.workers.dev/oauth/callback",
       BROLLY_SELF_WORKER_NAME: "brolly-guard",
     },
     observability: { enabled: true },

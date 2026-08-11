@@ -19,18 +19,21 @@ Vite 8 builds a React client and the Worker in separate environments;
 assets. Tailwind CSS 4 compiles the complete dashboard stylesheet, including
 the standalone OAuth error surface. Semantic theme tokens follow the browser's
 `prefers-color-scheme` setting across login, onboarding, and authenticated
-pages. `/api/*`, `/oauth/callback`, and `/health` run Worker-first while
+pages. `/api/*` and `/health` run Worker-first while
 navigation requests use the static SPA fallback. The npm installer packages
 both the Worker bundle and the client asset directory.
 
 Browser login uses Brolly's publisher-owned public OAuth client and one fixed
-redirect URI on the publisher installation. Each login state carries the
-requesting installation's public HTTPS origin. The relay first asks that origin
-to prove the state exists in its own D1 database, then returns the one-time code
-only to that origin's `/api/auth/callback`. PKCE, an HttpOnly state cookie, a
-ten-minute expiry, and exact origin matching prevent another installation from
-claiming the code. The relay route must remain Worker-first so the SPA fallback
-can never consume an OAuth callback.
+redirect URI at `brolly-login.formkit.workers.dev`. The private, separately
+deployed `brolly-login` Worker contains the stateless relay; relay code and
+infrastructure are not shipped in this open-source repository or customer
+deployments. Each login state carries the requesting installation's public
+HTTPS origin. The relay first asks that origin to prove the state exists in its
+own D1 database, then returns the one-time code only to that origin's
+`/api/auth/callback`. PKCE, an HttpOnly state cookie, a ten-minute expiry, and
+exact origin matching prevent another installation from claiming the code. The
+relay never exchanges the code and therefore never receives Cloudflare access
+or refresh tokens.
 
 An unbound deployment accepts exactly one account in its first successful
 browser authorization and persists that account ID in D1. This binds the

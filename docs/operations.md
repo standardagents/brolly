@@ -66,8 +66,9 @@ the deploy script generates a 256-bit value and sends it to `wrangler secret
 put` over stdin without printing it. If the listing fails or is malformed, the
 deployment fails closed and never creates or rotates a key. Later deployments
 preserve the existing secret so credentials already encrypted in D1 remain
-readable. The public OAuth client and relay are compiled into the release; the
-account ID is derived during first sign-in; and timezone/summary settings
+readable. The public OAuth client ID and shared relay URL are compiled into the
+release, while the private relay service is deployed and operated separately;
+the account ID is derived during first sign-in, and timezone/summary settings
 default to UTC and 09:00. Operators who need break-glass CLI access or
 authoritative billing reconciliation can add those Worker secrets later.
 

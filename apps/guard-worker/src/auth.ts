@@ -64,7 +64,6 @@ export async function authRoute(request: Request, env: Env): Promise<Response | 
   const url = new URL(request.url);
   if (url.pathname === "/api/auth/login" && request.method === "GET") return beginLogin(request, env);
   if (url.pathname === "/api/auth/callback" && request.method === "GET") return finishLogin(request, env);
-  if (url.pathname === "/oauth/callback" && request.method === "GET") return relayCallback(request);
   if (url.pathname === "/api/auth/relay/verify" && request.method === "GET") return verifyRelay(request, env);
   if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionStatus(request, env);
   if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
@@ -138,32 +137,6 @@ async function beginLogin(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function relayCallback(request: Request): Promise<Response> {
-  const url = new URL(request.url);
-  const state = url.searchParams.get("state") ?? "";
-  const code = url.searchParams.get("code");
-  const error = url.searchParams.get("error_description") ?? url.searchParams.get("error");
-  const origin = decodeStateOrigin(state);
-  if (!origin) return htmlError("Brolly could not verify the OAuth return address.", 400);
-  if (!safeRelayOrigin(origin)) return htmlError("Brolly only relays OAuth to a public HTTPS installation.", 400);
-  const verifyUrl = new URL("/api/auth/relay/verify", origin);
-  verifyUrl.searchParams.set("state", state);
-  let callbackUrl: URL;
-  try {
-    const response = await fetch(verifyUrl, { signal: AbortSignal.timeout(5_000), redirect: "error" });
-    const payload = await response.json() as { callbackUrl?: string };
-    if (!response.ok || !payload.callbackUrl) throw new Error("The Brolly instance rejected this login state");
-    callbackUrl = new URL(payload.callbackUrl);
-    if (callbackUrl.origin !== origin || callbackUrl.pathname !== "/api/auth/callback") throw new Error("The Brolly callback address is invalid");
-  } catch {
-    return htmlError("This Cloudflare login was not started by a live Brolly instance. Return to Brolly and try again.", 400);
-  }
-  callbackUrl.searchParams.set("state", state);
-  if (code) callbackUrl.searchParams.set("code", code);
-  if (error) callbackUrl.searchParams.set("error", error);
-  return new Response(null, { status: 302, headers: { location: callbackUrl.toString(), "cache-control": "no-store" } });
-}
-
 async function verifyRelay(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const state = url.searchParams.get("state") ?? "";
@@ -171,15 +144,6 @@ async function verifyRelay(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare(`SELECT expires_at FROM oauth_states WHERE state_hash=?1 LIMIT 1`).bind(await sha256(state)).first<{ expires_at: number }>();
   if (!row || row.expires_at <= Date.now()) return Response.json({ error: "Unknown or expired OAuth state" }, { status: 404 });
   return Response.json({ callbackUrl: new URL("/api/auth/callback", url.origin).toString() }, { headers: { "cache-control": "no-store" } });
-}
-
-function safeRelayOrigin(value: string): boolean {
-  const origin = new URL(value);
-  if (origin.protocol !== "https:" || (origin.port && origin.port !== "443")) return false;
-  const hostname = origin.hostname.toLowerCase();
-  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) return false;
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) return false;
-  return hostname.includes(".");
 }
 
 async function finishLogin(request: Request, env: Env): Promise<Response> {

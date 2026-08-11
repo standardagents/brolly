@@ -110,6 +110,7 @@ export function App() {
               </ol>
               <div className="callout orange"><span><Check /><span><strong>You are ready to protect the account</strong><small>Start in observe mode, confirm the readings and limits, then enable approval or automatic quarantine when you are comfortable.</small></span></span></div>
               <div className="callout"><Info /><p><strong>Who can sign in later?</strong> A Cloudflare member who can authorize Brolly's requested scopes for the bound account may sign in. A user who authorizes a different account is rejected. Changing accounts requires deliberately resetting the installation's D1 binding or deploying a new instance; the latest successful authorization supplies the revocable Cloudflare grant Brolly uses for monitoring and controls.</p></div>
+              <div className="callout"><Info /><p><strong>What passes through Brolly's login service?</strong> Only the one-time Cloudflare authorization result. The separate stateless relay verifies the requesting installation, returns the short-lived code to that exact deployment, and never receives the access or refresh token stored in your D1 database.</p></div>
               <div className="callout"><Info /><p><strong>Billing reconciliation is optional.</strong> Fast telemetry works with OAuth. A separate Billing Read token enables authoritative invoice comparison because Cloudflare does not expose that permission through its OAuth scope catalog.</p></div>
             </section>
 
