@@ -19,4 +19,5 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm dev
+pnpm release:runtime patch --dry-run --yes
 ```

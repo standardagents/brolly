@@ -88,3 +88,10 @@ repeated billable Durable Object activations.
 
 Quarantine never deletes application data. Recovery is manual by default:
 Brolly removes the target from the secret and deploys the next fuse generation.
+
+## Publishing
+
+Releases are cut from the Brolly repository root with `pnpm release:runtime`.
+The resulting `v*` tag triggers `.github/workflows/publish-runtime.yml`, which
+publishes this package through npm trusted publishing with provenance. GitHub
+does not store an npm token.

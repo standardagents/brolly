@@ -8,8 +8,11 @@
     "build": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && pnpm --filter @standardagents/brolly build",
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
     "dev": "pnpm --filter @standardagents/brolly-guard dev",
+    "release:runtime": "node scripts/release-runtime.mjs",
+    "release:runtime:dev": "node scripts/release-runtime.mjs --tag=dev",
     "test": "vitest run",
-    "typecheck": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm -r typecheck"
+    "typecheck": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm -r typecheck",
+    "verify:runtime-release": "pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-runtime typecheck && pnpm exec vitest run packages/runtime/test/runtime.test.ts"
   },
   "cloudflare": {
     "bindings": {

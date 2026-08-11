@@ -42,13 +42,7 @@ inside your Cloudflare account.
 
 ## Install
 
-Use **Deploy to Cloudflare** above, or run the guided installer:
-
-```bash
-pnpm dlx @standardagents/brolly install
-```
-
-The Cloudflare flow provisions Brolly's D1 database and deploys the dashboard
+Use **Deploy to Cloudflare** above. The Cloudflare flow provisions Brolly's D1 database and deploys the dashboard
 and guard Worker. On first visit, **Continue with Cloudflare** authorizes exactly
 one account; Brolly encrypts that revocable OAuth grant in your own D1 database
 and then asks for limits for every discovered product, Worker, and namespace.
@@ -101,6 +95,24 @@ one rollout per Worker per five minutes, and twelve per account per hour.
 - [Runtime integration and exact-object quarantine](docs/runtime-integration.md)
 - [Architecture and safety model](docs/architecture.md)
 - [Cloudflare icon sources](docs/icon-sources.md)
+
+## Runtime releases
+
+`@standardagents/brolly-runtime` publishes through GitHub Actions with npm
+trusted publishing and provenance. Stable releases must start from `main`:
+
+```bash
+pnpm release:runtime patch
+```
+
+Development releases use a commit-qualified prerelease and the `dev` dist-tag:
+
+```bash
+pnpm release:runtime:dev patch
+```
+
+The npm trusted publisher must target the `standardagents/brolly` repository
+and `.github/workflows/publish-runtime.yml`. No npm token is stored in GitHub.
 
 ## License
 

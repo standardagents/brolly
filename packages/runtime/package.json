@@ -1,6 +1,6 @@
 {
   "name": "@standardagents/brolly-runtime",
-  "version": "0.1.0",
+  "version": "0.0.0-dev.ffffff",
   "description": "Zero-I/O deployment fuse for Brolly Worker and Durable Object quarantine",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/standardagents/brolly.git", "directory": "packages/runtime" },
