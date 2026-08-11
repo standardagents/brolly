@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@import "./base.css";
+@import "./shell.css";
+@import "./pages.css";
+@import "./wizard.css";
+@import "./themes.css";
+
+@source "../**/*.{ts,tsx}";
+@source "../../auth.ts";
+
+@theme {
+  --color-cloudflare: #f6821f;
+}

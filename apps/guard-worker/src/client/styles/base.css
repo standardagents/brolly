@@ -6,6 +6,7 @@
 --------------------------------------------------------------------------- */
 
 :root {
+  color-scheme: light;
   --orange: #f6821f;
   --orange-hover: #e06d0c;
   --orange-soft: #fdeedd;

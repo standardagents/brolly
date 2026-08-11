@@ -16,7 +16,10 @@ credentials unreadable.
 The `apps/guard-worker` project is a full-stack Cloudflare Vite application.
 Vite 8 builds a React client and the Worker in separate environments;
 `@cloudflare/vite-plugin` emits one deployable Worker configuration with SPA
-assets. `/api/*`, `/oauth/callback`, and `/health` run Worker-first while
+assets. Tailwind CSS 4 compiles the complete dashboard stylesheet, including
+the standalone OAuth error surface. Semantic theme tokens follow the browser's
+`prefers-color-scheme` setting across login, onboarding, and authenticated
+pages. `/api/*`, `/oauth/callback`, and `/health` run Worker-first while
 navigation requests use the static SPA fallback. The npm installer packages
 both the Worker bundle and the client asset directory.
 

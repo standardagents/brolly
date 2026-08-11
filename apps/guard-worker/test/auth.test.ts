@@ -86,6 +86,11 @@ describe("Cloudflare OAuth authentication", () => {
     const state = `random.${Buffer.from("http://127.0.0.1:8787").toString("base64url")}`;
     const response = await authRoute(new Request(`https://oauth.brolly.example/oauth/callback?state=${state}&code=code`), environment(db));
     expect(response?.status).toBe(400);
-    await expect(response?.text()).resolves.toContain("public HTTPS installation");
+    expect(response?.headers.get("content-security-policy")).toContain("style-src 'self'");
+    const html = await response?.text();
+    expect(html).toContain("public HTTPS installation");
+    expect(html).toContain('href="/assets/index.css"');
+    expect(html).toContain("dark:bg-slate-950");
+    expect(html).not.toContain("<style>");
   });
 });

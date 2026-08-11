@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "vite build && node scripts/prerender.mjs",
+    "build": "vite build && vite build --config vite.styles.config.ts && node scripts/prerender.mjs",
     "deploy": "pnpm build && pnpm deploy:built",
     "deploy:built": "wrangler deploy",
     "deploy:ci": "wrangler deploy --config wrangler.ci.jsonc",
@@ -16,8 +16,10 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "tailwindcss": "^4.3.3",
     "vite": "^8.2.1"
   }
 }

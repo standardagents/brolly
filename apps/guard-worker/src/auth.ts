@@ -347,12 +347,12 @@ async function cloudflare<T>(token: string, path: string): Promise<T> {
 
 function htmlError(message: string, status: number): Response {
   const escaped = message.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]!);
-  return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Brolly sign-in</title><style>body{font:16px system-ui;background:#f7f7f8;color:#202124;display:grid;place-items:center;min-height:100vh;margin:0}.card{max-width:36rem;background:white;border:1px solid #ddd;border-radius:16px;padding:2rem}a{color:#c04b00}</style><div class="card"><h1>Cloudflare sign-in could not finish</h1><p>${escaped}</p><p><a href="/">Return to Brolly</a></p></div>`, {
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta name="color-scheme" content="light dark"><title>Brolly sign-in</title><link rel="stylesheet" href="/assets/index.css"></head><body class="grid min-h-screen place-items-center bg-slate-50 p-6 text-slate-950 dark:bg-slate-950 dark:text-slate-100"><main class="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900"><p class="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-orange-700 dark:text-orange-400">Brolly · Cloudflare sign-in</p><h1 class="m-0 text-3xl font-bold tracking-tight">Cloudflare sign-in could not finish</h1><p class="mt-5 leading-7 text-slate-600 dark:text-slate-300">${escaped}</p><p class="mt-6"><a class="font-semibold text-orange-700 underline decoration-orange-300 underline-offset-4 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300" href="/">Return to Brolly</a></p></main></body></html>`, {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+      "content-security-policy": "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },

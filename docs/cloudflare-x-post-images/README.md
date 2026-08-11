@@ -12,7 +12,8 @@ limits, or costs that continued without an effective ceiling.
 
 The Brolly homepage imports `posts.json` during its static SSR build. Every card
 is real HTML with selectable text, semantic author and time metadata, a real
-source link, and CSS light/dark treatments. Profile images are clipped to
+source link, and a Tailwind-compiled treatment that follows the visitor's
+system light/dark preference. Profile images are clipped to
 circular headshots in CSS. There are no flattened card screenshots in the
 production site.
 

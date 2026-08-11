@@ -1,3 +1,10 @@
+@import "tailwindcss";
+@source "./App.tsx";
+
+@theme {
+  --color-cloudflare: #f6821f;
+}
+
 :root {
   color-scheme: dark;
   --orange: #f6821f;
@@ -97,7 +104,6 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .story-group { display: flex; flex: none; gap: 20px; padding-right: 20px; }
 .story-card { --story-bg: #0f1419; --story-border: #2f3336; --story-text: #f7f9f9; --story-muted: #8b98a5; --story-rule: #2f3336; --story-chip-bg: #2b1b12; --story-chip-border: #6b3416; --story-chip-text: #ffb86b; --story-badge-bg: #f7f9f9; --story-badge-text: #0f1419; position: relative; width: min(500px, 84vw); min-height: 308px; display: block; flex: none; overflow: hidden; border: 1px solid var(--story-border); border-radius: 18px; background: var(--story-bg); color: var(--story-text); box-shadow: 0 24px 60px #0005; transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
 .story-card::before { content: ""; position: absolute; inset: 0 0 auto; z-index: 1; height: 4px; background: linear-gradient(90deg, #f38020 0%, #f9b233 52%, #1d9bf0 100%); }
-.story-card.light { --story-bg: #fff; --story-border: #d7dce1; --story-text: #0f1419; --story-muted: #536471; --story-rule: #e5e8eb; --story-chip-bg: #fff2e8; --story-chip-border: #ffd2b5; --story-chip-text: #a84413; --story-badge-bg: #0f1419; --story-badge-text: #fff; }
 .story-card:hover, .story-card:focus-visible { z-index: 1; transform: translateY(-5px); border-color: #f6821f99; box-shadow: 0 28px 75px #0008, 0 0 0 1px #f6821f30; }
 .story-card > article { min-height: inherit; display: flex; flex-direction: column; padding: 22px 24px 17px; }
 .story-card-head { min-height: 48px; display: flex; align-items: center; gap: 11px; }
@@ -243,4 +249,95 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 @media (prefers-reduced-motion: reduce) {
   .story-marquee { overflow-x: auto; mask-image: none; scrollbar-width: thin; }
   .story-group[aria-hidden="true"] { display: none; }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f7f7f8;
+    --panel: #fff;
+    --panel-2: #f1f3f5;
+    --line: #d9dee4;
+    --text: #181a1d;
+    --muted: #5f6874;
+  }
+  .header { border-color: #dfe3e7; background: #fffffff0; }
+  .header nav { color: #5f6874; }
+  .header nav a:hover { color: #111317; }
+  .nav-cta { border-color: #c8ced5; background: #fff; color: #202327 !important; }
+  .hero::after { background: radial-gradient(circle, #f6821f20 0, #f6821f09 43%, transparent 70%); }
+  .grid { opacity: .48; background-image: linear-gradient(#1d1f210b 1px, transparent 1px), linear-gradient(90deg, #1d1f210b 1px, transparent 1px); }
+  .kicker, .eyebrow { color: #a94b08; }
+  .lede { color: #4f5965; }
+  .secondary { border-color: #c9cfd6; background: #fff; color: #272b30; }
+  .secondary:hover { border-color: #969fa9; }
+  .hero-note { color: #747e89; }
+  .console { border-color: #cfd5dc; background: #fff; box-shadow: 0 35px 90px #1b243019, inset 0 1px #fff; }
+  .console-head { color: #25292e; }
+  .console-head b { background: #def4e7; color: #11643d; }
+  .spend small, .response small { color: #68727e; }
+  .spend > b { background: #fbe6e4; color: #a92823; }
+  .incident { border-color: #edb7b3; background: #fff1f0; }
+  .incident-mark { background: #f9d9d7; color: #b12822; }
+  .incident small { color: #a73c36; }
+  .incident em { color: #68727e; }
+  .response { border-color: #e1e5e9; }
+  .response strong { color: #117347; }
+  .audit { border-color: #e1e5e9; background: #f7f8fa; color: #68727e; }
+  .audit .icon { color: #158052; }
+  .scan { border-color: #cfd5dc; background: #fff; box-shadow: 0 14px 45px #1b24301f; color: #626c78; }
+  .scan strong { color: #181a1d; }
+  .coverage { border-color: #e2e5e8; background: #f1f3f5; }
+  .coverage > p { color: #747e89; }
+  .coverage span { color: #56606b; }
+  .coverage img { filter: grayscale(1) brightness(.7); opacity: .72; }
+  .stories { border-color: #e3e6e9; background: radial-gradient(circle at 50% 0, #f6821f12, transparent 35%), #fff; }
+  .story-card {
+    --story-bg: #fff;
+    --story-border: #d7dce1;
+    --story-text: #0f1419;
+    --story-muted: #536471;
+    --story-rule: #e5e8eb;
+    --story-chip-bg: #fff2e8;
+    --story-chip-border: #ffd2b5;
+    --story-chip-text: #a84413;
+    --story-badge-bg: #0f1419;
+    --story-badge-text: #fff;
+    box-shadow: 0 24px 60px #1b243014;
+  }
+  .story-card:hover, .story-card:focus-visible { box-shadow: 0 28px 75px #1b243026, 0 0 0 1px #f6821f30; }
+  .stories-note { color: #747e89; }
+  .steps article { background: linear-gradient(145deg, #fff, #f5f6f8); }
+  .steps article > span { color: #1d1f2108; }
+  .steps p { color: #626c78; }
+  .docs-layout > aside strong { color: #31363c; }
+  .docs-layout > aside a { border-color: #cfd5dc; color: #68727e; }
+  .docs-layout > aside a:hover { color: #111317; }
+  .docs code { color: #a94b08; }
+  .callout { background: #fff; }
+  .callout p { color: #5f6874; }
+  .callout p strong { color: #181a1d; }
+  .callout.orange { border-color: #efbf98; background: #fff6ef; }
+  .callout.orange small { color: #786657; }
+  .callout.orange > a { border-color: #e6b48d; background: #fff; color: #9b4306; }
+  .numbered li { border-color: #e2e5e8; }
+  .numbered li > b { background: #fff0e3; color: #a94b08; }
+  .numbered p { color: #626c78; }
+  .mode-table, .mode-table > div { border-color: #dce1e5; }
+  .mode-table > div { color: #5f6874; }
+  .mode.observe { background: #e4edf5; color: #365b78; }
+  .mode.approval { background: #f7ead2; color: #7c5109; }
+  .mode.automatic { background: #f9e0de; color: #9e302b; }
+  .code { border-color: #d7dce1; }
+  .impact article, .channels article { border-color: #dce1e5; background: #fff; }
+  .impact strong { color: #181a1d; }
+  .impact p, .channels small { color: #626c78; }
+  .checks li { border-color: #dfe3e7; color: #5f6874; }
+  .checks strong { color: #181a1d; }
+  .checks .icon { color: #158052; }
+  .final-cta { border-color: #efbf98; background: radial-gradient(circle at 85% 20%, #f6821f1b, transparent 45%), #fff6ef; }
+  .final-cta p:not(.eyebrow) { color: #6d5e52; }
+  .site > footer { border-color: #dfe3e7; color: #68727e; }
+  .site > footer .brand { color: #181a1d; }
+  .site > footer a:hover { color: #111317; }
 }

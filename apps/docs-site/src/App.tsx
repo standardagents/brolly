@@ -175,20 +175,18 @@ export function App() {
 function StoryGroup({ duplicate = false }: { duplicate?: boolean }) {
   return (
     <div className="story-group" aria-hidden={duplicate || undefined}>
-      {billingStories.map((story, index) => {
-        const light = index % 2 === 1;
-        const mode = light ? "light" : "dark";
+      {billingStories.map(story => {
         const postLength = story.text.length;
         const textSize = postLength > 300 ? "compact" : postLength < 100 ? "large" : "";
         return (
           <a
-            className={`story-card ${mode}`}
+            className="story-card"
             href={story.url}
             target="_blank"
             rel="noreferrer"
             tabIndex={duplicate ? -1 : undefined}
             aria-label={`${story.name}: ${story.badge} Cloudflare usage incident. View source on X.`}
-            key={`${story.slug}-${mode}`}
+            key={story.slug}
           >
             <article>
               <header className="story-card-head">

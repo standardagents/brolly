@@ -23,7 +23,7 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("/x-posts/avatars/justin-schroeder-8846.jpg");
     expect(html).not.toContain("/x-posts/dark/");
     expect(html).not.toContain("/x-posts/light/");
-    expect(html.match(/class="story-card /g)).toHaveLength(14);
+    expect(html.match(/class="story-card"/g)).toHaveLength(14);
     expect(html.match(/<article>/g)?.length).toBeGreaterThanOrEqual(14);
     expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain("/api/auth/login");

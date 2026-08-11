@@ -10,6 +10,11 @@ rendered document to `dist/site/index.html`. The production page ships no
 client-side JavaScript. A small Worker serves `/health` and delegates all other
 requests to Cloudflare static assets.
 
+Tailwind CSS 4 compiles the entire site stylesheet as a separate static build.
+The page follows `prefers-color-scheme`: light-mode visitors receive the light
+palette and dark-mode visitors receive the dark palette without client-side
+JavaScript or a flash of the wrong theme.
+
 ## Commands
 
 ```bash
