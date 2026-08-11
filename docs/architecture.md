@@ -7,9 +7,18 @@ The control plane consists of `brolly-guard`, its D1 database, OAuth credentials
 The `apps/guard-worker` project is a full-stack Cloudflare Vite application.
 Vite 8 builds a React client and the Worker in separate environments;
 `@cloudflare/vite-plugin` emits one deployable Worker configuration with SPA
-assets. `/api/*` and `/health` run Worker-first while navigation requests use
-the static SPA fallback. The npm installer packages both the Worker bundle and
-the client asset directory.
+assets. `/api/*`, `/oauth/callback`, and `/health` run Worker-first while
+navigation requests use the static SPA fallback. The npm installer packages
+both the Worker bundle and the client asset directory.
+
+Browser login uses Brolly's publisher-owned public OAuth client and one fixed
+redirect URI on the publisher installation. Each login state carries the
+requesting installation's public HTTPS origin. The relay first asks that origin
+to prove the state exists in its own D1 database, then returns the one-time code
+only to that origin's `/api/auth/callback`. PKCE, an HttpOnly state cookie, a
+ten-minute expiry, and exact origin matching prevent another installation from
+claiming the code. The relay route must remain Worker-first so the SPA fallback
+can never consume an OAuth callback.
 
 Fast telemetry is operational evidence, not invoice truth. The Durable Object
 collector covers the complete current pricing surface: per-object requests,

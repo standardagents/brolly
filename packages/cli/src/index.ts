@@ -115,10 +115,18 @@ async function addTarget(): Promise<void> {
 }
 
 async function cloudflare<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers } });
-  const payload = await response.json() as { success: boolean; result: T; errors?: Array<{ message: string }> };
-  if (!response.ok || !payload.success) throw new Error(payload.errors?.map(error => error.message).join("; ") ?? `Cloudflare returned ${response.status}`);
-  return payload.result;
+  const method = (init.method ?? "GET").toUpperCase();
+  const delays = method === "GET" ? [0, 500, 1_500, 3_000] : [0];
+  let failure = "Unknown API error";
+  for (const delay of delays) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, { ...init, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...init.headers } });
+    const payload = await response.json() as { success: boolean; result: T; errors?: Array<{ message: string }> };
+    if (response.ok && payload.success) return payload.result;
+    failure = `Cloudflare ${path} returned ${response.status}: ${payload.errors?.map(error => error.message).join("; ") ?? "Unknown API error"}`;
+    if (response.status !== 401) break;
+  }
+  throw new Error(failure);
 }
 
 async function openUrl(url: string): Promise<void> {

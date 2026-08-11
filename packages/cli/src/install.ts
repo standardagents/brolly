@@ -8,6 +8,24 @@ import type { OAuthResult } from "./oauth.js";
 
 export interface InstallResult { guardUrl: string; publicControlJwk: JsonWebKey }
 
+export function createWorkerConfig(input: { accountId: string; clientId: string; databaseId: string; workerPath: string; assetsPath: string; timezone?: string; summaryHour?: string }): Record<string, unknown> {
+  return {
+    name: "brolly-guard", main: input.workerPath, compatibility_date: "2026-08-08", account_id: input.accountId,
+    triggers: { crons: ["* * * * *"] },
+    assets: { directory: input.assetsPath, not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/oauth/callback", "/health"] },
+    d1_databases: [{ binding: "DB", database_name: "brolly-guard", database_id: input.databaseId }],
+    vars: {
+      BROLLY_ACCOUNT_ID: input.accountId,
+      BROLLY_TIMEZONE: input.timezone ?? "UTC",
+      BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9",
+      BROLLY_OAUTH_CLIENT_ID: input.clientId,
+      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-guard.formkit.workers.dev/oauth/callback",
+      BROLLY_SELF_WORKER_NAME: "brolly-guard",
+    },
+    observability: { enabled: true },
+  };
+}
+
 export async function deployGuard(input: {
   accountId: string; accountName: string; clientId: string; oauth: OAuthResult; databaseId: string; adminToken: string;
   billingToken?: string; timezone?: string; summaryHour?: string;
@@ -45,21 +63,10 @@ export async function deployGuard(input: {
   const scratch = join(tmpdir(), `brolly-install-${randomBytes(8).toString("hex")}`);
   const configPath = join(scratch, "wrangler.json");
   await import("node:fs/promises").then(fs => fs.mkdir(scratch, { recursive: true, mode: 0o700 }));
-  const config = {
-    name: "brolly-guard", main: workerPath, compatibility_date: "2026-08-08", account_id: input.accountId,
-    triggers: { crons: ["* * * * *"] },
-    assets: { directory: assetsPath, not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/health"] },
-    d1_databases: [{ binding: "DB", database_name: "brolly-guard", database_id: input.databaseId }],
-    vars: {
-      BROLLY_ACCOUNT_ID: input.accountId,
-      BROLLY_TIMEZONE: input.timezone ?? "UTC",
-      BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9",
-      BROLLY_OAUTH_CLIENT_ID: input.clientId,
-      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-guard.formkit.workers.dev/oauth/callback",
-      BROLLY_SELF_WORKER_NAME: "brolly-guard",
-    },
-    observability: { enabled: true },
-  };
+  const config = createWorkerConfig({
+    accountId: input.accountId, clientId: input.clientId, databaseId: input.databaseId,
+    workerPath, assetsPath, timezone: input.timezone, summaryHour: input.summaryHour,
+  });
   await writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
   try {
     const output = await runWrangler(["deploy", "--config", configPath], input.oauth.accessToken);
@@ -87,11 +94,19 @@ export function encryptCredentials(value: unknown, key: Buffer): string {
 }
 
 async function d1Query(token: string, accountId: string, databaseId: string, sql: string, params: unknown[] = []): Promise<void> {
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`, {
-    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ sql, params }),
-  });
-  const payload = await response.json() as { success: boolean; errors?: Array<{ message: string }> };
-  if (!response.ok || !payload.success) throw new Error(payload.errors?.map(error => error.message).join("; ") ?? `D1 query failed (${response.status})`);
+  let failure = "Unknown API error";
+  for (const delay of [0, 500, 1_500, 3_000]) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`, {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ sql, params }),
+    });
+    const payload = await response.json() as { success: boolean; errors?: Array<{ message: string }> };
+    if (response.ok && payload.success) return;
+    failure = `Cloudflare D1 query returned ${response.status}: ${payload.errors?.map(error => error.message).join("; ") ?? "Unknown API error"}`;
+    // A 401 response is rejected before SQL execution, so retrying cannot duplicate a mutation.
+    if (response.status !== 401) break;
+  }
+  throw new Error(failure);
 }
 
 async function runWrangler(args: string[], token: string, stdin?: string): Promise<string> {

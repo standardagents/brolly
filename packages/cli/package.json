@@ -7,7 +7,7 @@
   "exports": "./dist/index.js",
   "files": ["dist", "worker", "README.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"import('node:fs').then(fs=>fs.chmodSync('dist/index.js',0o755))\"",
+    "build": "tsc -p tsconfig.json && node scripts/package-worker.mjs && node -e \"import('node:fs').then(fs=>fs.chmodSync('dist/index.js',0o755))\"",
     "prepack": "pnpm --filter @standardagents/brolly-guard build && node scripts/package-worker.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
