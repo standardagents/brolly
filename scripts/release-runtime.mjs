@@ -21,10 +21,11 @@ function flag(name) {
 }
 
 function run(command, options = {}) {
-  return execSync(command, {
+  const output = execSync(command, {
     encoding: "utf8",
     stdio: options.inherit ? "inherit" : "pipe",
-  }).trim();
+  });
+  return typeof output === "string" ? output.trim() : "";
 }
 
 function runMaybe(command, options = {}) {
