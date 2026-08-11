@@ -29,6 +29,7 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .skip { position: fixed; left: 12px; top: -48px; z-index: 100; padding: 9px 14px; border-radius: 6px; background: var(--orange); font-weight: 750; }
 .skip:focus { top: 12px; }
 .icon { width: 18px; height: 18px; flex: none; }
+.cloudflare-logo { width: 21px; height: auto; flex: none; fill: currentColor; }
 
 .header { position: sticky; top: 0; z-index: 30; height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 0 max(24px, calc((100vw - 1240px) / 2)); border-bottom: 1px solid #ffffff12; background: #0b0d10e8; backdrop-filter: blur(14px); }
 .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 20px; letter-spacing: -.035em; }
@@ -38,6 +39,7 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .header nav a:hover { color: #fff; }
 .nav-cta { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #4a5058; border-radius: 7px; background: #171a1f; color: #fff !important; }
 .nav-cta .icon { width: 14px; }
+.nav-cta .cloudflare-logo { width: 18px; color: var(--orange); }
 
 .hero { position: relative; min-height: 710px; display: grid; grid-template-columns: minmax(0, 1.06fr) minmax(430px, .94fr); align-items: center; gap: clamp(48px, 7vw, 110px); padding: 88px max(24px, calc((100vw - 1240px) / 2)) 82px; isolation: isolate; }
 .hero::after { content: ""; position: absolute; z-index: -1; width: 760px; height: 760px; right: -230px; top: -220px; border-radius: 50%; background: radial-gradient(circle, #f6821f24 0, #f6821f08 43%, transparent 70%); }
@@ -155,9 +157,9 @@ code, pre { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
 .callout.orange { align-items: center; justify-content: space-between; border-color: #6c3b1d; background: #23170f; }
 .callout.orange > span { display: flex; align-items: center; gap: 11px; }
 .callout.orange > span > span { display: flex; flex-direction: column; }
-.callout.orange .icon { color: var(--orange); }
+.callout.orange .icon, .callout.orange .cloudflare-logo { color: var(--orange); }
 .callout.orange small { margin-top: 2px; color: #bda996; }
-.callout.orange > a { min-height: 34px; display: inline-flex; align-items: center; flex: none; padding: 0 11px; border: 1px solid #714425; border-radius: 6px; background: #352215; color: #ffad6b; font-size: 13px; font-weight: 750; }
+.callout.orange > a { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; flex: none; padding: 0 11px; border: 1px solid #714425; border-radius: 6px; background: #352215; color: #ffad6b; font-size: 13px; font-weight: 750; }
 .numbered { margin: 28px 0; padding: 0; list-style: none; }
 .numbered li { display: flex; gap: 14px; padding: 17px 0; border-top: 1px solid #23282e; }
 .numbered li > b { width: 27px; height: 27px; display: grid; flex: none; place-items: center; border-radius: 50%; background: #282017; color: #f79a4e; font-size: 11px; }

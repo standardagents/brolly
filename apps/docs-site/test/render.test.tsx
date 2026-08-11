@@ -7,6 +7,7 @@ describe("universal Brolly docs site", () => {
     const html = render();
     expect(html).toContain("Cloudflare moves fast");
     expect(html).toContain("Deploy to Cloudflare");
+    expect(html.match(/class="cloudflare-logo"/g)?.length).toBeGreaterThanOrEqual(4);
     expect(html).toContain("@standardagents/brolly-runtime");
     expect(html).toContain("Runs in your Cloudflare account");
     expect(html).toContain("A user who authorizes a different account is rejected");

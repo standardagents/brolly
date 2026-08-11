@@ -25,7 +25,7 @@ export function App() {
           <a href="#install">Install</a>
           <a href="#runtime">Runtime fuse</a>
           <a href={GITHUB_URL}>GitHub</a>
-          <a className="nav-cta" href={DEPLOY_URL}>Deploy Brolly <Arrow /></a>
+          <a className="nav-cta" href={DEPLOY_URL}><CloudflareLogo /> Deploy Brolly</a>
         </nav>
       </header>
 
@@ -37,7 +37,7 @@ export function App() {
             <h1>Cloudflare moves fast. <em>Your bill can too.</em></h1>
             <p className="lede">Brolly catches runaway Workers, Durable Objects, storage, and AI usage before it becomes an invoice—then gives your team audited, reversible controls to contain it.</p>
             <div className="hero-actions">
-              <a className="primary" href={DEPLOY_URL}><Cloud /> Deploy to Cloudflare</a>
+              <a className="primary" href={DEPLOY_URL}><CloudflareLogo /> Deploy to Cloudflare</a>
               <a className="secondary" href="#how-it-works">See how it works <Arrow /></a>
             </div>
             <p className="hero-note">One account per installation. Your policies, credentials, incidents, and audit history stay in your Cloudflare account.</p>
@@ -101,7 +101,7 @@ export function App() {
               <p className="eyebrow">Install</p>
               <h2>Deploy Brolly into one Cloudflare account</h2>
               <p>Install Brolly in the Cloudflare account you want to protect. When deployment finishes, open your private dashboard and sign in with Cloudflare.</p>
-              <div className="callout orange"><span><Cloud /><span><strong>Runs in your Cloudflare account</strong><small>Your limits, incidents, and controls stay in your own deployment.</small></span></span><a href={DEPLOY_URL}>Deploy to Cloudflare</a></div>
+              <div className="callout orange"><span><CloudflareLogo /><span><strong>Runs in your Cloudflare account</strong><small>Your limits, incidents, and controls stay in your own deployment.</small></span></span><a href={DEPLOY_URL}><CloudflareLogo /> Deploy to Cloudflare</a></div>
               <ol className="numbered">
                 <li><b>1</b><span><strong>Deploy to Cloudflare.</strong><p>Choose your Cloudflare account and a name for the Brolly Worker, then click Deploy.</p></span></li>
                 <li><b>2</b><span><strong>Open Brolly and sign in.</strong><p>Visit the private Brolly URL created for you and authorize the Cloudflare account you want it to protect.</p></span></li>
@@ -162,7 +162,7 @@ export function App() {
                 <li><Check /><span><strong>Projected dollars never authorize a stop</strong>; automatic action requires fresh raw usage.</span></li>
                 <li><Check /><span><strong>Controls preserve resources and data</strong> and record rollback state before execution.</span></li>
               </ul>
-              <div className="final-cta"><span><p className="eyebrow">Put up the umbrella</p><h2>See the spike before the invoice.</h2><p>Deploy one self-hosted Brolly per Cloudflare account.</p></span><a className="primary" href={DEPLOY_URL}><Cloud /> Deploy to Cloudflare</a></div>
+              <div className="final-cta"><span><p className="eyebrow">Put up the umbrella</p><h2>See the spike before the invoice.</h2><p>Deploy one self-hosted Brolly per Cloudflare account.</p></span><a className="primary" href={DEPLOY_URL}><CloudflareLogo /> Deploy to Cloudflare</a></div>
             </section>
           </div>
         </div>
@@ -230,5 +230,12 @@ function Radar() { return <Icon><circle cx="12" cy="12" r="8" /><circle cx="12" 
 function Shield() { return <Icon><path d="M12 3 5 6v5c0 5 3 8 7 10 4-2 7-5 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-5" /></Icon>; }
 function Refresh() { return <Icon><path d="M20 11a8 8 0 1 0-2 6" /><path d="M20 4v7h-7" /></Icon>; }
 function Info() { return <Icon><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" /></Icon>; }
-function Cloud() { return <Icon><path d="M7 18h10a4 4 0 0 0 .4-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18Z" /></Icon>; }
+function CloudflareLogo() {
+  return (
+    <svg className="cloudflare-logo" viewBox="12 13.5 25 12" aria-hidden="true">
+      <path d="M28.8868 24.7745L29.0095 24.35C29.1558 23.8449 29.1014 23.378 28.8559 23.0349C28.6302 22.7189 28.2539 22.5328 27.797 22.5112L19.1416 22.4009C19.0833 22.3978 19.0351 22.3715 19.0054 22.3283C18.9753 22.2839 18.9683 22.2268 18.9869 22.172C19.0154 22.0867 19.0999 22.0223 19.1879 22.0184L27.9236 21.9077C28.9597 21.8602 30.0816 21.0194 30.4745 19.994L30.9727 18.6924C30.9864 18.657 30.9926 18.6194 30.9923 18.5817C30.9922 18.5612 30.9907 18.5406 30.9862 18.5203C30.4201 15.9761 28.1497 14.0736 25.4348 14.0736C22.9333 14.0736 20.8092 15.6882 20.0474 17.9322C19.5557 17.5633 18.9267 17.3672 18.2506 17.4348C17.0504 17.554 16.086 18.5203 15.9667 19.7204C15.9354 20.0319 15.9609 20.3325 16.0327 20.615C14.0722 20.6721 12.5 22.2782 12.5 24.2524C12.5 24.4311 12.5135 24.6067 12.5386 24.7784C12.5509 24.8618 12.6212 24.9243 12.7053 24.9243L28.6846 24.9262C28.6862 24.9262 28.6876 24.9255 28.6892 24.9254C28.7806 24.9234 28.861 24.8629 28.8868 24.7745Z" />
+      <path d="M31.7695 18.7879C31.6892 18.7879 31.6093 18.7902 31.5298 18.7941C31.5167 18.7948 31.5042 18.798 31.4923 18.8022C31.4508 18.8167 31.4177 18.8503 31.4051 18.8941L31.0648 20.0695C30.9185 20.5746 30.9729 21.0412 31.2184 21.3842C31.4441 21.7007 31.8204 21.8863 32.2773 21.9079L34.1224 22.0187C34.1768 22.0213 34.2247 22.0476 34.254 22.09C34.2848 22.1348 34.2918 22.1923 34.2733 22.2471C34.2443 22.3324 34.1602 22.3968 34.0726 22.4007L32.1553 22.5114C31.1145 22.5593 29.9927 23.3998 29.5998 24.4251L29.4612 24.7871C29.436 24.8526 29.483 24.9223 29.5522 24.9258C29.554 24.9258 29.5556 24.9264 29.5573 24.9264H36.1542C36.233 24.9264 36.3032 24.8751 36.3244 24.7994C36.439 24.3919 36.5 23.9624 36.5 23.5183C36.5 20.9057 34.3821 18.7879 31.7695 18.7879Z" />
+    </svg>
+  );
+}
 function Umbrella() { return <span className="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M4 20a16 16 0 0 1 32 0c-3.5-2.5-7.2-2.5-10.8 0-3.4-2.5-7-2.5-10.4 0C11.2 17.5 7.6 17.5 4 20Z" fill="currentColor" /><path d="M20 7v23.5c0 3.6 5.5 3.6 5.5 0" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" /></svg></span>; }
