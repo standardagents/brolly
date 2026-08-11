@@ -100,15 +100,15 @@ export function App() {
             <section id="install">
               <p className="eyebrow">Install</p>
               <h2>Deploy Brolly into one Cloudflare account</h2>
-              <p>The Deploy button creates your own Git repository, provisions Brolly's D1 database, builds the guard Worker, and opens your private dashboard. The universal site you are reading is not copied into your account.</p>
-              <div className="callout orange"><span><Cloud /><span><strong>Cloudflare-native installation</strong><small>Review the automatically provisioned D1 binding, then deploy your copy.</small></span></span><a href={DEPLOY_URL}>Deploy to Cloudflare</a></div>
+              <p>Install Brolly in the Cloudflare account you want to protect. When deployment finishes, open your private dashboard and sign in with Cloudflare.</p>
+              <div className="callout orange"><span><Cloud /><span><strong>Runs in your Cloudflare account</strong><small>Your limits, incidents, and controls stay in your own deployment.</small></span></span><a href={DEPLOY_URL}>Deploy to Cloudflare</a></div>
               <ol className="numbered">
-                <li><b>1</b><span><strong>Create your deployment.</strong><p>Choose a Git account and Worker name. Accept the private D1 database Cloudflare provisions automatically.</p></span></li>
-                <li><b>2</b><span><strong>Click Deploy.</strong><p>Brolly generates its 256-bit credential key and sends it directly to Cloudflare as a Worker secret. It is never shown or committed to the repository.</p></span></li>
-                <li><b>3</b><span><strong>Bind one Cloudflare account.</strong><p>The first successful sign-in permanently binds this Brolly deployment to the single account you authorize. It binds the account—not the individual person.</p></span></li>
-                <li><b>4</b><span><strong>Set your limits.</strong><p>Define budgets for discovered products, Workers, and Durable Object namespaces before turning on protection.</p></span></li>
+                <li><b>1</b><span><strong>Deploy to Cloudflare.</strong><p>Choose your Cloudflare account and a name for the Brolly Worker, then click Deploy.</p></span></li>
+                <li><b>2</b><span><strong>Open Brolly and sign in.</strong><p>Visit the private Brolly URL created for you and authorize the Cloudflare account you want it to protect.</p></span></li>
+                <li><b>3</b><span><strong>Review what Brolly found.</strong><p>See your Workers, Durable Object namespaces, individual objects, current usage, and any monitoring gaps.</p></span></li>
+                <li><b>4</b><span><strong>Choose your protection.</strong><p>Set per-resource limits, select observe, approval, or automatic mode, and connect Discord, Slack, or SMS alerts.</p></span></li>
               </ol>
-              <div className="callout orange"><span><Check /><span><strong>That is the entire deployment form</strong><small>No secret generation or copying required. Future deployments preserve the original key. Brolly derives the account during sign-in and defaults to UTC with a 09:00 daily summary.</small></span></span></div>
+              <div className="callout orange"><span><Check /><span><strong>You are ready to protect the account</strong><small>Start in observe mode, confirm the readings and limits, then enable approval or automatic quarantine when you are comfortable.</small></span></span></div>
               <div className="callout"><Info /><p><strong>Who can sign in later?</strong> A Cloudflare member who can authorize Brolly's requested scopes for the bound account may sign in. A user who authorizes a different account is rejected. Changing accounts requires deliberately resetting the installation's D1 binding or deploying a new instance; the latest successful authorization supplies the revocable Cloudflare grant Brolly uses for monitoring and controls.</p></div>
               <div className="callout"><Info /><p><strong>Billing reconciliation is optional.</strong> Fast telemetry works with OAuth. A separate Billing Read token enables authoritative invoice comparison because Cloudflare does not expose that permission through its OAuth scope catalog.</p></div>
             </section>

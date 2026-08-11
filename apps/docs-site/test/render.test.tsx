@@ -8,11 +8,12 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("Cloudflare moves fast");
     expect(html).toContain("Deploy to Cloudflare");
     expect(html).toContain("@standardagents/brolly-runtime");
-    expect(html).toContain("It binds the account—not the individual person");
+    expect(html).toContain("Runs in your Cloudflare account");
     expect(html).toContain("A user who authorizes a different account is rejected");
-    expect(html).toContain("That is the entire deployment form");
-    expect(html).toContain("No secret generation or copying required");
-    expect(html).toContain("sends it directly to Cloudflare as a Worker secret");
+    expect(html).toContain("Open Brolly and sign in");
+    expect(html).toContain("Review what Brolly found");
+    expect(html).toContain("Choose your protection");
+    expect(html).not.toContain("256-bit credential key");
     expect(html).toContain("The bill should not be your first alert");
     expect(html).toContain("Watch every Worker. Limit every object.");
     expect(html).toContain("per individual Durable Object");
