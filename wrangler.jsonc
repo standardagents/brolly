@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "brolly-guard",
+  "main": "worker.js",
+  "no_bundle": true,
+  "find_additional_modules": false,
+  "compatibility_date": "2026-08-08",
+  "assets": {
+    "directory": "assets",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/health"]
+  },
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "brolly-guard",
+      "database_id": "REPLACE_DURING_INSTALL",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "limits": { "cpu_ms": 30000, "subrequests": 200 },
+  "observability": { "enabled": true }
+}

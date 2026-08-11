@@ -1,0 +1,24 @@
+{
+  "name": "brolly-guard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted Cloudflare cost sentinel and emergency control plane",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "npm@11.6.2",
+  "scripts": {
+    "deploy": "npm run db:migrate:remote && node scripts/deploy-guard.mjs wrangler.jsonc",
+    "preview": "wrangler versions upload --config wrangler.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Brolly's private D1 database for policies, encrypted credentials, incidents, and audit history. Cloudflare provisions it automatically."
+      }
+    }
+  },
+  "devDependencies": {
+    "wrangler": "4.120.0"
+  }
+}
