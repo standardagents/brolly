@@ -14,6 +14,10 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("No secret generation or copying required");
     expect(html).toContain("sends it directly to Cloudflare as a Worker secret");
     expect(html).toContain("The bill should not be your first alert");
+    expect(html).toContain("Watch every Worker. Limit every object.");
+    expect(html).toContain("per individual Durable Object");
+    expect(html).toContain("Auto-quarantine runaways");
+    expect(html).toContain("Move away to resume");
     expect(html).toContain("Woke up to a $8,846 Cloudflare bill");
     expect(html).toContain("/x-posts/avatars/justin-schroeder-8846.jpg");
     expect(html).not.toContain("/x-posts/dark/");

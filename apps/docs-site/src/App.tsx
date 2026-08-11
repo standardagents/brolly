@@ -72,18 +72,18 @@ export function App() {
               <StoryGroup duplicate />
             </div>
           </div>
-          <p className="stories-note">Hover or focus to pause · Select a card to view the source on X</p>
+          <p className="stories-note">Hover to pause · Move away to resume · Select a card to view the source on X</p>
         </section>
 
         <section className="section" id="how-it-works">
-          <p className="eyebrow">How it works</p>
-          <h2>Know. Decide. Stop. Recover.</h2>
-          <p className="section-lede">Brolly separates measurement from enforcement, so missing telemetry can never masquerade as a healthy account.</p>
+          <p className="eyebrow">Per-resource protection</p>
+          <h2>Watch every Worker. Limit every object.</h2>
+          <p className="section-lede">Brolly monitors usage per Worker, per Durable Object namespace, and per individual Durable Object—then applies the most specific limit without taking healthy neighbors offline.</p>
           <div className="steps">
-            <Card number="01" icon={<Radar />} title="Measure">Bounded collectors scan fast telemetry every minute and reconcile authoritative billing daily.</Card>
-            <Card number="02" icon={<Alert />} title="Explain">Every incident names the asset, observed window, configured limit, evidence source, and freshness.</Card>
-            <Card number="03" icon={<Shield />} title="Contain">Prepare, approve, and roll back controls. Automatic mode acts only on classified, fuse-ready resources.</Card>
-            <Card number="04" icon={<Refresh />} title="Recover">Resume restores saved state. Quarantine preserves resources, storage, messages, and history.</Card>
+            <Card number="01" icon={<Radar />} title="Monitor individually">See usage and incidents for each Worker, Durable Object namespace, and exact object ID—not just one account-wide total.</Card>
+            <Card number="02" icon={<Alert />} title="Set explicit limits">Give every target warning, critical, and emergency thresholds. Exact-object limits override namespace, Worker, product, and account defaults.</Card>
+            <Card number="03" icon={<Shield />} title="Auto-quarantine runaways">Automatic mode can quarantine a fuse-ready Worker or Durable Object after two fresh emergency breaches, while unrelated resources keep serving.</Card>
+            <Card number="04" icon={<Refresh />} title="Recover without data loss">Resume clears the quarantine through an audited deployment. Brolly preserves the resource, storage, messages, and history throughout.</Card>
           </div>
         </section>
 
