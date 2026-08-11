@@ -18,13 +18,15 @@ describe("Deploy to Cloudflare inputs", () => {
     expect(wrangler.find_additional_modules).toBe(false);
     expect(wrangler.d1_databases).toEqual([expect.objectContaining({ binding: "DB", database_id: "REPLACE_DURING_INSTALL" })]);
     expect(Object.keys(manifest.cloudflare.bindings)).toEqual(["DB"]);
+    expect(manifest.scripts.build).toBe("node scripts/verify-template.mjs");
     expect(manifest.scripts.deploy).toContain("db:migrate:remote");
     expect(manifest.scripts.deploy).toContain("deploy-guard.mjs wrangler.jsonc");
     expect(manifest.scripts.preview).toContain("wrangler versions upload");
     expect(siteSource).toContain("https://github.com/standardagents/brolly/tree/main/deploy");
     expect(readme).toContain("https://github.com/standardagents/brolly/tree/main/deploy");
     expect(templateDeployHelper).toBe(sourceDeployHelper);
-    for (const path of ["deploy/worker.js", "deploy/assets/index.html", "deploy/migrations/0001_initial.sql"]) {
+    expect(await readFile("deploy/scripts/verify-template.mjs", "utf8")).toBe(await readFile("scripts/verify-deploy-template.mjs", "utf8"));
+    for (const path of ["deploy/worker.js", "deploy/assets/index.html", "deploy/migrations/0001_initial.sql", "deploy/scripts/verify-template.mjs"]) {
       expect((await stat(path)).isFile()).toBe(true);
     }
     const clientBundles = (await readdir("deploy/assets/assets"))

@@ -62,7 +62,10 @@ selected account before the Worker becomes available.
 The Deploy to Cloudflare button targets the isolated `deploy/` release
 template, not the multi-application workspace root. Cloudflare copies that
 directory into the new installation repository and requires only the
-automatically provisioned D1 binding. After deploying the Worker, Brolly asks Cloudflare for the names—not
+automatically provisioned D1 binding. Its explicit `npm run build` command
+validates the precompiled Worker, dashboard, migrations, and upload boundary
+without network access; Cloudflare then runs the separate `npm run deploy`
+command. After deploying the Worker, Brolly asks Cloudflare for the names—not
 the values—of its configured secrets. If `BROLLY_CREDENTIAL_KEY` is absent,
 the deploy script generates a 256-bit value and sends it to `wrangler secret
 put` over stdin without printing it. If the listing fails or is malformed, the
