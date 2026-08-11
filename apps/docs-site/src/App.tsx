@@ -129,6 +129,7 @@ export function App() {
               <p className="eyebrow">Precise shutdown</p>
               <h2>A zero-I/O deployment fuse</h2>
               <p>Monitoring works without application changes. Exact Worker and Durable Object quarantine uses the tiny <code>@standardagents/brolly-runtime</code> package. Its hot path only parses a deployment binding and compares IDs—no HTTP, KV, D1, or Durable Object storage operation.</p>
+              <div className="callout orange"><span><Shield /><span><strong>Give the install to your coding agent</strong><small>Brolly's final setup step builds one resource-aware prompt for Claude Code, Codex, Cursor, or another coding agent. It edits and tests your code, then stops before deployment so you can review and verify the result.</small></span></span></div>
               <Code label="Install">pnpm add @standardagents/brolly-runtime</Code>
               <h3>One line in a Durable Object constructor</h3>
               <Code label="TypeScript">{`constructor(ctx: DurableObjectState, env: Env) {\n  super(ctx, env)\n  brollyDurableObject(ctx, env)\n}`}</Code>

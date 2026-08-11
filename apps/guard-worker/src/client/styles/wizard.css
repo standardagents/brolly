@@ -69,6 +69,51 @@
 .object-limit-row input { display: block; width: 100%; height: 37px; border: 1px solid #cfd5dc; border-radius: var(--radius-sm); margin-top: 5px; padding: 0 9px; font-weight: 700; }
 .object-limit-row input:focus { border-color: var(--orange); outline: none; box-shadow: 0 0 0 3px #f6821f1c; }
 
+.runtime-readiness { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.runtime-readiness article { display: flex; align-items: flex-start; gap: 11px; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; background: var(--panel-soft); }
+.runtime-readiness article.ready { border-color: var(--good-line); background: var(--good-bg); }
+.runtime-readiness .icon { width: 20px; height: 20px; margin-top: 1px; color: var(--orange-deep); }
+.runtime-readiness .ready .icon { color: var(--good); }
+.runtime-readiness strong { display: block; font-size: 13.5px; }
+.runtime-readiness p { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+
+.agent-handoff { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--panel); box-shadow: var(--shadow); }
+.agent-handoff > header { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; padding: 18px 20px; background: var(--panel-soft); border-bottom: 1px solid var(--line); }
+.agent-handoff h3 { margin: 0; font-size: 17px; letter-spacing: -.015em; }
+.agent-handoff header p:not(.eyebrow) { margin: 4px 0 0; max-width: 68ch; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.agent-roster { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; flex: none; }
+.agent-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 99px; padding: 4px 8px 4px 5px; background: var(--panel); color: var(--muted); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+.agent-glyph { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: #22262b; color: #fff; }
+.agent-glyph.claude { background: #d97757; }
+.agent-glyph.codex { background: #202123; }
+.agent-glyph.cursor { background: #6b63dc; }
+.agent-glyph.terminal { background: #58616d; }
+.agent-glyph svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.agent-glyph.cursor svg { fill: currentColor; stroke: none; }
+.agent-prompt { margin: 16px; overflow: hidden; border: 1px solid #30363d; border-radius: var(--radius); background: #101317; }
+.agent-prompt-bar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 8px 7px 14px; border-bottom: 1px solid #30363d; color: #c8d0d9; }
+.agent-prompt-bar > span { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 720; letter-spacing: .02em; }
+.agent-prompt-bar > span i { width: 8px; height: 8px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 3px #f6821f26; }
+.agent-prompt-preview { position: relative; max-height: 176px; overflow: hidden; }
+.agent-prompt-preview::after { content: ""; position: absolute; inset: auto 0 0; height: 62px; pointer-events: none; background: linear-gradient(transparent, #101317); }
+.agent-prompt-preview.expanded { max-height: none; }
+.agent-prompt-preview.expanded::after { display: none; }
+.agent-prompt pre { max-height: 420px; margin: 0; border: 0; border-radius: 0; padding: 16px; background: #101317; color: #dfe5eb; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; overflow: auto; }
+.agent-prompt-expand { width: 100%; min-height: 38px; border: 0; border-top: 1px solid #30363d; background: #171b20; color: #aeb8c2; cursor: pointer; font-size: 12px; font-weight: 700; }
+.agent-prompt-expand:hover { color: #fff; background: #1d2228; }
+.copy-agent-prompt { min-height: 34px; }
+.agent-handoff-safety { display: flex; align-items: flex-start; gap: 9px; margin: 0 16px 16px; border: 1px solid var(--good-line); border-radius: var(--radius-sm); padding: 11px 13px; background: var(--good-bg); color: var(--good); }
+.agent-handoff-safety .icon { width: 17px; height: 17px; margin-top: 1px; }
+.agent-handoff-safety p { margin: 0; font-size: 12px; line-height: 1.5; }
+.manual-runtime-guide { margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.manual-runtime-guide > summary { padding: 13px 15px; cursor: pointer; font-size: 13px; font-weight: 700; }
+.manual-runtime-guide > p { margin: -4px 15px 16px; color: var(--muted); font-size: 12.5px; }
+.manual-runtime-guide[open] > summary { border-bottom: 1px solid var(--line-soft); }
+.manual-runtime-guide .runtime-install-guide { padding: 16px !important; }
+.runtime-finish-note { max-width: 42ch; margin: 0 auto; padding: 0 14px; color: var(--muted); font-size: 11.5px; line-height: 1.45; text-align: center; }
+.runtime-finish-note strong { color: var(--ink); }
+.runtime-finish-note.caution { color: var(--warn); }
+
 .runtime-map { margin-top: 24px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .runtime-map > header { padding: 14px 16px; background: var(--panel-soft); border-bottom: 1px solid var(--line-soft); }
 .runtime-map > header strong { font-size: 14px; }
@@ -110,6 +155,15 @@
   .limit-table-row .resource-label { grid-column: 1 / -1; margin-bottom: 5px; }
   .object-limit-row { grid-template-columns: repeat(3, 1fr); gap: 7px; }
   .object-limit-row > div:first-child { grid-column: 1 / -1; }
+  .runtime-readiness { grid-template-columns: 1fr; }
+  .agent-handoff > header { align-items: flex-start; flex-direction: column; }
+  .agent-roster { justify-content: flex-start; }
+  .agent-prompt { margin: 12px; }
+  .agent-prompt-bar { align-items: stretch; flex-direction: column; padding: 10px; }
+  .copy-agent-prompt { width: 100%; }
+  .agent-prompt pre { max-height: 300px; }
+  .agent-handoff-safety { margin: 0 12px 12px; }
   .runtime-map-row, .runtime-map-row.namespace { grid-template-columns: 1fr; gap: 8px; }
-  .setup-actions { gap: 10px; }
+  .setup-actions { gap: 10px; flex-wrap: wrap; }
+  .runtime-finish-note { order: -1; flex-basis: 100%; }
 }

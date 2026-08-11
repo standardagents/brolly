@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { ProtectionExplainer, RuntimeInstallGuide } from "../components/protection";
-import { Brand, ProductIcon } from "../components/ui";
+import { ProtectionExplainer, RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
+import { Brand, Icon, ProductIcon } from "../components/ui";
 import { normalizeNumericDraft } from "../format";
 import type { OnboardingData, Policy, SpendLimits, Threshold } from "../types";
 
@@ -29,6 +29,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const steps = ["Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
+  const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
 
   async function save() {
     setBusy(true);
@@ -155,18 +156,40 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           {step === 4 && (
             <>
               <p className="eyebrow orange">Step 5 of 5</p>
-              <h2>Install the shutdown fuse</h2>
-              <p className="section-copy">Limits can alert without code changes. Precise Worker and Durable Object shutdown requires this tiny package in each Worker you want Brolly to stop.</p>
-              <RuntimeInstallGuide />
+              <h2>Make quarantine available</h2>
+              <p className="section-copy">Brolly can monitor and alert as soon as you finish setup. To let it quarantine a runaway Worker or one Durable Object, your application needs a tiny local runtime guard.</p>
+              <div className="runtime-readiness">
+                <article className="ready">
+                  <Icon name="check" />
+                  <div><strong>Monitoring and alerts are ready</strong><p>No application changes are required. You can safely finish onboarding now.</p></div>
+                </article>
+                <article>
+                  <Icon name="shield" />
+                  <div><strong>Quarantine needs a few code lines</strong><p>Install the runtime in each Worker you want Brolly to stop, then verify its deployment.</p></div>
+                </article>
+              </div>
+              <RuntimeAgentHandoff assets={data.scopedAssets} />
+              <details className="manual-runtime-guide">
+                <summary>Prefer to install it yourself?</summary>
+                <p>Use the manual package, secret, constructor, and Worker-ingress instructions.</p>
+                <RuntimeInstallGuide />
+              </details>
               <RuntimeIntegrationMap assets={data.scopedAssets} values={integrations} onChange={setIntegrations} />
             </>
           )}
           {error && <p className="form-error">{error}</p>}
           <footer className="setup-actions">
             <button type="button" className="button secondary" disabled={step === 0 || busy} onClick={() => setStep(step - 1)}>Back</button>
+            {step === 4 && (
+              <span className={`runtime-finish-note ${policy.mode === "automatic" && installedIntegrations === 0 ? "caution" : ""}`}>
+                {data.scopedAssets.length
+                  ? <><strong>{installedIntegrations} of {data.scopedAssets.length} resources reported installed.</strong> {installedIntegrations ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
+                  : <><strong>No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
+              </span>
+            )}
             {step < 4
               ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>Continue</button>
-              : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save budget policy" : "Activate Brolly"}</button>}
+              : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
       </div>

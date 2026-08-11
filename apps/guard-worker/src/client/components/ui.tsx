@@ -3,7 +3,7 @@ import { PRODUCT_ICON } from "../lib/meta";
 import type { NotificationKind } from "../types";
 
 export type IconName =
-  | "alert" | "arrow" | "bell" | "check" | "chevron" | "clock" | "external" | "gauge" | "info"
+  | "alert" | "arrow" | "bell" | "check" | "chevron" | "clipboard" | "clock" | "external" | "gauge" | "info"
   | "layers" | "logout" | "pulse" | "radar" | "refresh" | "search" | "shield" | "sliders" | "trend" | "wallet" | "x";
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
@@ -12,6 +12,7 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
   bell: <><path d="M6 9.5a6 6 0 1 1 12 0c0 4.6 1.8 5.8 1.8 5.8H4.2S6 14.1 6 9.5Z" /><path d="M10 19.5a2.3 2.3 0 0 0 4 0" /></>,
   check: <path d="m5 12 4 4L19 6" />,
   chevron: <path d="m6 9 6 6 6-6" />,
+  clipboard: <><rect x="6" y="5" width="12" height="16" rx="2" /><path d="M9 5V3h6v2M9 10h6M9 14h6" /></>,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.2 2" /></>,
   external: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6H5V6h6" /></>,
   gauge: <><path d="M4 17a8 8 0 1 1 16 0" /><path d="m12 17 4-6" /></>,

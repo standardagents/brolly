@@ -10,6 +10,26 @@ creates and immediately deploys a Worker version when Brolly changes that
 secret; the installed guards only parse `env.BROLLY_FUSE` and compare IDs
 locally.
 
+## Hand the installation to a coding agent
+
+The last first-run step includes one **Copy agent prompt** action for Claude
+Code, Codex, Cursor, or another repository-aware coding agent. Brolly adds the
+Worker scripts and Durable Object namespaces it discovered to the prompt. The
+agent is told to inspect the project, install the package, protect every entry
+point and object constructor, add focused tests, and report any gaps.
+
+The handoff deliberately authorizes code and local configuration changes only.
+It tells the agent not to deploy, create the secret, change routes, or mutate
+Cloudflare. Review the resulting diff, initialize `BROLLY_FUSE`, deploy through
+your normal release process, then refresh that Worker on Brolly's
+**Configuration** page. A checked installation declaration is not verification;
+only the passive post-deployment checks make quarantine eligible.
+
+You can finish first-run setup without doing this. Monitoring, budgets, and
+notifications continue in alerts-only mode for any resource whose runtime is
+not installed and verified, and the same agent prompt remains available when
+you return to the runtime step.
+
 ## 1. Install the package
 
 Run this in every Worker project that Brolly should be able to stop:

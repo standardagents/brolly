@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { Icon, InfoTip, ProductIcon } from "./ui";
-import type { Policy } from "../types";
+import type { OnboardingData, Policy } from "../types";
 
 /**
  * Shared, exact language about what shutdown levers exist. Brolly cannot
@@ -185,6 +186,114 @@ return env.ROOMS.get(id).fetch(request)`}</code></pre>
         <strong>Runtime cost:</strong> the checks only parse an environment binding and compare IDs. They do not call Brolly, Cloudflare APIs, KV, D1, or Durable Object storage.
       </div>
     </div>
+  );
+}
+
+export function runtimeAgentPrompt(assets: OnboardingData["scopedAssets"]): string {
+  const workers = assets.filter(asset => asset.family === "workers").map(asset => asset.name);
+  const namespaces = assets.filter(asset => asset.family === "durable_objects").map(asset => {
+    const owner = asset.tags.cloudflareWorkerScript;
+    return owner ? `${asset.name} (owning Worker: ${owner})` : `${asset.name} (confirm its owning Worker)`;
+  });
+  const scope = [
+    workers.length ? `Discovered Worker scripts: ${workers.join(", ")}.` : "Discover every Worker entry point in this repository.",
+    namespaces.length ? `Discovered Durable Object namespaces: ${namespaces.join(", ")}.` : "Discover every Durable Object class and namespace in this repository.",
+  ].join("\n");
+
+  return `Add Brolly's reversible runtime quarantine protection to this Cloudflare Worker project.
+
+${scope}
+
+Requirements:
+1. Inspect the repository first. Use its existing package manager, Worker entry points, Durable Object classes, Wrangler configuration, tests, and formatting conventions.
+2. Install @standardagents/brolly-runtime.
+3. In every protected Durable Object constructor, import brollyDurableObject and call brollyDurableObject(ctx, env) immediately after super(ctx, env).
+4. Call brollyWorker(env) before application work in fetch, scheduled, queue, and email entry points. Before waking a known Durable Object, also call brollyWorker(env, { durableObjectId: id.toString() }).
+5. At HTTP ingress, catch BrollyQuarantinedError and return a clear 503 response with Retry-After and X-Brolly-Quarantined headers. Do not swallow unrelated errors.
+6. Declare BROLLY_FUSE as a required Worker secret. Never hardcode a fuse value or put one in source control.
+7. Add or update focused tests for the protected entry points and run the relevant checks.
+
+Safety boundaries:
+- Make code and local configuration changes only. Do not deploy, set secrets, change routes, or mutate anything in Cloudflare.
+- The runtime checks must remain synchronous and local: no HTTP, service binding, KV, D1, Durable Object storage, or other external operation.
+- Preserve existing behavior whenever the fuse is absent, malformed, or does not target this Worker/object.
+
+When finished, report the files changed, every protected Worker entry point and Durable Object class, any unprotected gaps, the checks you ran, and the exact manual command I should run to initialize BROLLY_FUSE. Remind me to deploy, return to Brolly's Configuration page, and refresh the affected Worker before enabling automatic quarantine. Do not claim quarantine is configured until that verification passes.`;
+}
+
+/** A safe code-agent handoff for the optional runtime fuse installation. */
+export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scopedAssets"] }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const prompt = runtimeAgentPrompt(assets);
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(prompt);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = prompt;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2_000);
+  }
+
+  return (
+    <section className="agent-handoff" aria-labelledby="agent-handoff-title">
+      <header>
+        <div>
+          <p className="eyebrow orange">Recommended</p>
+          <h3 id="agent-handoff-title">Hand this to your coding agent</h3>
+          <p>The prompt finds your Worker entry points and Durable Object classes, installs the two local guards, adds tests, and stops before making any Cloudflare changes.</p>
+        </div>
+        <div className="agent-roster" aria-label="Compatible coding agents">
+          <AgentChip kind="claude" label="Claude Code" />
+          <AgentChip kind="codex" label="Codex" />
+          <AgentChip kind="cursor" label="Cursor" />
+          <AgentChip kind="terminal" label="Other agent" />
+        </div>
+      </header>
+      <div className="agent-prompt">
+        <div className="agent-prompt-bar">
+          <span><i aria-hidden="true" />Brolly runtime install task</span>
+          <button type="button" className="button primary copy-agent-prompt" onClick={() => void copyPrompt()}>
+            <Icon name={copied ? "check" : "clipboard"} />
+            {copied ? "Copied" : "Copy agent prompt"}
+          </button>
+        </div>
+        <div className={`agent-prompt-preview ${expanded ? "expanded" : ""}`}>
+          <pre tabIndex={0} role="region" aria-label="Coding agent prompt"><code>{prompt}</code></pre>
+        </div>
+        <button type="button" className="agent-prompt-expand" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Collapse prompt" : "Show full prompt"}
+        </button>
+      </div>
+      <div className="agent-handoff-safety">
+        <Icon name="shield" />
+        <p><strong>Safe handoff:</strong> the agent edits and tests your repository, but the prompt forbids deployment or Cloudflare mutations. You review the diff and initialize the secret yourself.</p>
+      </div>
+      <span className="visually-hidden" aria-live="polite">{copied ? "Brolly runtime installation prompt copied" : ""}</span>
+    </section>
+  );
+}
+
+function AgentChip({ kind, label }: { kind: "claude" | "codex" | "cursor" | "terminal"; label: string }) {
+  return (
+    <span className="agent-chip">
+      <span className={`agent-glyph ${kind}`} aria-hidden="true">
+        {kind === "claude" && <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>}
+        {kind === "codex" && <svg viewBox="0 0 24 24"><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><circle cx="12" cy="12" r="3.3" /></svg>}
+        {kind === "cursor" && <svg viewBox="0 0 24 24"><path d="m6 3 12 10-6.2.8L9 20 6 3Z" /></svg>}
+        {kind === "terminal" && <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>}
+      </span>
+      {label}
+    </span>
   );
 }
 
