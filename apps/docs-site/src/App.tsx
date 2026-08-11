@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import billingStories from "../../../docs/cloudflare-x-post-images/posts.json";
 
-const DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly";
+const DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/main/deploy";
 const GITHUB_URL = "https://github.com/standardagents/brolly";
 const SERVICES = [
   ["durable-objects", "Durable Objects"],

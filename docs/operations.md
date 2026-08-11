@@ -59,8 +59,10 @@ changing accounts requires deliberately resetting the D1 binding and stored
 credentials or deploying a new Brolly instance. The CLI installer pre-binds its
 selected account before the Worker becomes available.
 
-The Deploy to Cloudflare form requires only the automatically provisioned D1
-binding. After deploying the Worker, Brolly asks Cloudflare for the names—not
+The Deploy to Cloudflare button targets the isolated `deploy/` release
+template, not the multi-application workspace root. Cloudflare copies that
+directory into the new installation repository and requires only the
+automatically provisioned D1 binding. After deploying the Worker, Brolly asks Cloudflare for the names—not
 the values—of its configured secrets. If `BROLLY_CREDENTIAL_KEY` is absent,
 the deploy script generates a 256-bit value and sends it to `wrangler secret
 put` over stdin without printing it. If the listing fails or is malformed, the

@@ -37,6 +37,11 @@ jobs:
           pnpm --filter @standardagents/brolly-docs typecheck
           pnpm build:docs
 
+      - name: Verify isolated Deploy Button template
+        run: |
+          pnpm build:deploy-template
+          git diff --exit-code -- deploy
+
       - name: Deploy to Cloudflare Workers
         run: pnpm --filter @standardagents/brolly-docs deploy:ci
         env:

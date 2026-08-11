@@ -20,6 +20,7 @@ pnpm typecheck
 pnpm test
 pnpm dev
 pnpm build:docs
+pnpm build:deploy-template
 pnpm deploy:docs
 pnpm release:runtime patch --dry-run --yes
 ```
@@ -28,3 +29,10 @@ pnpm release:runtime patch --dry-run --yes
 `brolly.standardagents.ai`. It is prerendered to static HTML and deployed by
 `.github/workflows/deploy-docs.yml` on pushes to `main`. It is intentionally
 not part of the customer Deploy to Cloudflare build in `pnpm build`.
+
+`deploy/` is the fully isolated, generated release template used by the Deploy
+to Cloudflare button. Cloudflare does not support this repository's
+multi-Worker workspace as one template target. Run `pnpm build:deploy-template`
+after guard Worker changes and commit the resulting Worker, assets, migrations,
+and deploy helper. The dashboard and README must link to the `deploy/`
+subdirectory URL, not the repository root.

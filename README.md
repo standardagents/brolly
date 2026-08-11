@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly"><img src="https://deploy.workers.cloudflare.com/button" height="32" alt="Deploy to Cloudflare"></a>
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/main/deploy"><img src="https://deploy.workers.cloudflare.com/button" height="32" alt="Deploy to Cloudflare"></a>
   &nbsp;
   <a href="https://brolly.standardagents.ai"><img src="https://img.shields.io/badge/Read_the_docs-202124?style=for-the-badge&logo=readthedocs&logoColor=white" height="32" alt="Read the docs"></a>
 </p>
@@ -68,6 +68,11 @@ not included in this open-source package or customer deployments.
 For local development, copy `dev.vars.example` to `.dev.vars` and generate the
 local-only credential key described in that file. Automatic provisioning is for
 remote deployments and never writes production secrets into the repository.
+
+The button targets the self-contained `deploy/` release template rather than
+the workspace root. Cloudflare treats that directory as the root of the new
+installation repository, so the generated repository contains the Worker,
+dashboard assets, migrations, and deploy scripts required by Workers Builds.
 
 Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
 `BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or

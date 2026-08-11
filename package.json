@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "build": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && pnpm --filter @standardagents/brolly build",
+    "build:deploy-template": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && node scripts/sync-deploy-template.mjs",
     "build:docs": "pnpm --filter @standardagents/brolly-docs build",
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
     "deploy:docs": "pnpm build:docs && pnpm --filter @standardagents/brolly-docs deploy:built",
@@ -15,11 +16,6 @@
     "test": "vitest run",
     "typecheck": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm -r typecheck",
     "verify:runtime-release": "pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-runtime typecheck && pnpm exec vitest run packages/runtime/test/runtime.test.ts"
-  },
-  "cloudflare": {
-    "bindings": {
-      "DB": { "description": "Brolly's D1 database. Cloudflare will provision it automatically." }
-    }
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260808.1",
