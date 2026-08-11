@@ -24,7 +24,7 @@ navigation requests use the static SPA fallback. The npm installer packages
 both the Worker bundle and the client asset directory.
 
 Browser login uses Brolly's publisher-owned public OAuth client and one fixed
-redirect URI at `brolly-login.formkit.workers.dev`. The private, separately
+redirect URI at `brolly-login.standardagents.ai`. The private, separately
 deployed `brolly-login` Worker contains the stateless relay; relay code and
 infrastructure are not shipped in this open-source repository or customer
 deployments. Each login state carries the requesting installation's public

@@ -59,7 +59,7 @@ describe("Cloudflare OAuth authentication", () => {
     const response = await authRoute(new Request("https://guard.example/api/auth/login"), env);
     const authorization = new URL(response!.headers.get("location")!);
     expect(authorization.searchParams.get("client_id")).toBe("5690968d2377c6200202668946420dec");
-    expect(authorization.searchParams.get("redirect_uri")).toBe("https://brolly-login.formkit.workers.dev/oauth/callback");
+    expect(authorization.searchParams.get("redirect_uri")).toBe("https://brolly-login.standardagents.ai/oauth/callback");
   });
 
   it("uses an HttpOnly session and rejects cross-origin mutations", async () => {

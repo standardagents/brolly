@@ -19,7 +19,7 @@ export function createWorkerConfig(input: { accountId: string; clientId: string;
       BROLLY_TIMEZONE: input.timezone ?? "UTC",
       BROLLY_DAILY_SUMMARY_HOUR: input.summaryHour ?? "9",
       BROLLY_OAUTH_CLIENT_ID: input.clientId,
-      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-login.formkit.workers.dev/oauth/callback",
+      BROLLY_OAUTH_REDIRECT_URI: process.env.BROLLY_OAUTH_REDIRECT_URI ?? "https://brolly-login.standardagents.ai/oauth/callback",
       BROLLY_SELF_WORKER_NAME: "brolly-guard",
     },
     observability: { enabled: true },

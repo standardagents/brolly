@@ -60,7 +60,7 @@ sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 databas
 and asks for limits for every discovered product, Worker, and namespace.
 
 Browser sign-in briefly passes through Brolly's separately operated, stateless
-OAuth relay at `brolly-login.formkit.workers.dev`. The relay verifies the
+OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the
 installation's one-time state and returns only the short-lived authorization
 code. It never receives an access or refresh token, and its implementation is
 not included in this open-source package or customer deployments.
