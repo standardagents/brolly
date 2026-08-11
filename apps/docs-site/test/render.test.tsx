@@ -13,6 +13,11 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("That is the entire deployment form");
     expect(html).toContain("No secret generation or copying required");
     expect(html).toContain("sends it directly to Cloudflare as a Worker secret");
+    expect(html).toContain("The bill should not be your first alert");
+    expect(html).toContain("/x-posts/dark/01-justin-schroeder-8846-dark.png");
+    expect(html).toContain("/x-posts/light/02-gabe-ragland-16000.png");
+    expect(html.match(/class="story-card /g)).toHaveLength(14);
+    expect(html).toContain('aria-hidden="true"');
     expect(html).not.toContain("/api/auth/login");
     expect(html).not.toContain("<script");
   });

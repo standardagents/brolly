@@ -5,3 +5,4 @@ dist/
 coverage/
 packages/cli/worker/
 *.log
+.DS_Store

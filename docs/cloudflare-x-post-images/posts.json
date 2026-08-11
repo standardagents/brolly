@@ -1,0 +1,79 @@
+[
+  {
+    "slug": "justin-schroeder-8846",
+    "name": "Justin Schroeder",
+    "handle": "@jpschroeder",
+    "avatar": "https://pbs.twimg.com/profile_images/1532735511953035270/1AwnrbP7_normal.jpg",
+    "date": "1:38 PM · Aug 8, 2026",
+    "badge": "$8,846",
+    "category": "DURABLE OBJECT LOOP",
+    "text": "Woke up to a $8,846 Cloudflare bill.\n\n2 Durable Objects deep in our stack infinite looped.\n\nThere is no way to set spending limits in Cloudflare.\n\nWe found out by getting the bill. What if it had been...10 Durable Objects? 100?",
+    "url": "https://x.com/jpschroeder/status/2086144942657712500"
+  },
+  {
+    "slug": "gabe-ragland-16000",
+    "name": "Gabe Ragland",
+    "handle": "@gabe_ragland",
+    "avatar": "https://pbs.twimg.com/profile_images/1511834464980127745/0ph-teWq_normal.jpg",
+    "date": "3:04 PM · Aug 8, 2026",
+    "badge": "$16,000",
+    "category": "INFINITE LOOP",
+    "text": "Oh man, I feel you. Got hit with a 16k bill due to an infinite loop and could not get any kind of response from Cloudflare support :(\n",
+    "url": "https://x.com/gabe_ragland/status/2086166786148594148"
+  },
+  {
+    "slug": "steven-menke-1700",
+    "name": "Steven Menke",
+    "handle": "@Galorious_",
+    "avatar": "https://pbs.twimg.com/profile_images/1845480534241165325/JpW5J4TC_normal.jpg",
+    "date": "Aug 9, 2026",
+    "badge": "$1,700",
+    "category": "DURABLE OBJECT / SDK BUG",
+    "text": "Same. $1.7K bill. Also DO’s hitting an Agents SDK bug, Just zero response on all channels..",
+    "url": "https://x.com/Galorious_/status/2086433957789270223"
+  },
+  {
+    "slug": "will-moss-20-trillion-reads",
+    "name": "will moss",
+    "handle": "@itswillmoss",
+    "avatar": "https://pbs.twimg.com/profile_images/1423069671973064704/Mmyor_X9_normal.jpg",
+    "date": "11:19 AM · Apr 16, 2026",
+    "badge": "20.2T READS",
+    "category": "DURABLE OBJECT ALARM LOOP",
+    "text": "I've been paying close attention to all the awesome things that @Cloudflare has rolled out. I've added Dynamic Workers, Browser Rendering, Agents SDK in the start up I've been trying to build. But I regret it so much after I got on an invoice for 20,213,871,155,804 Durable Object reads.",
+    "url": "https://x.com/itswillmoss/status/2044797874500681751"
+  },
+  {
+    "slug": "dan-anderson-22000",
+    "name": "Dan Anderson",
+    "handle": "@droplister",
+    "avatar": "https://pbs.twimg.com/profile_images/1484303627669979141/xbMp4wwb_normal.jpg",
+    "date": "3:20 PM · Aug 5, 2026",
+    "badge": "$22,000",
+    "category": "BILLIONS OF WRITES",
+    "text": "I was using @claudeai to save money on servers and somehow instead I got a @Cloudflare bill for $22k for doing billions of writes. I don't know what to do now.\n\nFor comparison, I was paying @digitalocean $200/m.",
+    "url": "https://x.com/droplister/status/2085083559736295485"
+  },
+  {
+    "slug": "kill-switch-91316",
+    "name": "Kill Switch",
+    "handle": "@KillSwitchCloud",
+    "avatar": "https://pbs.twimg.com/profile_images/2060283684163575808/-gIApvd4_normal.png",
+    "date": "8:15 AM · Jun 4, 2026",
+    "badge": "$91,316",
+    "category": "RUNAWAY DURABLE OBJECTS",
+    "text": "I opened a Cloudflare bill and it said $91,316.\n\nI was side-vibing an RTS game when Claude Code wired every unit to its own Durable Object — and we never taught them to die.\n\nBuilt Kill Switch after this — a hard ceiling when the cloud won't give you one.",
+    "url": "https://x.com/KillSwitchCloud/status/2062508433992229075"
+  },
+  {
+    "slug": "andras-bacsai-36000",
+    "name": "Andras Bacsai",
+    "handle": "@heyandras",
+    "avatar": "https://pbs.twimg.com/profile_images/2049068753334452224/vSOyoJ6X_normal.jpg",
+    "date": "2:55 PM · May 2, 2026",
+    "badge": "$36,000",
+    "category": "SERVERLESS RUNAWAY BILL",
+    "text": "New serverlesshorror story:\n\n$36k bill on Cloudflare.",
+    "url": "https://x.com/heyandras/status/2050650346868051995"
+  }
+]

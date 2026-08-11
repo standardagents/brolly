@@ -12,6 +12,15 @@ const SERVICES = [
   ["workers-ai", "Workers AI"],
   ["ai-gateway", "AI Gateway"],
 ] as const;
+const BILLING_STORIES = [
+  { name: "Justin Schroeder", badge: "$8,846", file: "01-justin-schroeder-8846", url: "https://x.com/jpschroeder/status/2086144942657712500" },
+  { name: "Gabe Ragland", badge: "$16,000", file: "02-gabe-ragland-16000", url: "https://x.com/gabe_ragland/status/2086166786148594148" },
+  { name: "Steven Menke", badge: "$1,700", file: "03-steven-menke-1700", url: "https://x.com/Galorious_/status/2086433957789270223" },
+  { name: "will moss", badge: "20.2 trillion reads", file: "04-will-moss-20-trillion-reads", url: "https://x.com/itswillmoss/status/2044797874500681751" },
+  { name: "Dan Anderson", badge: "$22,000", file: "05-dan-anderson-22000", url: "https://x.com/droplister/status/2085083559736295485" },
+  { name: "Kill Switch", badge: "$91,316", file: "06-kill-switch-91316", url: "https://x.com/KillSwitchCloud/status/2062508433992229075" },
+  { name: "Andras Bacsai", badge: "$36,000", file: "07-andras-bacsai-36000", url: "https://x.com/heyandras/status/2050650346868051995" },
+] as const;
 
 export function App() {
   return (
@@ -57,6 +66,21 @@ export function App() {
         <section className="coverage" aria-label="Cloudflare product coverage">
           <p>Every billable Cloudflare service. One safety net.</p>
           <div>{SERVICES.map(([icon, label]) => <span key={icon}><img src={`/cloudflare-icons/${icon}.svg`} alt="" /><b>{label}</b></span>)}</div>
+        </section>
+
+        <section className="stories" aria-labelledby="stories-title">
+          <div className="stories-copy">
+            <p className="eyebrow">Not hypothetical</p>
+            <h2 id="stories-title">The bill should not be your first alert.</h2>
+            <p>Runaway loops and unbounded usage have turned small mistakes into five-figure Cloudflare invoices. Brolly gives every account an early warning and a circuit breaker.</p>
+          </div>
+          <div className="story-marquee">
+            <div className="story-track">
+              <StoryGroup />
+              <StoryGroup duplicate />
+            </div>
+          </div>
+          <p className="stories-note">Hover or focus to pause · Select a card to view the source on X</p>
         </section>
 
         <section className="section" id="how-it-works">
@@ -152,6 +176,38 @@ export function App() {
       </main>
 
       <footer><a className="brand" href="#top"><Umbrella /><strong>Brolly</strong></a><span>Cloudflare cost guardrails and reversible emergency controls.</span><nav><a href={GITHUB_URL}>GitHub</a><a href="https://www.npmjs.com/package/@standardagents/brolly-runtime">Runtime package</a><a href={DEPLOY_URL}>Deploy</a></nav></footer>
+    </div>
+  );
+}
+
+function StoryGroup({ duplicate = false }: { duplicate?: boolean }) {
+  return (
+    <div className="story-group" aria-hidden={duplicate || undefined}>
+      {BILLING_STORIES.map((story, index) => {
+        const light = index % 2 === 1;
+        const suffix = light ? ".png" : "-dark.png";
+        const mode = light ? "light" : "dark";
+        return (
+          <a
+            className={`story-card ${mode}`}
+            href={story.url}
+            target="_blank"
+            rel="noreferrer"
+            tabIndex={duplicate ? -1 : undefined}
+            aria-label={`${story.name}: ${story.badge} Cloudflare usage incident. View source on X.`}
+            key={`${story.file}-${mode}`}
+          >
+            <img
+              src={`/x-posts/${mode}/${story.file}${suffix}`}
+              alt={`${story.name} describing a ${story.badge} Cloudflare usage incident`}
+              width="1200"
+              height="675"
+              loading="lazy"
+              decoding="async"
+            />
+          </a>
+        );
+      })}
     </div>
   );
 }
