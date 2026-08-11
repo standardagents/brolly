@@ -11,7 +11,8 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("It binds the account—not the individual person");
     expect(html).toContain("A user who authorizes a different account is rejected");
     expect(html).toContain("That is the entire deployment form");
-    expect(html).toContain("openssl rand -base64 32");
+    expect(html).toContain("No secret generation or copying required");
+    expect(html).toContain("sends it directly to Cloudflare as a Worker secret");
     expect(html).not.toContain("/api/auth/login");
     expect(html).not.toContain("<script");
   });

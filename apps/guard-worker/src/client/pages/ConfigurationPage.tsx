@@ -377,7 +377,7 @@ function NotificationStatusSection({ token, onNavigate }: { token: string; onNav
         <div className="inline-note warning">
           <Icon name="bell" />
           <span>
-            No notification destinations are configured{credentialStorageReady ? "" : " and credential encryption (BROLLY_CREDENTIAL_KEY) is missing"}.
+            No notification destinations are configured{credentialStorageReady ? "" : " and automatic credential-key setup did not complete"}.
             Without one, incidents are only visible in this dashboard and the CLI.
           </span>
         </div>

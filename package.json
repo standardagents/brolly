@@ -18,8 +18,7 @@
   },
   "cloudflare": {
     "bindings": {
-      "DB": { "description": "Brolly's D1 database. Cloudflare will provision it automatically." },
-      "BROLLY_CREDENTIAL_KEY": { "description": "The only required secret. Encrypts credentials at rest; generate one with `openssl rand -base64 32`." }
+      "DB": { "description": "Brolly's D1 database. Cloudflare will provision it automatically." }
     }
   },
   "devDependencies": {

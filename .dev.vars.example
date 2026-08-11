@@ -1,3 +1,0 @@
-# Required. Encrypts OAuth and notification credentials stored in Brolly's D1 database.
-# Generate with: openssl rand -base64 32
-BROLLY_CREDENTIAL_KEY=

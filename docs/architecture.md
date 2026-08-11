@@ -4,6 +4,15 @@ Brolly runs inside the protected Cloudflare account so it remains available duri
 
 The control plane consists of `brolly-guard`, its D1 database, OAuth credentials, and at least one notification channel. Those assets are always allowlisted. Browser sessions use a hashed, 12-hour, HttpOnly cookie; OAuth grants and notifier credentials are AES-GCM encrypted before entering D1. A local CLI bearer token remains an optional break-glass path if the dashboard is unavailable.
 
+The remote deployment owns the AES-GCM key lifecycle. It deploys the Worker
+without replacing existing secrets, lists secret names, and generates
+`BROLLY_CREDENTIAL_KEY` only after Cloudflare successfully confirms the name is
+absent. The 256-bit value travels to `wrangler secret put` over stdin and is
+never printed or committed. Listing and parse failures stop the deployment;
+they never trigger key creation. Subsequent deployments preserve the original
+key because silently rotating it would make stored OAuth and notifier
+credentials unreadable.
+
 The `apps/guard-worker` project is a full-stack Cloudflare Vite application.
 Vite 8 builds a React client and the Worker in separate environments;
 `@cloudflare/vite-plugin` emits one deployable Worker configuration with SPA

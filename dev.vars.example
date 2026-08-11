@@ -1,0 +1,3 @@
+# Local development only. Production deployments generate and preserve this Worker secret automatically.
+# Generate a local value with: openssl rand -base64 32
+BROLLY_CREDENTIAL_KEY=

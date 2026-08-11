@@ -10,7 +10,7 @@ export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { 
         <p className="auth-copy">Use Cloudflare to prove who you are and choose the one account this Brolly installation should protect.</p>
         {error && <p className="form-error">{error}</p>}
         {!oauthConfigured && <p className="form-error">This Brolly release is missing its publisher OAuth client. The installer does not need to create one.</p>}
-        {!credentialStorageReady && <p className="form-error">Credential encryption is missing. Add <code>BROLLY_CREDENTIAL_KEY</code> as a Worker secret before signing in.</p>}
+        {!credentialStorageReady && <p className="form-error">Automatic credential-key setup did not complete. Redeploy Brolly, or add <code>BROLLY_CREDENTIAL_KEY</code> as a Worker secret, before signing in.</p>}
         {oauthConfigured && credentialStorageReady
           ? <a className="button primary full" href="/api/auth/login">Continue with Cloudflare</a>
           : <button className="button primary full" type="button" disabled>Continue with Cloudflare</button>}
