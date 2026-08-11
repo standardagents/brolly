@@ -44,8 +44,12 @@ inside your Cloudflare account.
 
 Use **Deploy to Cloudflare** above. The Cloudflare flow provisions Brolly's D1 database and deploys the dashboard
 and guard Worker. On first visit, **Continue with Cloudflare** authorizes exactly
-one account; Brolly encrypts that revocable OAuth grant in your own D1 database
-and then asks for limits for every discovered product, Worker, and namespace.
+one account. The first successful sign-in binds that Cloudflare account to the
+installation—not the individual user—until its D1 binding is deliberately reset
+or the instance is replaced. Later sign-ins must authorize the same account; any
+Cloudflare member able to grant Brolly's requested scopes for that account may
+sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
+and asks for limits for every discovered product, Worker, and namespace.
 
 ## Precise shutdown
 

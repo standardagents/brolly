@@ -8,6 +8,8 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("Cloudflare moves fast");
     expect(html).toContain("Deploy to Cloudflare");
     expect(html).toContain("@standardagents/brolly-runtime");
+    expect(html).toContain("It binds the account—not the individual person");
+    expect(html).toContain("A user who authorizes a different account is rejected");
     expect(html).not.toContain("/api/auth/login");
     expect(html).not.toContain("<script");
   });

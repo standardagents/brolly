@@ -20,6 +20,18 @@ ten-minute expiry, and exact origin matching prevent another installation from
 claiming the code. The relay route must remain Worker-first so the SPA fallback
 can never consume an OAuth callback.
 
+An unbound deployment accepts exactly one account in its first successful
+browser authorization and persists that account ID in D1. This binds the
+Cloudflare account, not the person: later sign-ins are accepted only when their
+OAuth grant resolves to that same single account, and every other account is
+rejected. Any account member able to authorize Brolly's requested scopes may
+therefore operate the instance. The newest successful authorization replaces
+the encrypted operational OAuth grant used for monitoring and controls. There
+is no dashboard account-switch action; changing the protected account requires
+an intentional D1 reset or a replacement deployment. The CLI installer avoids
+the first-browser claim window by persisting the selected account before it
+deploys the guard Worker.
+
 Fast telemetry is operational evidence, not invoice truth. The Durable Object
 collector covers the complete current pricing surface: per-object requests,
 compute GB-seconds, incoming WebSocket messages, SQLite rows read/written, and

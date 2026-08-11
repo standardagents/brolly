@@ -89,8 +89,10 @@ export function App() {
               <ol className="numbered">
                 <li><b>1</b><span><strong>Create your deployment.</strong><p>Choose a Git account, give the Worker a name, and let Cloudflare provision its private D1 database.</p></span></li>
                 <li><b>2</b><span><strong>Add the encryption secret.</strong><p><code>BROLLY_CREDENTIAL_KEY</code> protects OAuth and notification credentials stored in your D1 database.</p></span></li>
-                <li><b>3</b><span><strong>Sign in with Cloudflare.</strong><p>Authorize exactly one account, review the requested scopes, and define limits for discovered products, Workers, and namespaces.</p></span></li>
+                <li><b>3</b><span><strong>Bind one Cloudflare account.</strong><p>The first successful sign-in permanently binds this Brolly deployment to the single account you authorize. It binds the account—not the individual person.</p></span></li>
+                <li><b>4</b><span><strong>Set your limits.</strong><p>Define budgets for discovered products, Workers, and Durable Object namespaces before turning on protection.</p></span></li>
               </ol>
+              <div className="callout"><Info /><p><strong>Who can sign in later?</strong> A Cloudflare member who can authorize Brolly's requested scopes for the bound account may sign in. A user who authorizes a different account is rejected. Changing accounts requires deliberately resetting the installation's D1 binding or deploying a new instance; the latest successful authorization supplies the revocable Cloudflare grant Brolly uses for monitoring and controls.</p></div>
               <div className="callout"><Info /><p><strong>Billing reconciliation is optional.</strong> Fast telemetry works with OAuth. A separate Billing Read token enables authoritative invoice comparison because Cloudflare does not expose that permission through its OAuth scope catalog.</p></div>
             </section>
 

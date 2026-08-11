@@ -49,6 +49,16 @@ browser field or mutable dashboard setting. Authentication or routing failures
 are shown as **Cloudflare connection needs attention** rather than raw provider
 JSON. Do not treat either state as active protection.
 
+For a Deploy to Cloudflare installation, the first successful browser sign-in
+binds the selected Cloudflare account ID in D1. The binding belongs to the
+account, not the person: later operators may sign in only by authorizing that
+same account, and any member able to grant the requested scopes is treated as
+an administrator. Each successful sign-in refreshes the encrypted OAuth grant
+used by the monitor and control plane. There is no routine account switch;
+changing accounts requires deliberately resetting the D1 binding and stored
+credentials or deploying a new Brolly instance. The CLI installer pre-binds its
+selected account before the Worker becomes available.
+
 On first authenticated login, complete all four budget steps. Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported
@@ -58,7 +68,8 @@ same wizard with **Budgets** in the dashboard header.
 
 Before enabling automatic controls:
 
-1. Complete OAuth installation and select exactly one account.
+1. Complete OAuth installation and select exactly one account. Confirm that the
+   first sign-in binds the intended account before sharing the instance URL.
 2. Configure a manual Billing Read token if invoice reconciliation is required.
 3. Configure at least two notification paths, ideally one webhook and one SMS/email path.
 4. Classify assets and verify the Brolly control-plane allowlist.
