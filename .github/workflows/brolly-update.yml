@@ -48,7 +48,7 @@ jobs:
           DISPLAY: ${{ steps.release.outputs.display }}
           BRANCH: ${{ steps.release.outputs.branch }}
         run: |
-          git add .github/workflows/brolly-update.yml LICENSE README.md assets brolly-release.json migrations package.json package-lock.json scripts worker.js
+          git add LICENSE README.md assets brolly-release.json migrations package.json package-lock.json scripts worker.js
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "release": "5e51f9529b4baba5e4d88a6a7bec39a60d5df211",
-  "displayVersion": "2026.08.12-5e51f95",
-  "publishedAt": "2026-08-12T19:38:56.000Z",
-  "notesUrl": "https://github.com/standardagents/brolly/commit/5e51f9529b4baba5e4d88a6a7bec39a60d5df211",
+  "release": "7bdf44fb60528f95316c0f287d451573123507ed",
+  "displayVersion": "2026.08.12-7bdf44f",
+  "publishedAt": "2026-08-12T19:59:25.000Z",
+  "notesUrl": "https://github.com/standardagents/brolly/commit/7bdf44fb60528f95316c0f287d451573123507ed",
   "workflowFile": "brolly-update.yml",
   "configVersion": 1
 }
