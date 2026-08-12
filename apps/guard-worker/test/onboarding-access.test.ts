@@ -15,12 +15,19 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("billingNeedsToken || billingSuccess");
   });
 
-  it("provides a copyable least-privilege Billing Read recipe", () => {
-    expect(source).toContain("Least-privilege token recipe");
+  it("provides a simple, account-specific Billing Read token handoff", () => {
+    expect(source).toContain("Copy Brolly&apos;s token settings");
     expect(source).toContain("Account → Billing → Read");
     expect(source).toContain("Zone permissions: none");
     expect(source).toContain("Copy recipe");
-    expect(source).toContain("Verify and save token");
+    expect(source).toContain("Open this account&apos;s API Tokens page");
+    expect(source).toContain("dash.cloudflare.com/${encodeURIComponent(accountId)}/api-tokens");
+    expect(source).toContain("Create Custom Token");
+    expect(source).toContain("Continue to summary");
+    expect(source).toContain("Verify and save");
     expect(source).toContain("Billing access failed.");
+    expect(source).toContain("Add Billing Read below");
+    expect(source).toContain("Reconnect Cloudflare");
+    expect(source).toContain("No action needed.");
   });
 });

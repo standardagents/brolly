@@ -132,14 +132,26 @@ It starts with one bounded read-only check and does not apply suggested limits.
 Results are shown before any credential form.
 OAuth reconnection is revealed only for an Analytics permission problem;
 Billing token instructions are revealed only when Billing Read is unavailable.
-The copyable recipe specifies Account → Billing → Read for only the connected
-account, with no zone permissions. Because Billing Read is an
-account API-token permission rather than a Brolly OAuth scope, the same screen
-can verify and save a narrowly scoped Billing Read token. That token is
+Each result says what Brolly can monitor, what remains missing, and the next
+action. A partial Worker result is not presented as a permission failure when
+Cloudflare simply does not expose a per-Worker billing breakdown; the screen
+directs the operator to add Billing Read for account totals and leave additional
+headroom in per-Worker limits. Connected rows explicitly require no action.
+The Billing Read handoff is three explicit actions: copy the token settings,
+open the already-bound account's Cloudflare API Tokens page, then paste and
+verify the token Cloudflare creates. The recipe specifies Account → Billing →
+Read for only the connected account, with no zone permissions. Because Billing
+Read is an account API-token permission rather than a Brolly OAuth scope, the
+same screen verifies the token against Cloudflare and only then stores it
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the
 request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
 Worker secret, remains the higher-precedence operator-managed alternative.
 The next account-budget screen can apply the cached historical suggestions.
+Brolly OAuth access is renewable: the publisher client enables refresh tokens,
+the authorization request includes `offline_access`, and each installation
+refreshes its encrypted grant five minutes before expiry. An installation that
+was authorized before renewable access was enabled must use **Reconnect
+Cloudflare** once; subsequent access-token rotation is automatic.
 Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported

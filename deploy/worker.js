@@ -997,7 +997,7 @@ var CloudflareClient = class {
 			this.budget.charge("samples", samples.length);
 			return {
 				samples,
-				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Cache-side billed requests are not yet separated from invocation misses without double-counting", "resource")]
+				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly can read each Worker's requests and CPU time, but Cloudflare does not expose cache-request charges per Worker through this API. No additional OAuth permission can unlock that data.", "resource")]
 			};
 		} catch (error) {
 			return {
@@ -2237,6 +2237,7 @@ async function onboardingData(env) {
 	const policy = readPolicy(policyRow?.value);
 	const coverage = coverageResult.results;
 	return {
+		accountId: env.BROLLY_ACCOUNT_ID,
 		complete: completeRow?.value === "true",
 		policy: {
 			...policy,
@@ -2751,6 +2752,7 @@ var SESSION_TTL_MS = 432e5;
 var SESSION_COOKIE = "brolly_session";
 var STATE_COOKIE = "brolly_oauth_state";
 var BROLLY_OAUTH_SCOPES = [
+	"offline_access",
 	"user-details.read",
 	"memberships.read",
 	"account-settings.read",
@@ -2874,6 +2876,7 @@ async function finishLogin(request, env) {
 	});
 	if (!tokenResponse.ok) return htmlError(`Cloudflare token exchange failed (${tokenResponse.status}).`, 502);
 	const oauth = await tokenResponse.json();
+	if (!hasRenewableAccess(oauth)) return htmlError("Cloudflare did not grant Brolly ongoing access. Return to Brolly and reconnect, making sure ongoing access is approved.", 502);
 	const [user, accounts] = await Promise.all([fetchJson(USERINFO_ENDPOINT, oauth.access_token), cloudflare(oauth.access_token, "/accounts")]);
 	if (!user.sub) return htmlError("Cloudflare did not return a stable user identity.", 502);
 	if (accounts.length !== 1) return htmlError(accounts.length === 0 ? "No Cloudflare account was authorized. Start again and choose the account Brolly should protect." : "Brolly requires one account per installation. Start again and authorize exactly one Cloudflare account.", 409);
@@ -2907,6 +2910,9 @@ async function finishLogin(request, env) {
 		status: 302,
 		headers
 	});
+}
+function hasRenewableAccess(oauth) {
+	return Boolean(oauth.refresh_token?.trim());
 }
 async function sessionStatus(request, env) {
 	const actor = await authenticate(request, env);
@@ -3126,13 +3132,13 @@ async function onboardingBudgetEstimates(env) {
 			coverage: [...durableObjects.coverage, ...workers.coverage],
 			billingAccess: billingResult.error ? {
 				state: "blocked",
-				detail: billingResult.error
+				detail: `Cloudflare rejected the Billing Read check. Add or replace the read-only billing token below. Technical detail: ${billingResult.error}`
 			} : billingResult.records ? {
 				state: "connected",
-				detail: "Daily Cloudflare billing usage is available."
+				detail: "Brolly can compare its fast usage estimates with Cloudflare's daily billed charges for this account."
 			} : {
 				state: "not_configured",
-				detail: "Optional Billing Read access is not configured; fast Analytics estimates still work."
+				detail: "Brolly can monitor live activity, but it cannot yet compare those estimates with the charges on your Cloudflare bill. Add the read-only Billing token below."
 			},
 			apiCalls: budget.usage.apiCalls
 		});
@@ -3215,7 +3221,7 @@ function accessFor(family, coverage) {
 	const detail = [...new Set(failures.map((item) => item.detail).filter((value) => Boolean(value)))].slice(0, 2).join(" ");
 	if (healthy === relevant.length) return {
 		state: "connected",
-		detail: "Cloudflare returned every usage signal Brolly requested."
+		detail: family === "durable_objects" ? "Brolly can monitor requests, compute time, WebSocket messages, SQL rows, and storage for individual Durable Objects and namespaces. Nothing else is needed." : "Brolly can monitor this service at the most detailed level Cloudflare provides. Nothing else is needed."
 	};
 	if (healthy > 0 || delayed > 0) return {
 		state: "limited",
@@ -3281,7 +3287,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "e2590729e80cb73ff8be16dd404700535cf880c0";
+var BROLLY_RELEASE = "101670e5eb43bc6c132f58ee79c0b7983addc0a0";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";

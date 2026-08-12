@@ -17,6 +17,7 @@ export interface Policy {
 }
 
 export interface OnboardingData {
+  accountId: string;
   complete: boolean;
   policy: Policy;
   families: Array<{ family: string; label: string; metrics: string[]; protection: "active" | "coverage_gap" }>;

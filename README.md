@@ -84,6 +84,11 @@ OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the
 installation's one-time state and returns only the short-lived authorization
 code. It never receives an access or refresh token, and its implementation is
 not included in this open-source package or customer deployments.
+The installation exchanges that code directly with Cloudflare and requires a
+refresh token for unattended monitoring. Short-lived access tokens are renewed
+five minutes before expiry and the rotated credentials remain encrypted in the
+installation's D1. If a login does not grant renewable access, Brolly rejects
+the connection immediately instead of failing after the first token expires.
 
 For local development, copy `dev.vars.example` to `.dev.vars` and generate the
 local-only credential key described in that file. Automatic provisioning is for

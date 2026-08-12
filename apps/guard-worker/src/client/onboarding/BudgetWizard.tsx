@@ -141,7 +141,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <p className="eyebrow orange">Step 1 of 6</p>
               <h2>Check what Brolly can see</h2>
               <p className="section-copy">Brolly works by using existing Cloudflare APIs to monitor individual services and the billed usage for those services. To get started, let&apos;s make sure Brolly has the appropriate permissions to safely monitor your account&apos;s usage.</p>
-              <AccessActions busy={estimateBusy} result={estimates} notice={accessNotice} error={accessError} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessError(""); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
+              <AccessActions accountId={data.accountId} busy={estimateBusy} result={estimates} notice={accessNotice} error={accessError} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessError(""); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
             </>
           )}
           {step === 1 && (
@@ -285,7 +285,8 @@ function LimitEditor({ title, value, onChange }: { title: string; value: SpendLi
   );
 }
 
-function AccessActions({ busy, result, notice, error, token, onVerify, onVerified }: {
+function AccessActions({ accountId, busy, result, notice, error, token, onVerify, onVerified }: {
+  accountId: string;
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
   notice: string;
@@ -368,6 +369,7 @@ function AccessActions({ busy, result, notice, error, token, onVerify, onVerifie
 
       {(billingNeedsToken || billingSuccess) && (
         <BillingAccessSetup
+          accountId={accountId}
           token={billingToken}
           busy={billingBusy}
           error={billingError}
@@ -382,7 +384,8 @@ function AccessActions({ busy, result, notice, error, token, onVerify, onVerifie
   );
 }
 
-function BillingAccessSetup({ token, busy, error, success, copied, onToken, onCopy, onSubmit }: {
+function BillingAccessSetup({ accountId, token, busy, error, success, copied, onToken, onCopy, onSubmit }: {
+  accountId: string;
   token: string;
   busy: boolean;
   error: string;
@@ -399,40 +402,54 @@ function BillingAccessSetup({ token, busy, error, success, copied, onToken, onCo
         <div>
           <p className="eyebrow">One more permission</p>
           <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
-          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare's normal Brolly sign-in does not include Billing Read. Add a separate read-only token so Brolly can compare fast telemetry with invoice-aligned daily usage. This token cannot change billing or resources.</p>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only token to show your real bill totals. Copy Brolly&apos;s settings, create the token in Cloudflare, then paste it back here. It cannot change billing or resources.</p>
         </div>
       </div>
 
-      <ol className="mt-4 grid gap-3 border-y border-[var(--line-soft)] py-4 md:grid-cols-3">
-        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b><span><strong className="block text-xs">Open API Tokens</strong><small className="mt-1 block leading-5 text-[var(--muted)]">In Cloudflare, choose <strong>Create Custom Token</strong>.</small></span></li>
-        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b><span><strong className="block text-xs">Use the recipe below</strong><small className="mt-1 block leading-5 text-[var(--muted)]">Grant only Account → Billing → Read for this account.</small></span></li>
-        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">3</b><span><strong className="block text-xs">Paste it once</strong><small className="mt-1 block leading-5 text-[var(--muted)]">Brolly verifies, encrypts, and never displays it again.</small></span></li>
-      </ol>
-
-      <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(280px,.8fr)]">
-        <div className="rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-3">
-          <div className="flex items-center justify-between gap-3"><strong className="text-xs">Least-privilege token recipe</strong><button type="button" className="button secondary small" onClick={onCopy}><Icon name="clipboard" /> {copied ? "Copied" : "Copy recipe"}</button></div>
-          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
-            <dt className="text-[var(--faint)]">Name</dt><dd className="m-0 font-semibold">Brolly Billing Read</dd>
-            <dt className="text-[var(--faint)]">Permission</dt><dd className="m-0 font-semibold">Account → Billing → Read</dd>
-            <dt className="text-[var(--faint)]">Resources</dt><dd className="m-0 font-semibold">Include → the account connected to Brolly</dd>
-            <dt className="text-[var(--faint)]">Zone access</dt><dd className="m-0 font-semibold">None</dd>
-          </dl>
-          <div className="mt-3 flex flex-wrap gap-3">
-            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Open Cloudflare API Tokens ↗</a>
-            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">Detailed Cloudflare instructions ↗</a>
+      <ol className="mt-5 grid gap-3">
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b>
+          <div>
+            <strong className="block text-sm">Copy Brolly&apos;s token settings</strong>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">You&apos;ll paste these exact settings into Cloudflare in the next step.</p>
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
+              <dt className="text-[var(--faint)]">Name</dt><dd className="m-0 font-semibold">Brolly Billing Read</dd>
+              <dt className="text-[var(--faint)]">Permission</dt><dd className="m-0 font-semibold">Account → Billing → Read</dd>
+              <dt className="text-[var(--faint)]">Account</dt><dd className="m-0 font-semibold">Include → this account</dd>
+              <dt className="text-[var(--faint)]">Zone access</dt><dd className="m-0 font-semibold">None</dd>
+            </dl>
           </div>
-        </div>
+          <button type="button" className="button secondary shrink-0" onClick={onCopy}><Icon name="clipboard" /> {copied ? "Recipe copied" : "Copy recipe"}</button>
+        </li>
 
-        <form className="grid content-start gap-2" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
-          <label className="text-xs font-semibold" htmlFor="billing-access-token">Paste the new token</label>
-          <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Cloudflare API token" />
-          <button type="submit" className="button primary mt-1" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Checking Billing Read…" : "Verify and save token"}</button>
-          <small className="leading-5 text-[var(--faint)]">The token is stored only after Cloudflare confirms it can read this account's billing usage.</small>
-          {error && <p className="form-error mt-1" role="alert"><strong>Billing access failed.</strong> {error}</p>}
-          {success && <p className="form-success mt-1" role="status">{success}</p>}
-        </form>
-      </div>
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b>
+          <div>
+            <strong className="block text-sm">Open this account&apos;s API Tokens page</strong>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Click <strong>Create Custom Token</strong>, then enter the settings you just copied.</p>
+          </div>
+          <a className="button secondary shrink-0" href={`https://dash.cloudflare.com/${encodeURIComponent(accountId)}/api-tokens`} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</a>
+        </li>
+
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">3</b>
+          <form className="grid gap-3" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+            <div>
+              <strong className="block text-sm">Create the token, then paste it here</strong>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">In Cloudflare, click <strong>Continue to summary</strong>, then <strong>Create Token</strong>. Copy the token Cloudflare shows—it is displayed only once.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="sr-only" htmlFor="billing-access-token">Paste the new Cloudflare API token</label>
+              <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste the Cloudflare API token" />
+              <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Verifying…" : "Verify and save"}</button>
+            </div>
+            <small className="leading-5 text-[var(--faint)]">Brolly verifies the token first, encrypts it in this installation, and never displays it again.</small>
+            {error && <p className="form-error mt-1" role="alert"><strong>Billing access failed.</strong> {error}</p>}
+            {success && <p className="form-success mt-1" role="status">{success}</p>}
+          </form>
+        </li>
+      </ol>
+      <p className="mt-3 text-xs text-[var(--faint)]">Need more help? <a className="font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">See Cloudflare&apos;s token instructions ↗</a></p>
     </section>
   );
 }
@@ -472,9 +489,9 @@ function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
 
 function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
   const rows = [
-    { key: "workers" as const, label: "Workers usage" },
-    { key: "durable_objects" as const, label: "Durable Object usage" },
-    { key: "billing" as const, label: "Daily billing details" },
+    { key: "workers" as const, label: "Worker activity" },
+    { key: "durable_objects" as const, label: "Durable Object activity" },
+    { key: "billing" as const, label: "Cloudflare bill totals" },
   ];
   return (
     <section className="overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)]" aria-label="Cloudflare usage access results">
@@ -483,14 +500,34 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
         const access = result.access[row.key];
         const good = access.state === "connected";
         const caution = access.state === "limited" || access.state === "not_configured" || access.state === "unknown";
+        const permissionProblem = /permission|denied|forbidden|auth|missing|403/i.test(access.detail);
+        const status = access.state === "connected" ? "Ready"
+          : access.state === "limited" ? "Partial data"
+            : access.state === "blocked" ? "Needs access"
+              : access.state === "not_configured" ? "Setup needed"
+                : "Could not verify";
+        const nextStep = row.key === "billing" && !good
+          ? { href: "#billing-access-title", label: "Add Billing Read below" }
+          : row.key !== "billing" && (access.state === "blocked" || permissionProblem)
+            ? { href: "/api/auth/login", label: "Reconnect Cloudflare" }
+            : row.key === "workers" && access.state === "limited" && result.access.billing.state !== "connected"
+              ? { href: "#billing-access-title", label: "Add bill totals below" }
+              : null;
         return (
-          <article key={row.key} className="grid gap-2 border-t border-[var(--line-soft)] px-4 py-3 first:border-t-0 md:grid-cols-[minmax(180px,.7fr)_auto_minmax(0,1.3fr)] md:items-center md:gap-4">
+          <article key={row.key} className="grid gap-2 border-t border-[var(--line-soft)] px-4 py-3 first:border-t-0 md:grid-cols-[minmax(190px,.65fr)_auto_minmax(0,1.35fr)] md:items-center md:gap-4">
             <div className="flex items-center gap-2">
               <span className={good ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={good ? "check" : caution ? "info" : "alert"} /></span>
               <strong className="text-sm">{row.label}</strong>
             </div>
-            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold capitalize ${good ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{access.state.replaceAll("_", " ")}</span>
-            <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
+            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold ${good ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{status}</span>
+            <div>
+              <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
+              {row.key === "workers" && access.state === "limited" && !permissionProblem && (
+                <p className="mt-1 text-xs font-semibold leading-5 text-[var(--ink)]">What to do: use Billing Read for the account-wide total and leave extra safety room in each Worker limit. Cloudflare does not currently provide the missing per-Worker breakdown.</p>
+              )}
+              {nextStep && <a className="mt-2 inline-block text-xs font-bold text-[var(--blue)] hover:underline" href={nextStep.href}>{nextStep.label} →</a>}
+              {good && <p className="mt-1 text-xs font-semibold text-[var(--good)]">No action needed.</p>}
+            </div>
           </article>
         );
       })}

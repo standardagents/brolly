@@ -58,6 +58,15 @@ exact origin matching prevent another installation from claiming the code. The
 relay never exchanges the code and therefore never receives Cloudflare access
 or refresh tokens.
 
+The publisher OAuth client enables both authorization-code and refresh-token
+grants. Brolly explicitly requests `offline_access` and refuses to persist an
+OAuth exchange that does not include a refresh token. Each installation stores
+the access token, refresh token, and expiry together in its own D1 using
+AES-GCM. `operationalToken()` refreshes the grant five minutes before expiry
+under a D1 lease so overlapping monitor and control requests cannot race token
+rotation. Installations authorized before refresh-token support was enabled
+must reconnect once to replace their original short-lived grant.
+
 An unbound deployment accepts exactly one account in its first successful
 browser authorization and persists that account ID in D1. This binds the
 Cloudflare account, not the person: later sign-ins are accepted only when their

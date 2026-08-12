@@ -116,10 +116,10 @@ export async function onboardingBudgetEstimates(env: Env): Promise<OnboardingBud
       billing: billingResult.records ?? [],
       coverage: [...durableObjects.coverage, ...workers.coverage],
       billingAccess: billingResult.error
-        ? { state: "blocked", detail: billingResult.error }
+        ? { state: "blocked", detail: `Cloudflare rejected the Billing Read check. Add or replace the read-only billing token below. Technical detail: ${billingResult.error}` }
         : billingResult.records
-          ? { state: "connected", detail: "Daily Cloudflare billing usage is available." }
-          : { state: "not_configured", detail: "Optional Billing Read access is not configured; fast Analytics estimates still work." },
+          ? { state: "connected", detail: "Brolly can compare its fast usage estimates with Cloudflare's daily billed charges for this account." }
+          : { state: "not_configured", detail: "Brolly can monitor live activity, but it cannot yet compare those estimates with the charges on your Cloudflare bill. Add the read-only Billing token below." },
       apiCalls: budget.usage.apiCalls,
     });
     await env.DB.prepare(
@@ -211,7 +211,12 @@ function accessFor(family: string, coverage: CoverageResult[]): UsageAccess {
   const delayed = relevant.filter(item => item.state === "delayed").length;
   const failures = relevant.filter(item => item.state === "unavailable" || item.state === "permission_denied");
   const detail = [...new Set(failures.map(item => item.detail).filter((value): value is string => Boolean(value)))].slice(0, 2).join(" ");
-  if (healthy === relevant.length) return { state: "connected", detail: "Cloudflare returned every usage signal Brolly requested." };
+  if (healthy === relevant.length) return {
+    state: "connected",
+    detail: family === "durable_objects"
+      ? "Brolly can monitor requests, compute time, WebSocket messages, SQL rows, and storage for individual Durable Objects and namespaces. Nothing else is needed."
+      : "Brolly can monitor this service at the most detailed level Cloudflare provides. Nothing else is needed.",
+  };
   if (healthy > 0 || delayed > 0) return { state: "limited", detail: detail || "Some usage signals are available, but one or more are delayed or unavailable." };
   return { state: "blocked", detail: detail || "Cloudflare did not return the requested usage signals. Reconnect Brolly and verify account permissions." };
 }

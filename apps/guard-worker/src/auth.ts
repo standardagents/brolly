@@ -12,6 +12,7 @@ const SESSION_COOKIE = "brolly_session";
 const STATE_COOKIE = "brolly_oauth_state";
 
 export const BROLLY_OAUTH_SCOPES = [
+  "offline_access",
   "user-details.read",
   "memberships.read",
   "account-settings.read",
@@ -176,6 +177,9 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
   });
   if (!tokenResponse.ok) return htmlError(`Cloudflare token exchange failed (${tokenResponse.status}).`, 502);
   const oauth = await tokenResponse.json() as OAuthTokenResponse;
+  if (!hasRenewableAccess(oauth)) {
+    return htmlError("Cloudflare did not grant Brolly ongoing access. Return to Brolly and reconnect, making sure ongoing access is approved.", 502);
+  }
   const [user, accounts] = await Promise.all([
     fetchJson<UserInfo>(USERINFO_ENDPOINT, oauth.access_token),
     cloudflare<Array<CloudflareAccount>>(oauth.access_token, "/accounts"),
@@ -211,6 +215,10 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
   headers.append("set-cookie", serializeCookie(SESSION_COOKIE, sessionToken, request, SESSION_TTL_MS));
   headers.append("set-cookie", serializeCookie(STATE_COOKIE, "", request, 0));
   return new Response(null, { status: 302, headers });
+}
+
+export function hasRenewableAccess(oauth: Pick<OAuthTokenResponse, "refresh_token">): boolean {
+  return Boolean(oauth.refresh_token?.trim());
 }
 
 async function sessionStatus(request: Request, env: Env): Promise<Response> {
