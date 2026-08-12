@@ -23,6 +23,30 @@ export interface OnboardingData {
   scopedAssets: Array<{ key: string; family: "workers" | "durable_objects"; id: string; name: string; scope: "resource" | "namespace"; protection: "active" | "coverage_gap"; tags: Record<string, string> }>;
 }
 
+export interface SuggestedBudget {
+  observedUsd: number;
+  limits: SpendLimits;
+  source: "analytics" | "billing";
+  partial: boolean;
+}
+
+export interface OnboardingBudgetEstimates {
+  generatedAt: number;
+  windowStartAt: number;
+  windowEndAt: number;
+  cached: boolean;
+  apiCalls: number;
+  headroom: { warning: number; critical: number; emergency: number };
+  account: SuggestedBudget | null;
+  families: Record<string, SuggestedBudget>;
+  assets: Record<string, SuggestedBudget>;
+  unchangedFamilies: string[];
+  access: Record<"workers" | "durable_objects" | "billing", {
+    state: "connected" | "limited" | "blocked" | "not_configured" | "unknown";
+    detail: string;
+  }>;
+}
+
 export interface Incident {
   id: string; key: string; status: IncidentStatus; severity: Severity; family: string; familyLabel: string;
   assetId: string; assetName: string | null; parentId: string | null; scope: string; tier: AssetTier;

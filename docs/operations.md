@@ -18,6 +18,16 @@ operations, 20,000 samples, and 45 seconds. They are workload ceilings, not a
 guaranteed dollar ceiling. A manual dashboard scan runs the same monitor; the
 55-second lease prevents it from overlapping the automatic minute pass.
 
+The optional first-run usage check is narrower than a monitor pass. It makes
+one rolling-24-hour Durable Objects Analytics request and one rolling-24-hour
+Workers Analytics request. If a separate Billing Read token exists, it may add
+one billing request and use its latest available daily record for other product
+families. The result is cached in
+the installation's D1 database for 15 minutes, concurrent checks are refused,
+and no incidents, notifications, controls, or policy changes are created. The
+browser applies returned suggestions only to its editable draft; setup must be
+finished before any suggested limit is saved.
+
 Live Durable Object evaluation covers every object returned by eight bounded
 per-metric operation queries, plus retained storage at Cloudflare's available
 namespace/account scopes. Historical baseline retention runs only every
@@ -37,7 +47,8 @@ The dashboard separates response and observability state:
 
 - **Usage incidents** crossed a configured hard or anomaly threshold and can
   be acknowledged or routed into a reversible control.
-- **Coverage gaps** mean a collector is missing, delayed, or lacks permission.
+- **Coverage gaps** mean Cloudflare did not expose a usage signal, returned it
+  late, or denied the installation permission to read it. They do not mean zero usage.
   They are prominent but are not counted as spend incidents.
 - **Current daily spend** is a gross rolling-24-hour telemetry estimate by
   product category. It is not an invoice and is labeled as such.
@@ -79,11 +90,14 @@ the account ID is derived during first sign-in, and timezone/summary settings
 default to UTC and 09:00. Operators who need break-glass CLI access or
 authoritative billing reconciliation can add those Worker secrets later.
 
-On first authenticated login, complete all four budget steps. Brolly requires
+On first authenticated login, optionally check usage access, then complete all
+four budget steps. The usage check is built into Brolly and requires no local
+agent or additional service. Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported
-per-object Durable Object windows. Product or resource limits marked `Collector pending`
-are retained but cannot be enforced until coverage becomes healthy. Reopen the
+per-object Durable Object windows. Product or resource limits marked `Limited
+usage data` are retained, but alerts can evaluate only the billing signals
+Cloudflare currently exposes to the installation. Reopen the
 same wizard with **Budgets** in the dashboard header.
 
 Before enabling automatic controls:

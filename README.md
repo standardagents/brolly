@@ -57,7 +57,13 @@ installation—not the individual user—until its D1 binding is deliberately re
 or the instance is replaced. Later sign-ins must authorize the same account; any
 Cloudflare member able to grant Brolly's requested scopes for that account may
 sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
-and asks for limits for every discovered product, Worker, and namespace.
+and asks for limits for every discovered product, Worker, and namespace. The
+first optional setup step can read the previous rolling 24 hours and prefill
+suggested limits with 25%, 75%, and 150% headroom. It uses at most two bounded
+Analytics requests plus one Billing request when Billing Read is configured,
+using the latest available daily billing record for billing-only products. It
+caches the result for 15 minutes, leaves products without measurable cost
+unchanged, and saves nothing until the final setup step.
 
 Browser sign-in briefly passes through Brolly's separately operated, stateless
 OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the

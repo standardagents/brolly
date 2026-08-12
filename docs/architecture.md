@@ -60,12 +60,12 @@ both receive Cloudflare's 20:1 billing conversion exactly once. Five-minute tele
 minute; a direct 24-hour query runs every 15 minutes. Brolly separately imports Cloudflare billing usage when
 a Billing Read token is configured. Billing usage can be delayed and is
 reconciled rather than used for sub-minute shutdown decisions. Every cataloged
-family without a fast collector is persisted as unavailable and opens a
+family without a fast usage source is persisted as unavailable and opens a
 coverage incident.
 
 For charting, the minute pass writes one account-level projected-spend sample,
-and the 15-minute pass writes one rolling-24-hour cost sample per active
-collector family. This avoids reconstructing charts by repeatedly scanning
+and the 15-minute pass writes one rolling-24-hour cost sample per active usage
+family. This avoids reconstructing charts by repeatedly scanning
 per-object samples. The dashboard reads bounded aggregates, at most 2,500 spend
 points and 250 incidents per request.
 
@@ -86,6 +86,16 @@ First-run completion is stored in D1 as `onboarding_complete`. A new browser
 does not bypass setup, and the browser never receives or stores the break-glass
 admin token. Existing policies without `familyDailySpend` are migrated in the wizard
 by merging conservative defaults before saving.
+
+The optional first-run usage check is a separate, read-only path. A 20-second
+`RunBudget` caps it at four API calls and 20,000 returned samples, while the
+implementation normally uses exactly the aggregate Durable Objects and Workers
+Analytics requests and optionally a Billing Read request. A D1 lease prevents
+overlap and a 15-minute D1 cache prevents repeated button clicks from repeating
+the Cloudflare queries. Suggested warning, critical, and emergency budgets add
+25%, 75%, and 150% headroom to measurable prior-24-hour cost. Missing or
+zero-cost families keep their existing draft values, and partial account data
+never overwrites the account-wide draft budget.
 
 Scoped budgets take precedence over family defaults. Per-object Durable Object
 cost also inherits its namespace budget when no exact-object budget exists.

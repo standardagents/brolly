@@ -136,7 +136,7 @@ export default function App() {
       connection={connection}
       scanning={scanning}
       onScan={() => void scan()}
-      onBudgets={() => void openWizard(0)}
+      onBudgets={() => void openWizard(1)}
       onLogout={() => void logout()}
     >
       {route === "overview" && (
@@ -147,7 +147,7 @@ export default function App() {
           scanError={scanError}
           onNavigate={navigate}
           onOpenIncident={openIncident}
-          onBudgets={() => void openWizard(0)}
+          onBudgets={() => void openWizard(1)}
         />
       )}
       {route === "incidents" && (
@@ -160,7 +160,7 @@ export default function App() {
         />
       )}
       {route === "assets" && (
-        <AssetsPage data={dashboard} token={token} onNavigate={navigate} onBudgets={() => void openWizard(2)} />
+        <AssetsPage data={dashboard} token={token} onNavigate={navigate} onBudgets={() => void openWizard(3)} />
       )}
       {route === "configuration" && (
         <ConfigurationPage
@@ -168,7 +168,7 @@ export default function App() {
           connection={connection}
           token={token}
           onNavigate={navigate}
-          onEditInstall={() => void openWizard(4)}
+          onEditInstall={() => void openWizard(5)}
         />
       )}
       {route === "settings" && (
@@ -177,7 +177,7 @@ export default function App() {
           connection={connection}
           token={token}
           onNavigate={navigate}
-          onBudgets={() => void openWizard(0)}
+          onBudgets={() => void openWizard(1)}
           onLogout={logout}
         />
       )}

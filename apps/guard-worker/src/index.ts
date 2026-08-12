@@ -6,6 +6,7 @@ import { sealJson } from "./credentials.js";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
+import { BudgetEstimateInProgressError, onboardingBudgetEstimates } from "./budget-estimates.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -51,6 +52,17 @@ export default {
 
     if (url.pathname === "/api/onboarding" && request.method === "GET") {
       return Response.json(await onboardingData(env));
+    }
+
+    if (url.pathname === "/api/onboarding/estimates" && request.method === "POST") {
+      try {
+        return Response.json(await onboardingBudgetEstimates(env), { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 },
+        );
+      }
     }
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {

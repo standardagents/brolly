@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { ProtectionExplainer, RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
-import { Brand, Icon, ProductIcon } from "../components/ui";
+import { Brand, Icon, InfoTip, ProductIcon } from "../components/ui";
 import { normalizeNumericDraft } from "../format";
-import type { OnboardingData, Policy, SpendLimits, Threshold } from "../types";
+import type { OnboardingBudgetEstimates, OnboardingData, Policy, SpendLimits, Threshold } from "../types";
 
 const LIMIT_ROWS = [
   { metric: "projected_daily_cost_usd", windowMs: 86_400_000, label: "Projected cost per Durable Object", unit: "USD / day", defaults: [0.5, 2, 5] },
@@ -27,8 +27,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [busy, setBusy] = useState(false);
+  const [estimateBusy, setEstimateBusy] = useState(false);
+  const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
+  const [estimateNotice, setEstimateNotice] = useState("");
   const [error, setError] = useState("");
-  const steps = ["Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
+  const steps = ["Check usage access", "Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
   const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
 
   async function save() {
@@ -55,6 +58,46 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     }
   }
 
+  async function suggestFromRecentUsage() {
+    setEstimateBusy(true);
+    setEstimateNotice("");
+    setError("");
+    try {
+      const result = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
+      const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
+      const appliedFamilies = familySuggestions.length;
+      const appliedAssets = assetSuggestions.length;
+      setPolicy(current => {
+        const familyDailySpend = { ...current.familyDailySpend };
+        const assetDailySpend = { ...current.assetDailySpend };
+        for (const [family, suggestion] of familySuggestions) {
+          familyDailySpend[family] = suggestion.limits;
+        }
+        for (const [key, suggestion] of assetSuggestions) {
+          assetDailySpend[key] = suggestion.limits;
+        }
+        return {
+          ...current,
+          familyDailySpend,
+          assetDailySpend,
+          accountDailySpend: result.account && !result.account.partial ? result.account.limits : current.accountDailySpend,
+        };
+      });
+      setEstimates(result);
+      if (appliedFamilies === 0) {
+        setEstimateNotice("Cloudflare returned no non-zero cost estimate for this window, so no limits were changed.");
+      } else {
+        const accountNote = result.account?.partial ? " The account-wide limit was left unchanged because the scan had partial product coverage." : " The account-wide limit was updated too.";
+        setEstimateNotice(`Filled ${appliedFamilies} product ${appliedFamilies === 1 ? "budget" : "budgets"}${appliedAssets ? ` and ${appliedAssets} resource ${appliedAssets === 1 ? "budget" : "budgets"}` : ""}.${accountNote}`);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
   return (
     <main className="setup-shell">
       <header className="setup-header">
@@ -78,7 +121,33 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
         <section className="setup-panel">
           {step === 0 && (
             <>
-              <p className="eyebrow orange">Step 1 of 5</p>
+              <p className="eyebrow orange">Step 1 of 6 · Optional</p>
+              <h2>Check what Brolly can see</h2>
+              <p className="section-copy">Brolly reads usage through Cloudflare's own APIs. You do not need to install another agent or service. Run this optional check to confirm access and prefill safer limits from your account's previous 24 hours.</p>
+              <RecentUsageEstimator busy={estimateBusy} result={estimates} notice={estimateNotice} onSuggest={() => void suggestFromRecentUsage()} />
+              {estimates ? <UsageAccessResults result={estimates} /> : <div className="grid gap-3 md:grid-cols-3">
+                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
+                  <Icon name="radar" />
+                  <strong className="mt-3 block text-sm">Read-only</strong>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">This step reads Cloudflare Analytics. It cannot deploy, quarantine, pause, or delete anything.</p>
+                </article>
+                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
+                  <Icon name="gauge" />
+                  <strong className="mt-3 block text-sm">Strictly bounded</strong>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">At most two Analytics requests, plus one billing request when Billing Read is configured. Results are cached for 15 minutes.</p>
+                </article>
+                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
+                  <Icon name="sliders" />
+                  <strong className="mt-3 block text-sm">Suggestions only</strong>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Suggested values stay editable and are not saved until the final setup step.</p>
+                </article>
+              </div>}
+              {!estimates && <p className="mt-4 text-xs text-[var(--faint)]">You can skip this check and enter every limit manually.</p>}
+            </>
+          )}
+          {step === 1 && (
+            <>
+              <p className="eyebrow orange">Step 2 of 6</p>
               <h2>What is an unacceptable account day?</h2>
               <p className="section-copy">These limits apply across all monitored Cloudflare products. Warnings give you time; emergency limits create approval-ready stop actions where a safe control exists.</p>
               <LimitEditor title="Total account spend" value={policy.accountDailySpend} onChange={value => setPolicy({ ...policy, accountDailySpend: value })} />
@@ -95,11 +164,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </div>
             </>
           )}
-          {step === 1 && (
+          {step === 2 && (
             <>
-              <p className="eyebrow orange">Step 2 of 5</p>
+              <p className="eyebrow orange">Step 3 of 6</p>
               <h2>Daily spend by product</h2>
-              <p className="section-copy">Set a limit for every billable family. Limits with partial telemetry are saved now and gain full enforcement as the remaining collectors are connected.</p>
+              <p className="section-copy">Set a limit for every billable family. Brolly saves every limit now and clearly marks products where Cloudflare exposes only some of the usage data needed for alerts.</p>
               <TelemetryLegend />
               <div className="limit-table-head"><span>Product</span><span>Warn</span><span>Critical</span><span>Emergency</span></div>
               <div className="limit-table">
@@ -108,15 +177,16 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     key={family.family}
                     family={family}
                     value={policy.familyDailySpend[family.family]!}
+                    estimate={estimates?.families[family.family]}
                     onChange={value => setPolicy({ ...policy, familyDailySpend: { ...policy.familyDailySpend, [family.family]: value } })}
                   />
                 ))}
               </div>
             </>
           )}
-          {step === 2 && (
+          {step === 3 && (
             <>
-              <p className="eyebrow orange">Step 3 of 5</p>
+              <p className="eyebrow orange">Step 4 of 6</p>
               <h2>Limits for each Worker and namespace</h2>
               <p className="section-copy">These daily budgets override the product default for one Worker script or one Durable Object namespace. Newly discovered resources inherit their product limit until you assign an explicit budget here.</p>
               <TelemetryLegend />
@@ -127,6 +197,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     key={asset.key}
                     asset={asset}
                     value={policy.assetDailySpend[asset.key]!}
+                    estimate={estimates?.assets[asset.key]}
                     onChange={value => setPolicy({ ...policy, assetDailySpend: { ...policy.assetDailySpend, [asset.key]: value } })}
                   />
                 )) : (
@@ -135,9 +206,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </div>
             </>
           )}
-          {step === 3 && (
+          {step === 4 && (
             <>
-              <p className="eyebrow orange">Step 4 of 5</p>
+              <p className="eyebrow orange">Step 5 of 6</p>
               <h2>Durable Object kill-switch limits</h2>
               <p className="section-copy">Brolly evaluates each returned Durable Object ID independently, so one runaway object can be isolated without deleting its storage or taking an entire account offline.</p>
               <div className="object-limits">
@@ -153,9 +224,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <ProtectionExplainer mode={policy.mode} />
             </>
           )}
-          {step === 4 && (
+          {step === 5 && (
             <>
-              <p className="eyebrow orange">Step 5 of 5</p>
+              <p className="eyebrow orange">Step 6 of 6</p>
               <h2>Make quarantine available</h2>
               <p className="section-copy">Brolly can monitor and alert as soon as you finish setup. To let it quarantine a runaway Worker or one Durable Object, your application needs a tiny local runtime guard.</p>
               <div className="runtime-readiness">
@@ -180,15 +251,15 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           {error && <p className="form-error">{error}</p>}
           <footer className="setup-actions">
             <button type="button" className="button secondary" disabled={step === 0 || busy} onClick={() => setStep(step - 1)}>Back</button>
-            {step === 4 && (
+            {step === 5 && (
               <span className={`runtime-finish-note ${policy.mode === "automatic" && installedIntegrations === 0 ? "caution" : ""}`}>
                 {data.scopedAssets.length
                   ? <><strong>{installedIntegrations} of {data.scopedAssets.length} resources reported installed.</strong> {installedIntegrations ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
                   : <><strong>No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
               </span>
             )}
-            {step < 4
-              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>Continue</button>
+            {step < 5
+              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>{step === 0 && !estimates ? "Skip for now" : "Continue"}</button>
               : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
@@ -214,14 +285,74 @@ function LimitEditor({ title, value, onChange }: { title: string; value: SpendLi
   );
 }
 
-function FamilyLimitRow({ family, value, onChange }: { family: OnboardingData["families"][number]; value: SpendLimits; onChange: (value: SpendLimits) => void }) {
+function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
+  busy: boolean;
+  result: OnboardingBudgetEstimates | null;
+  notice: string;
+  onSuggest: () => void;
+}) {
+  return (
+    <section className="mb-5 flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="recent-usage-estimator-title">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="trend" /></span>
+        <div>
+          <div className="flex items-center gap-2">
+            <strong id="recent-usage-estimator-title" className="text-sm">Start from what this account already uses</strong>
+            <InfoTip label="How recent-usage suggestions work">
+              Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.
+            </InfoTip>
+          </div>
+          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-[var(--muted)]">Read the previous 24 hours, add safety headroom, and fill every product, Worker, and namespace Brolly can estimate. Products without measurable cost stay exactly as they are.</p>
+          {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
+          {result && (
+            <p className="mt-1 text-[11px] text-[var(--faint)]">
+              {result.cached ? "Reused the 15-minute cache" : `${result.apiCalls} bounded Cloudflare API ${result.apiCalls === 1 ? "request" : "requests"}`} · Window ended {new Date(result.windowEndAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+      </div>
+      <button type="button" className="button secondary shrink-0" disabled={busy} onClick={onSuggest}>
+        <Icon name="trend" />{busy ? "Reading usage…" : result ? "Refresh suggestions" : "Suggest limits"}
+      </button>
+    </section>
+  );
+}
+
+function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
+  const rows = [
+    { key: "workers" as const, label: "Workers usage" },
+    { key: "durable_objects" as const, label: "Durable Object usage" },
+    { key: "billing" as const, label: "Daily billing details" },
+  ];
+  return (
+    <div className="grid gap-3 md:grid-cols-3" aria-label="Cloudflare usage access results">
+      {rows.map(row => {
+        const access = result.access[row.key];
+        const good = access.state === "connected";
+        const caution = access.state === "limited" || access.state === "not_configured" || access.state === "unknown";
+        return (
+          <article key={row.key} className={`rounded-[var(--radius)] border p-4 ${good ? "border-[var(--good-line)] bg-[var(--good-bg)]" : caution ? "border-[var(--warn-line)] bg-[var(--warn-bg)]" : "border-[var(--danger-line)] bg-[var(--danger-bg)]"}`}>
+            <div className="flex items-center gap-2">
+              <span className={good ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={good ? "check" : caution ? "info" : "alert"} /></span>
+              <strong className="text-sm">{row.label}</strong>
+            </div>
+            <p className="mt-2 text-xs font-semibold capitalize">{access.state.replaceAll("_", " ")}</p>
+            <p className="mt-1 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function FamilyLimitRow({ family, value, estimate, onChange }: { family: OnboardingData["families"][number]; value: SpendLimits; estimate?: OnboardingBudgetEstimates["families"][string]; onChange: (value: SpendLimits) => void }) {
   return (
     <div className="limit-table-row">
       <div className="resource-label">
         <ProductIcon family={family.family} />
         <span className="resource-label-copy">
           <strong>{family.label}</strong>
-          <small><i className={`coverage-dot ${family.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{family.protection === "active" ? "Full telemetry" : "Partial telemetry"}</small>
+          <small><i className={`coverage-dot ${family.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{estimate ? `$${estimate.observedUsd.toFixed(2)} in ${estimate.source === "billing" ? "latest billing day" : "prior 24 hr"}` : family.protection === "active" ? "Usage connected" : "Limited usage data"}</small>
         </span>
       </div>
       {(["warning", "critical", "emergency"] as const).map(key => (
@@ -234,7 +365,7 @@ function FamilyLimitRow({ family, value, onChange }: { family: OnboardingData["f
   );
 }
 
-function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["scopedAssets"][number]; value: SpendLimits; onChange: (value: SpendLimits) => void }) {
+function ScopedLimitRow({ asset, value, estimate, onChange }: { asset: OnboardingData["scopedAssets"][number]; value: SpendLimits; estimate?: OnboardingBudgetEstimates["assets"][string]; onChange: (value: SpendLimits) => void }) {
   const kind = asset.family === "workers" ? "Worker script" : "Durable Object namespace";
   return (
     <div className="limit-table-row">
@@ -242,7 +373,7 @@ function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["sco
         <ProductIcon family={asset.family} />
         <span className="resource-label-copy">
           <strong>{asset.name}</strong>
-          <small><i className={`coverage-dot ${asset.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{kind} · {asset.protection === "active" ? "Full telemetry" : "Partial telemetry"}</small>
+          <small><i className={`coverage-dot ${asset.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{kind} · {estimate ? `$${estimate.observedUsd.toFixed(2)} in ${estimate.source === "billing" ? "latest billing day" : "prior 24 hr"}` : asset.protection === "active" ? "Usage connected" : "Limited usage data"}</small>
         </span>
       </div>
       {(["warning", "critical", "emergency"] as const).map(key => (
@@ -257,9 +388,9 @@ function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["sco
 
 function TelemetryLegend() {
   return (
-    <div className="telemetry-legend" aria-label="Telemetry status legend">
-      <span><i className="coverage-dot active" aria-hidden="true" /><span><strong>Full telemetry</strong><small>All known billing signals are monitored</small></span></span>
-      <span><i className="coverage-dot gap" aria-hidden="true" /><span><strong>Partial telemetry</strong><small>One or more billing signals still need a collector</small></span></span>
+    <div className="telemetry-legend" aria-label="Usage data status legend">
+      <span><i className="coverage-dot active" aria-hidden="true" /><span><strong>Usage connected</strong><small>Brolly can read every known billing signal for this product</small></span></span>
+      <span><i className="coverage-dot gap" aria-hidden="true" /><span><strong>Limited usage data</strong><small>Cloudflare currently exposes only some signals to this installation</small></span></span>
     </div>
   );
 }
