@@ -66,8 +66,11 @@ caches the result for 15 minutes, leaves products without measurable cost
 unchanged, and saves nothing until the final setup step.
 
 First-run setup separates permission verification from limit generation. The
-access screen can reauthorize the Cloudflare OAuth grant and can accept an
-account-scoped **Billing Read** token. A token entered there is verified before
+access screen initially shows one safe, bounded monitoring check. It reveals
+results and only the remediation actually needed: OAuth reconnection for a
+denied Analytics scope, or guided Billing Read setup when billing is missing.
+The billing guide provides a copyable least-privilege token recipe. A token
+entered there is verified before
 it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
 the installation's D1. The following account-budget screen has the historical
 usage button; verifying access alone never changes a limit. An operator may

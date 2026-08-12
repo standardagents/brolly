@@ -121,7 +121,8 @@ zero-cost families keep their existing draft values, and partial account data
 never overwrites the account-wide draft budget.
 
 Access verification and draft mutation are separate client actions. The first
-screen runs the bounded collectors only to display access state. Reauthorizing
+screen initially presents a single bounded check, then progressively reveals a
+compact result list and only the relevant remediation. Reauthorizing
 OAuth invalidates the 15-minute access cache. A Billing Read token submitted in
 setup is tested against the bound account before its AES-GCM envelope is stored
 under `billing_credentials` in D1; it is never returned to the client. A Worker

@@ -127,8 +127,12 @@ explicit owner-authorized repository change rather than a self-update.
 
 On first authenticated login, optionally verify usage access, then complete all
 four budget steps. The access screen is built into Brolly and requires no local
-agent or additional service. It does not apply suggested limits. Operators can
-reauthorize the shared Cloudflare OAuth grant there. Because Billing Read is an
+agent or additional service. It starts with one bounded read-only check and
+does not apply suggested limits. Results are shown before any credential form.
+OAuth reconnection is revealed only for an Analytics permission problem;
+Billing token instructions are revealed only when Billing Read is unavailable.
+The copyable recipe specifies Account → Billing → Read for only the connected
+account, with no zone permissions. Because Billing Read is an
 account API-token permission rather than a Brolly OAuth scope, the same screen
 can verify and save a narrowly scoped Billing Read token. That token is
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the

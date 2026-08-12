@@ -31,6 +31,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
   const [estimateNotice, setEstimateNotice] = useState("");
   const [accessNotice, setAccessNotice] = useState("");
+  const [accessError, setAccessError] = useState("");
   const [error, setError] = useState("");
   const steps = ["Check usage access", "Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
   const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
@@ -87,13 +88,13 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   async function verifyUsageAccess() {
     setEstimateBusy(true);
     setAccessNotice("");
-    setError("");
+    setAccessError("");
     try {
       const result = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       setEstimates(result);
-      setAccessNotice("Access verified. No limits were changed.");
+      setAccessNotice("Monitoring access check complete. No limits were changed.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setAccessError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setEstimateBusy(false);
     }
@@ -139,25 +140,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
             <>
               <p className="eyebrow orange">Step 1 of 6 · Optional</p>
               <h2>Check what Brolly can see</h2>
-              <p className="section-copy">Confirm that this installation can read the account inventory, Workers Analytics, Durable Object Analytics, and optional daily billing data. This check is read-only and does not change a limit.</p>
-              <AccessActions busy={estimateBusy} result={estimates} notice={accessNotice} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
-              {estimates ? <UsageAccessResults result={estimates} /> : <div className="grid gap-3 md:grid-cols-3">
-                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
-                  <Icon name="radar" />
-                  <strong className="mt-3 block text-sm">Read-only</strong>
-                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">This step reads Cloudflare Analytics. It cannot deploy, quarantine, pause, or delete anything.</p>
-                </article>
-                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
-                  <Icon name="gauge" />
-                  <strong className="mt-3 block text-sm">Strictly bounded</strong>
-                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">At most two Analytics requests, plus one billing request when Billing Read is configured. Results are cached for 15 minutes.</p>
-                </article>
-                <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
-                  <Icon name="sliders" />
-                  <strong className="mt-3 block text-sm">Access only</strong>
-                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">This screen verifies permissions. Historical usage fills limits on the next screen.</p>
-                </article>
-              </div>}
+              <p className="section-copy">Confirm that this installation can read account inventory, Workers Analytics, Durable Object Analytics, and optional daily billing data.</p>
+              <AccessActions busy={estimateBusy} result={estimates} notice={accessNotice} error={accessError} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessError(""); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
               {!estimates && <p className="mt-4 text-xs text-[var(--faint)]">You can skip this check and enter every limit manually.</p>}
             </>
           )}
@@ -302,10 +286,11 @@ function LimitEditor({ title, value, onChange }: { title: string; value: SpendLi
   );
 }
 
-function AccessActions({ busy, result, notice, token, onVerify, onVerified }: {
+function AccessActions({ busy, result, notice, error, token, onVerify, onVerified }: {
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
   notice: string;
+  error: string;
   token: string;
   onVerify: () => void;
   onVerified: (result: OnboardingBudgetEstimates) => void;
@@ -313,14 +298,24 @@ function AccessActions({ busy, result, notice, token, onVerify, onVerified }: {
   const [billingToken, setBillingToken] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
+  const [billingSuccess, setBillingSuccess] = useState("");
+  const [recipeCopied, setRecipeCopied] = useState(false);
+  const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
+    const access = result.access[key];
+    return access.state === "blocked" || (access.state === "limited" && /permission|denied|forbidden|auth|missing|403/i.test(access.detail));
+  }) : false;
+  const billingNeedsToken = result ? result.access.billing.state !== "connected" : false;
 
   async function saveBillingAccess() {
     setBillingBusy(true);
     setBillingError("");
+    setBillingSuccess("");
     try {
       await api("/api/onboarding/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
       setBillingToken("");
       const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");
+      setBillingSuccess("Billing Read is connected. The token is encrypted in this Brolly installation and will not be shown again.");
       onVerified(verified);
     } catch (cause) {
       setBillingError(cause instanceof Error ? cause.message : String(cause));
@@ -329,42 +324,117 @@ function AccessActions({ busy, result, notice, token, onVerify, onVerified }: {
     }
   }
 
+  async function copyBillingRecipe() {
+    const recipe = [
+      "Cloudflare API token for Brolly",
+      "Token name: Brolly Billing Read",
+      "Permissions: Account → Billing → Read",
+      "Account resources: Include → the same account connected to Brolly",
+      "Zone permissions: none",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(recipe);
+      setRecipeCopied(true);
+      window.setTimeout(() => setRecipeCopied(false), 2_000);
+    } catch {
+      setBillingError("Your browser could not copy the recipe. Select the settings below and copy them manually.");
+    }
+  }
+
   return (
-    <div className="mb-5 grid gap-3">
-      <section className="flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mb-5 grid gap-4">
+      <section className="flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--good-line)] bg-[var(--good-bg)] p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="radar" /></span>
+          <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--panel)] text-[var(--good)] [&_.icon]:size-5"><Icon name="shield" /></span>
           <div>
-            <div className="flex items-center gap-2"><strong className="text-sm">Verify current access</strong><InfoTip label="What the access check does">Brolly makes at most two bounded Analytics requests and one billing request when Billing Read is configured. Results are cached for 15 minutes. This screen never changes or saves a spending limit.</InfoTip></div>
-            <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">Test the credentials already connected to this installation and show exactly which usage sources Cloudflare allows Brolly to read.</p>
+            <div className="flex items-center gap-2"><strong className="text-sm">A safe, bounded monitoring check</strong><InfoTip label="How Brolly checks access">Brolly makes at most two read-only Analytics requests and one billing request only when Billing Read is configured. Results are cached for 15 minutes. This check never changes limits or Cloudflare resources.</InfoTip></div>
+            <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">Brolly reads Cloudflare's usage APIs. It cannot deploy, quarantine, pause, delete, or change anything during this check, and it does not write monitoring traffic into your applications.</p>
             {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
             {result && <p className="mt-1 text-[11px] text-[var(--faint)]">Checked {new Date(result.generatedAt).toLocaleString()} · {result.apiCalls} bounded API {result.apiCalls === 1 ? "request" : "requests"}</p>}
           </div>
         </div>
-        <button type="button" className="button primary shrink-0" disabled={busy || billingBusy} onClick={onVerify}><Icon name="radar" />{busy ? "Verifying…" : result ? "Verify again" : "Verify access"}</button>
+        <button type="button" className="button primary shrink-0" disabled={busy || billingBusy} onClick={onVerify}><Icon name="radar" />{busy ? "Checking…" : result ? "Check again" : "Check monitoring access"}</button>
+        {error && <p className="form-error basis-full" role="alert"><strong>Monitoring access check failed.</strong> {error}</p>}
       </section>
 
-      <section className="grid gap-3 md:grid-cols-2" aria-label="Increase Cloudflare access">
-        <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel)] p-4">
+      {result && <UsageAccessResults result={result} />}
+
+      {analyticsNeedsReconnect && (
+        <article className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--warn-bg)] p-4">
           <div className="flex items-center gap-2"><Icon name="refresh" /><strong className="text-sm">Workers and Durable Object access</strong></div>
-          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">If Analytics or inventory access is blocked, reconnect Cloudflare and approve the current read and control scopes. You will return to this Brolly installation.</p>
+          <p className="mt-2 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare denied at least one Analytics permission. Reconnect the account, approve Brolly's current scopes, then run the monitoring check again. You will return to this installation.</p>
           <a className="button secondary mt-3" href="/api/auth/login"><Icon name="external" /> Reconnect Cloudflare</a>
         </article>
-        <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel)] p-4">
-          <div className="flex items-center gap-2"><Icon name="wallet" /><strong className="text-sm">Daily billing access</strong></div>
-          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">For invoice-aligned daily costs, create an account-scoped token with only <strong>Billing Read</strong>, paste it once, and verify it here. Brolly encrypts it in this installation's D1.</p>
-          <form className="mt-3 grid gap-2" onSubmit={event => { event.preventDefault(); void saveBillingAccess(); }}>
-            <label className="text-xs font-semibold" htmlFor="billing-access-token">Billing Read API token</label>
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <input id="billing-access-token" className="min-h-9 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm" type="password" value={billingToken} onChange={event => setBillingToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste token once" />
-              <button type="submit" className="button secondary" disabled={billingBusy || !billingToken.trim()}>{billingBusy ? "Verifying…" : "Save & verify"}</button>
-            </div>
-            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">How to create the token ↗</a>
-            {billingError && <p className="form-error mt-1" role="alert">{billingError}</p>}
-          </form>
-        </article>
-      </section>
+      )}
+
+      {(billingNeedsToken || billingSuccess) && (
+        <BillingAccessSetup
+          token={billingToken}
+          busy={billingBusy}
+          error={billingError}
+          success={billingSuccess}
+          copied={recipeCopied}
+          onToken={setBillingToken}
+          onCopy={() => void copyBillingRecipe()}
+          onSubmit={() => void saveBillingAccess()}
+        />
+      )}
     </div>
+  );
+}
+
+function BillingAccessSetup({ token, busy, error, success, copied, onToken, onCopy, onSubmit }: {
+  token: string;
+  busy: boolean;
+  error: string;
+  success: string;
+  copied: boolean;
+  onToken: (value: string) => void;
+  onCopy: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <section className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
+      <div className="flex items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--warn-bg)] text-[var(--warn)] [&_.icon]:size-5"><Icon name="wallet" /></span>
+        <div>
+          <p className="eyebrow">One more permission</p>
+          <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare's normal Brolly sign-in does not include Billing Read. Add a separate read-only token so Brolly can compare fast telemetry with invoice-aligned daily usage. This token cannot change billing or resources.</p>
+        </div>
+      </div>
+
+      <ol className="mt-4 grid gap-3 border-y border-[var(--line-soft)] py-4 md:grid-cols-3">
+        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b><span><strong className="block text-xs">Open API Tokens</strong><small className="mt-1 block leading-5 text-[var(--muted)]">In Cloudflare, choose <strong>Create Custom Token</strong>.</small></span></li>
+        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b><span><strong className="block text-xs">Use the recipe below</strong><small className="mt-1 block leading-5 text-[var(--muted)]">Grant only Account → Billing → Read for this account.</small></span></li>
+        <li className="flex gap-3"><b className="grid size-6 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">3</b><span><strong className="block text-xs">Paste it once</strong><small className="mt-1 block leading-5 text-[var(--muted)]">Brolly verifies, encrypts, and never displays it again.</small></span></li>
+      </ol>
+
+      <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(280px,.8fr)]">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-3">
+          <div className="flex items-center justify-between gap-3"><strong className="text-xs">Least-privilege token recipe</strong><button type="button" className="button secondary small" onClick={onCopy}><Icon name="clipboard" /> {copied ? "Copied" : "Copy recipe"}</button></div>
+          <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
+            <dt className="text-[var(--faint)]">Name</dt><dd className="m-0 font-semibold">Brolly Billing Read</dd>
+            <dt className="text-[var(--faint)]">Permission</dt><dd className="m-0 font-semibold">Account → Billing → Read</dd>
+            <dt className="text-[var(--faint)]">Resources</dt><dd className="m-0 font-semibold">Include → the account connected to Brolly</dd>
+            <dt className="text-[var(--faint)]">Zone access</dt><dd className="m-0 font-semibold">None</dd>
+          </dl>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Open Cloudflare API Tokens ↗</a>
+            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">Detailed Cloudflare instructions ↗</a>
+          </div>
+        </div>
+
+        <form className="grid content-start gap-2" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+          <label className="text-xs font-semibold" htmlFor="billing-access-token">Paste the new token</label>
+          <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Cloudflare API token" />
+          <button type="submit" className="button primary mt-1" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Checking Billing Read…" : "Verify and save token"}</button>
+          <small className="leading-5 text-[var(--faint)]">The token is stored only after Cloudflare confirms it can read this account's billing usage.</small>
+          {error && <p className="form-error mt-1" role="alert"><strong>Billing access failed.</strong> {error}</p>}
+          {success && <p className="form-success mt-1" role="status">{success}</p>}
+        </form>
+      </div>
+    </section>
   );
 }
 
@@ -408,23 +478,24 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
     { key: "billing" as const, label: "Daily billing details" },
   ];
   return (
-    <div className="grid gap-3 md:grid-cols-3" aria-label="Cloudflare usage access results">
+    <section className="overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)]" aria-label="Cloudflare usage access results">
+      <header className="border-b border-[var(--line-soft)] bg-[var(--panel-soft)] px-4 py-3"><strong className="text-sm">Monitoring access results</strong></header>
       {rows.map(row => {
         const access = result.access[row.key];
         const good = access.state === "connected";
         const caution = access.state === "limited" || access.state === "not_configured" || access.state === "unknown";
         return (
-          <article key={row.key} className={`rounded-[var(--radius)] border p-4 ${good ? "border-[var(--good-line)] bg-[var(--good-bg)]" : caution ? "border-[var(--warn-line)] bg-[var(--warn-bg)]" : "border-[var(--danger-line)] bg-[var(--danger-bg)]"}`}>
+          <article key={row.key} className="grid gap-2 border-t border-[var(--line-soft)] px-4 py-3 first:border-t-0 md:grid-cols-[minmax(180px,.7fr)_auto_minmax(0,1.3fr)] md:items-center md:gap-4">
             <div className="flex items-center gap-2">
               <span className={good ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={good ? "check" : caution ? "info" : "alert"} /></span>
               <strong className="text-sm">{row.label}</strong>
             </div>
-            <p className="mt-2 text-xs font-semibold capitalize">{access.state.replaceAll("_", " ")}</p>
-            <p className="mt-1 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
+            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold capitalize ${good ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{access.state.replaceAll("_", " ")}</span>
+            <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
           </article>
         );
       })}
-    </div>
+    </section>
   );
 }
 
