@@ -14,7 +14,6 @@ export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { 
         {oauthConfigured && credentialStorageReady
           ? <a className="button primary full mb-2.5 min-h-[46px]" href="/api/auth/login"><CloudflareLogo /> Login with Cloudflare</a>
           : <button className="button primary full mb-2.5 min-h-[46px]" type="button" disabled><CloudflareLogo /> Login with Cloudflare</button>}
-        <p className="fine-print">The first successful sign-in binds this deployment to that Cloudflare account—not to one person. Later operators must be able to authorize the same account. Brolly stores the latest encrypted, revocable OAuth grant in your own D1 database. <a className="link-button inline" href="https://brolly.standardagents.ai/#install">Read the installation guide.</a></p>
       </section>
       <div className="auth-art" aria-hidden="true">
         <div className="radar-ring one" />
