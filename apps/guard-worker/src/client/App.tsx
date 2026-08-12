@@ -149,6 +149,7 @@ export default function App() {
         editing={wizardOpen}
         initialStep={wizardStep}
         onCancel={wizardOpen ? () => setWizardOpen(false) : undefined}
+        onLogout={() => void logout()}
         onSaved={async () => {
           const next = await api<OnboardingData>("/api/onboarding", token);
           setOnboarding(next);

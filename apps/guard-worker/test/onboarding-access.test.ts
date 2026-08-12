@@ -15,6 +15,12 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("billingNeedsToken || billingSuccess");
   });
 
+  it("keeps sign-out available before onboarding is complete", () => {
+    expect(source).toContain("onLogout: () => void");
+    expect(source).toContain("title=\"Sign out of Brolly\"");
+    expect(source).toContain("<Icon name=\"logout\" /> Sign out");
+  });
+
   it("provides a simple, account-specific Billing Read token handoff", () => {
     expect(source).toContain("Copy Brolly&apos;s token settings");
     expect(source).toContain("Account → Billing → Read");

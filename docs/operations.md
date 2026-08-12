@@ -128,6 +128,10 @@ explicit owner-authorized repository change rather than a self-update.
 On first authenticated login, verify usage access, then complete all four budget
 steps. The access check is required before onboarding can continue. The access
 screen is built into Brolly and requires no local agent or additional service.
+The setup header always includes **Sign out**. Signing out ends only the current
+browser session; it does not mark onboarding complete, clear saved settings, or
+unbind the installation's Cloudflare account. The operator can authenticate
+again and continue setup.
 It starts with one bounded read-only check and does not apply suggested limits.
 Results are shown before any credential form.
 OAuth reconnection is revealed only for an Analytics permission problem;

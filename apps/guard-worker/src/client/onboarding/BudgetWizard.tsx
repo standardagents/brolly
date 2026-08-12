@@ -15,12 +15,13 @@ const LIMIT_ROWS = [
 
 type RuntimeIntegration = { workerScript: string; installed: boolean };
 
-export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onSaved }: {
+export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onLogout, onSaved }: {
   data: OnboardingData;
   token: string;
   editing: boolean;
   initialStep?: number;
   onCancel?: () => void;
+  onLogout: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [step, setStep] = useState(initialStep);
@@ -120,7 +121,10 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       <header className="setup-header">
         <Brand />
         <div>{editing ? "Budget settings" : "First-run protection setup"}</div>
-        {onCancel && <button type="button" className="button quiet" onClick={onCancel}>Close</button>}
+        <span className="ml-auto flex items-center gap-2">
+          {onCancel && <button type="button" className="button quiet" onClick={onCancel}>Close</button>}
+          <button type="button" className="button quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</button>
+        </span>
       </header>
       <div className="setup-layout">
         <aside className="setup-steps">
