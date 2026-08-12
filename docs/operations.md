@@ -59,9 +59,11 @@ changing accounts requires deliberately resetting the D1 binding and stored
 credentials or deploying a new Brolly instance. The CLI installer pre-binds its
 selected account before the Worker becomes available.
 
-The Deploy to Cloudflare button targets the isolated `deploy/` release
-template, not the multi-application workspace root. Cloudflare copies that
-directory into the new installation repository and requires only the
+The canonical Deploy to Cloudflare release is generated in `deploy/`. CI
+publishes that directory as the root-only `deploy-template` branch, and the
+button targets that branch rather than the multi-application workspace root or
+a nested directory. This avoids Cloudflare creating a placeholder repository
+with only its rewritten Wrangler file. The installation requires only the
 automatically provisioned D1 binding. Its explicit `npm run build` command
 validates the precompiled Worker, dashboard, migrations, and upload boundary
 without network access; Cloudflare then runs the separate `npm run deploy`

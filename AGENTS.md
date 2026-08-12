@@ -30,9 +30,11 @@ pnpm release:runtime patch --dry-run --yes
 `.github/workflows/deploy-docs.yml` on pushes to `main`. It is intentionally
 not part of the customer Deploy to Cloudflare build in `pnpm build`.
 
-`deploy/` is the fully isolated, generated release template used by the Deploy
-to Cloudflare button. Cloudflare does not support this repository's
-multi-Worker workspace as one template target. Run `pnpm build:deploy-template`
-after guard Worker changes and commit the resulting Worker, assets, migrations,
-and deploy helper. The dashboard and README must link to the `deploy/`
-subdirectory URL, not the repository root.
+`deploy/` is the canonical, fully isolated generated release template used by
+the Deploy to Cloudflare button. Cloudflare's installer failed to clone this
+repository's nested template reliably, so `.github/workflows/deploy-docs.yml`
+publishes `deploy/` as the root of the `deploy-template` branch before updating
+the public site. Run `pnpm build:deploy-template` after guard Worker changes and
+commit the resulting Worker, assets, migrations, and deploy helpers. The
+dashboard and README must link to the `deploy-template` branch URL, never the
+monorepo root or `deploy/` subdirectory URL.
