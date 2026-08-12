@@ -13,7 +13,6 @@ if (manifest.schemaVersion !== 1 || manifest.configVersion !== 1 || !/^[a-f0-9]{
 }
 
 const managedPaths = [
-  ".github/workflows/brolly-update.yml",
   "LICENSE",
   "README.md",
   "assets",

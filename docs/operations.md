@@ -119,6 +119,11 @@ If repository policy separately forbids Actions from creating pull requests,
 the workflow leaves the verified update branch in place and emits a prefilled
 GitHub comparison URL in the run summary. The operator opens that URL to create
 the same review PR manually; no direct deployment occurs.
+Routine updates exclude `.github/workflows/brolly-update.yml` from their copy
+allowlist because GitHub does not let a workflow's own token create or modify
+workflow files. New installations receive the canonical workflow from the
+Deploy Button template. A future workflow-infrastructure migration must be an
+explicit owner-authorized repository change rather than a self-update.
 
 On first authenticated login, optionally verify usage access, then complete all
 four budget steps. The access screen is built into Brolly and requires no local

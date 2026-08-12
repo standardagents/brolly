@@ -29,6 +29,8 @@ binding, variables, and secrets.
 If your GitHub organization does not allow Actions to create pull requests,
 the workflow still pushes the verified update branch and places a prefilled
 pull-request comparison link in the run summary.
+The updater workflow is installation infrastructure and is not rewritten by
+routine application updates.
 
 - Product and installation documentation: <https://brolly.standardagents.ai>
 - Source and contributions: <https://github.com/standardagents/brolly>

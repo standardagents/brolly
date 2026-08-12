@@ -103,6 +103,8 @@ binding, variables, and secrets.
 Some GitHub organizations disable pull-request creation by Actions. In that
 case the workflow still succeeds after pushing the verified update branch and
 puts a prefilled **Open pull request** comparison link in its run summary.
+Routine application updates never rewrite the repository's updater workflow;
+GitHub intentionally forbids a workflow token from modifying workflow files.
 
 Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
 `BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or

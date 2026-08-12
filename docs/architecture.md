@@ -41,6 +41,10 @@ automatically. Installation-owned
 `wrangler.jsonc`, D1 identity, variables, and secrets are outside that copy
 allowlist. This gives public and private installations the same review gate
 without a publisher-owned GitHub App or long-lived token.
+The workflow file itself is outside the routine update allowlist because GitHub
+does not permit a workflow token to modify workflow files. It is provisioned at
+installation time and changed only through an explicit owner-authorized
+infrastructure migration.
 
 Browser login uses Brolly's publisher-owned public OAuth client and one fixed
 redirect URI at `brolly-login.standardagents.ai`. The private, separately

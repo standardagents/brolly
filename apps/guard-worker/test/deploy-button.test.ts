@@ -49,7 +49,8 @@ describe("Deploy to Cloudflare inputs", () => {
     expect(updaterWorkflow).toContain("node scripts/update-from-upstream.mjs");
     expect(updaterWorkflow).toContain("GitHub repository policy did not let Actions open the pull request");
     expect(updaterWorkflow).toContain("?expand=1");
-    expect(updaterWorkflow).toContain("git add .github/workflows/brolly-update.yml");
+    expect(updaterWorkflow).not.toContain("git add .github/workflows/brolly-update.yml");
+    expect(await readFile("scripts/update-from-upstream.mjs", "utf8")).not.toContain('".github/workflows/brolly-update.yml"');
     expect(release.release).toMatch(/^[a-f0-9]{40}$/);
     expect(release.workflowFile).toBe("brolly-update.yml");
     expect(release.configVersion).toBe(1);
