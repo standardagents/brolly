@@ -138,11 +138,10 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
         <section className="setup-panel">
           {step === 0 && (
             <>
-              <p className="eyebrow orange">Step 1 of 6 · Optional</p>
+              <p className="eyebrow orange">Step 1 of 6</p>
               <h2>Check what Brolly can see</h2>
-              <p className="section-copy">Confirm that this installation can read account inventory, Workers Analytics, Durable Object Analytics, and optional daily billing data.</p>
+              <p className="section-copy">Brolly works by using existing Cloudflare APIs to monitor individual services and the billed usage for those services. To get started, let&apos;s make sure Brolly has the appropriate permissions to safely monitor your account&apos;s usage.</p>
               <AccessActions busy={estimateBusy} result={estimates} notice={accessNotice} error={accessError} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessError(""); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
-              {!estimates && <p className="mt-4 text-xs text-[var(--faint)]">You can skip this check and enter every limit manually.</p>}
             </>
           )}
           {step === 1 && (
@@ -260,7 +259,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </span>
             )}
             {step < 5
-              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>{step === 0 ? estimates ? "Continue to limits" : "Skip access check" : "Continue"}</button>
+              ? <button type="button" className="button primary" disabled={busy || (step === 0 && (!estimates || estimateBusy))} onClick={() => setStep(step + 1)}>{step === 0 ? "Continue to limits" : "Continue"}</button>
               : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
@@ -347,7 +346,7 @@ function AccessActions({ busy, result, notice, error, token, onVerify, onVerifie
         <div className="flex min-w-0 items-start gap-3">
           <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--panel)] text-[var(--good)] [&_.icon]:size-5"><Icon name="shield" /></span>
           <div>
-            <div className="flex items-center gap-2"><strong className="text-sm">A safe, bounded monitoring check</strong><InfoTip label="How Brolly checks access">Brolly makes at most two read-only Analytics requests and one billing request only when Billing Read is configured. Results are cached for 15 minutes. This check never changes limits or Cloudflare resources.</InfoTip></div>
+            <div className="flex items-center gap-2"><strong className="text-sm">Check Brolly&apos;s access</strong><InfoTip label="How Brolly checks access">Brolly makes at most two read-only Analytics requests and one billing request only when Billing Read is configured. Results are cached for 15 minutes. This check never changes limits or Cloudflare resources.</InfoTip></div>
             <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">Brolly reads Cloudflare's usage APIs. It cannot deploy, quarantine, pause, delete, or change anything during this check, and it does not write monitoring traffic into your applications.</p>
             {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
             {result && <p className="mt-1 text-[11px] text-[var(--faint)]">Checked {new Date(result.generatedAt).toLocaleString()} · {result.apiCalls} bounded API {result.apiCalls === 1 ? "request" : "requests"}</p>}

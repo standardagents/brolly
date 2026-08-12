@@ -125,10 +125,11 @@ workflow files. New installations receive the canonical workflow from the
 Deploy Button template. A future workflow-infrastructure migration must be an
 explicit owner-authorized repository change rather than a self-update.
 
-On first authenticated login, optionally verify usage access, then complete all
-four budget steps. The access screen is built into Brolly and requires no local
-agent or additional service. It starts with one bounded read-only check and
-does not apply suggested limits. Results are shown before any credential form.
+On first authenticated login, verify usage access, then complete all four budget
+steps. The access check is required before onboarding can continue. The access
+screen is built into Brolly and requires no local agent or additional service.
+It starts with one bounded read-only check and does not apply suggested limits.
+Results are shown before any credential form.
 OAuth reconnection is revealed only for an Analytics permission problem;
 Billing token instructions are revealed only when Billing Read is unavailable.
 The copyable recipe specifies Account → Billing → Read for only the connected

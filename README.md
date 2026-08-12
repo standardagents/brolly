@@ -58,7 +58,8 @@ or the instance is replaced. Later sign-ins must authorize the same account; any
 Cloudflare member able to grant Brolly's requested scopes for that account may
 sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
 and asks for limits for every discovered product, Worker, and namespace. The
-first optional setup step can read the previous rolling 24 hours and prefill
+first setup step verifies monitoring access. The following budget step can read
+the previous rolling 24 hours and prefill
 suggested limits with 25%, 75%, and 150% headroom. It uses at most two bounded
 Analytics requests plus one Billing request when Billing Read is configured,
 using the latest available daily billing record for billing-only products. It
@@ -66,7 +67,8 @@ caches the result for 15 minutes, leaves products without measurable cost
 unchanged, and saves nothing until the final setup step.
 
 First-run setup separates permission verification from limit generation. The
-access screen initially shows one safe, bounded monitoring check. It reveals
+required access screen initially shows one monitoring-access check. Setup cannot
+continue until that check has run. It reveals
 results and only the remediation actually needed: OAuth reconnection for a
 denied Analytics scope, or guided Billing Read setup when billing is missing.
 The billing guide provides a copyable least-privilege token recipe. A token
