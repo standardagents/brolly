@@ -520,6 +520,13 @@ async function operationalToken(env) {
 		await env.DB.prepare(`DELETE FROM cron_lease WHERE name='oauth-refresh' AND holder=?1`).bind(holder).run();
 	}
 }
+async function configuredBillingToken(env) {
+	if (env.CLOUDFLARE_BILLING_TOKEN) return env.CLOUDFLARE_BILLING_TOKEN;
+	if (!env.BROLLY_CREDENTIAL_KEY) return void 0;
+	const row = await env.DB.prepare(`SELECT value FROM settings WHERE key='billing_credentials' LIMIT 1`).first();
+	if (!row) return void 0;
+	return (await openJson(row.value, env.BROLLY_CREDENTIAL_KEY)).token;
+}
 function fallbackToken(env) {
 	if (!env.CLOUDFLARE_OAUTH_TOKEN) throw new Error("Connect this Brolly instance to Cloudflare before scanning or controlling resources");
 	return env.CLOUDFLARE_OAUTH_TOKEN;
@@ -1004,13 +1011,14 @@ var CloudflareClient = class {
 		}
 	}
 	async billingUsage(since, until) {
-		if (!this.env.CLOUDFLARE_BILLING_TOKEN) return null;
+		const token = await configuredBillingToken(this.env);
+		if (!token) return null;
 		const date = (value) => new Date(value).toISOString().slice(0, 10);
 		const params = new URLSearchParams({
 			from: date(since),
 			to: date(until)
 		});
-		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, this.env.CLOUDFLARE_BILLING_TOKEN);
+		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, token);
 	}
 	async get(path, token) {
 		return (await this.request(path, token)).result;
@@ -1825,10 +1833,14 @@ async function runMonitor(env) {
 		if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {
 			let billing = null;
 			let authoritativeBilledCost = null;
-			let billingState = env.CLOUDFLARE_BILLING_TOKEN ? "healthy" : "permission_denied";
-			let billingDetail = env.CLOUDFLARE_BILLING_TOKEN ? void 0 : "Configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
+			let billingState = "permission_denied";
+			let billingDetail = "Add Billing Read access in Brolly setup or configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
 			try {
 				billing = await client.billingUsage(now - 1728e5, now);
+				if (billing) {
+					billingState = "healthy";
+					billingDetail = void 0;
+				}
 			} catch (error) {
 				billingState = "unavailable";
 				billingDetail = error instanceof Error ? error.message : String(error);
@@ -2881,6 +2893,7 @@ async function finishLogin(request, env) {
 	await env.DB.batch([
 		env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('account_name',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(account.name, now),
 		env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('oauth_credentials',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(credentials, now),
+		env.DB.prepare(`DELETE FROM settings WHERE key='onboarding_budget_estimates'`),
 		env.DB.prepare(`INSERT INTO auth_sessions(token_hash,user_id,email,display_name,account_id,created_at,last_seen_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?6,?7)`).bind(sessionHash, user.sub, user.email ?? null, user.name ?? user.preferred_username ?? null, account.id, now, now + SESSION_TTL_MS),
 		env.DB.prepare(`DELETE FROM auth_sessions WHERE expires_at < ?1`).bind(now)
 	]);
@@ -3045,6 +3058,32 @@ var BudgetEstimateInProgressError = class extends Error {
 		this.name = "BudgetEstimateInProgressError";
 	}
 };
+async function configureOnboardingBillingAccess(env, token) {
+	const normalized = token.trim();
+	if (!validBillingToken(normalized)) throw new Error("Enter a valid Cloudflare API token without spaces");
+	if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
+	const budget = new RunBudget({
+		apiCalls: 1,
+		databaseRows: 10,
+		samples: 1e4,
+		wallMs: 1e4
+	});
+	const records = await new CloudflareClient({
+		...env,
+		CLOUDFLARE_BILLING_TOKEN: normalized
+	}, budget).billingUsage(Date.now() - 2 * DAY_MS, Date.now());
+	if (!records) throw new Error("Cloudflare Billing Read access could not be verified");
+	const now = Date.now();
+	await env.DB.batch([env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('billing_credentials',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(await sealJson({ token: normalized }, env.BROLLY_CREDENTIAL_KEY), now), env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY$1)]);
+	return { records: records.length };
+}
+async function removeOnboardingBillingAccess(env) {
+	await env.DB.batch([env.DB.prepare(`DELETE FROM settings WHERE key='billing_credentials'`), env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY$1)]);
+}
+function validBillingToken(value) {
+	return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
+}
 async function onboardingBudgetEstimates(env) {
 	const now = Date.now();
 	const cached = await env.DB.prepare(`SELECT value,updated_at FROM settings WHERE key=?1 LIMIT 1`).bind(CACHE_KEY$1).first();
@@ -3242,7 +3281,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "c618ec855cb9000501d395a873f2eedc0579953d";
+var BROLLY_RELEASE = "5e51f9529b4baba5e4d88a6a7bec39a60d5df211";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -3446,6 +3485,28 @@ var src_default = {
 			return Response.json(await onboardingBudgetEstimates(env), { headers: { "cache-control": "no-store" } });
 		} catch (error) {
 			return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 });
+		}
+		if (url.pathname === "/api/onboarding/billing-access" && request.method === "PUT") {
+			const body = await request.json();
+			try {
+				const result = await configureOnboardingBillingAccess(env, body.token ?? "");
+				await audit(env.DB, actor.actor, "billing_access.configure", env.BROLLY_ACCOUNT_ID, {
+					verified: true,
+					records: result.records
+				});
+				return Response.json({
+					ok: true,
+					...result
+				});
+			} catch (error) {
+				return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+			}
+		}
+		if (url.pathname === "/api/onboarding/billing-access" && request.method === "DELETE") {
+			if (env.CLOUDFLARE_BILLING_TOKEN) return Response.json({ error: "Billing access is supplied as a Worker secret and must be removed in Cloudflare" }, { status: 409 });
+			await removeOnboardingBillingAccess(env);
+			await audit(env.DB, actor.actor, "billing_access.remove", env.BROLLY_ACCOUNT_ID, {});
+			return Response.json({ ok: true });
 		}
 		if (url.pathname === "/api/onboarding" && request.method === "POST") {
 			const body = await request.json();
