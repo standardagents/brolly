@@ -8,6 +8,7 @@ describe("Brolly login", () => {
     expect(html).toContain("Login with Cloudflare");
     expect(html).toContain('href="/api/auth/login"');
     expect(html).toContain("min-h-[46px]");
+    expect(html).toContain("mb-2.5");
     expect(html).toContain('viewBox="12 13.5 25 12"');
     expect(html).not.toContain("Continue with Cloudflare");
   });
