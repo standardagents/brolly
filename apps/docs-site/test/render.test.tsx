@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { render } from "../src/render.js";
 import worker from "../src/worker.js";
 
@@ -43,5 +44,14 @@ describe("universal Brolly docs site", () => {
     const response = await worker.fetch(new Request("https://brolly.standardagents.ai/health"), { ASSETS: assets });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, service: "brolly-docs", rendering: "static-ssr" });
+  });
+
+  it("keeps the default Wrangler config away from the production Worker and route", () => {
+    const local = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+    const production = JSON.parse(readFileSync(new URL("../wrangler.production.jsonc", import.meta.url), "utf8"));
+    expect(local.name).toBe("brolly-docs-local");
+    expect(local.routes).toBeUndefined();
+    expect(production.name).toBe("brolly-docs");
+    expect(production.routes).toEqual([{ pattern: "brolly.standardagents.ai", custom_domain: true }]);
   });
 });

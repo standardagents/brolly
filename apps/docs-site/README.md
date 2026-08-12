@@ -20,10 +20,27 @@ JavaScript or a flash of the wrong theme.
 ```bash
 pnpm --filter @standardagents/brolly-docs dev
 pnpm build:docs
+```
+
+The production deployment path is a push from `main`. GitHub Actions typechecks,
+builds, verifies the deploy template, and deploys that commit.
+`wrangler.ci.jsonc` deliberately omits route management so that workflow needs
+only Workers deployment permissions after the domain has been bootstrapped
+once.
+
+Manual production deployment is reserved for emergencies:
+
+```bash
 pnpm deploy:docs
 ```
 
-`wrangler.jsonc` owns the custom domain and is used for manual deployment.
-`wrangler.ci.jsonc` deliberately omits route management so the main-branch
-workflow needs only Workers deployment permissions after the domain has been
-bootstrapped once.
+The command shows the source branch, commit, working-tree state, and production
+URL. It requires `continue` before building and `deploy` immediately before
+upload. `wrangler.production.jsonc` owns the custom domain for this confirmed
+manual path.
+
+The default `wrangler.jsonc` uses the separate `brolly-docs-local` Worker name
+and contains no production route, which keeps a plain `wrangler deploy` away
+from the production Worker. The package-level `deploy` command uses the same
+confirmations. The CI entry point requires the canonical GitHub Actions
+repository, `refs/heads/main`, and a checked-out HEAD matching `GITHUB_SHA`.

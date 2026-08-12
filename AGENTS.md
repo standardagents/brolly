@@ -51,7 +51,6 @@ pnpm dev
 pnpm dev:demo
 pnpm build:docs
 pnpm build:deploy-template
-pnpm deploy:docs
 pnpm release:runtime patch --dry-run --yes
 ```
 
@@ -86,6 +85,26 @@ Two rules for changing it:
 
 Mutating routes answer `{ ok: true }` without side effects, so every button is
 safe to click. The harness is development-only and never reaches `deploy/`.
+
+The production deployment path for the public docs site is a push from `main`.
+GitHub Actions typechecks, builds, verifies the deploy template, and deploys
+that commit. Agents should use this path for routine production delivery.
+
+Manual production deployment is reserved for emergencies:
+
+```bash
+pnpm deploy:docs
+```
+
+The command prints a prominent warning with the branch, commit, working-tree
+state, and production URL. It requires `continue` before building and `deploy`
+immediately before upload. The package-level docs deployment scripts use the
+same confirmations. The CI entry point accepts only the canonical GitHub
+Actions `main` environment and the checked-out `GITHUB_SHA`.
+
+The default docs-site Wrangler configuration uses the separate
+`brolly-docs-local` Worker name and has no route. The confirmed manual path is
+the sole caller of `wrangler.production.jsonc`.
 
 `apps/docs-site` is the universal public site for
 `brolly.standardagents.ai`. It is prerendered to static HTML and deployed by
