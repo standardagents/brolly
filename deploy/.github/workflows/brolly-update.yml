@@ -73,12 +73,17 @@ jobs:
             echo "Updated existing pull request: $EXISTING" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          URL=$(gh pr create \
+          if URL=$(gh pr create \
             --base "$DEFAULT_BRANCH" \
             --head "$BRANCH" \
             --title "Update Brolly to $DISPLAY" \
-            --body "Updates the prebuilt Brolly application to standardagents/brolly@$RELEASE. This preserves this installation's wrangler.jsonc, D1 database binding, variables, and secrets. Merge only after reviewing the changed application artifacts and Cloudflare preview.")
-          echo "Created update pull request: $URL" >> "$GITHUB_STEP_SUMMARY"
+            --body "Updates the prebuilt Brolly application to standardagents/brolly@$RELEASE. This preserves this installation's wrangler.jsonc, D1 database binding, variables, and secrets. Merge only after reviewing the changed application artifacts and Cloudflare preview."); then
+            echo "Created update pull request: $URL" >> "$GITHUB_STEP_SUMMARY"
+          else
+            COMPARE_URL="https://github.com/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$BRANCH?expand=1"
+            echo "GitHub repository policy did not let Actions open the pull request. The verified update branch is ready." >> "$GITHUB_STEP_SUMMARY"
+            echo "Open the prefilled pull request: $COMPARE_URL" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Report an already-current installation
         if: steps.commit.outputs.changed == 'false'

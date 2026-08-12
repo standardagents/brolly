@@ -100,6 +100,10 @@ and supplies the workflow's short-lived repository token. The updater replaces
 only published application artifacts and preserves `wrangler.jsonc`, the D1
 binding, variables, and secrets.
 
+Some GitHub organizations disable pull-request creation by Actions. In that
+case the workflow still succeeds after pushing the verified update branch and
+puts a prefilled **Open pull request** comparison link in its run summary.
+
 Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
 `BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or
 `BROLLY_ADMIN_TOKEN` to the deployed Worker later; none is required to get to

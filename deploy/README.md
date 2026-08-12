@@ -26,6 +26,10 @@ merge when ready. This works for private repositories and does not give Brolly
 a GitHub token. The workflow preserves `wrangler.jsonc`, your D1 database
 binding, variables, and secrets.
 
+If your GitHub organization does not allow Actions to create pull requests,
+the workflow still pushes the verified update branch and places a prefilled
+pull-request comparison link in the run summary.
+
 - Product and installation documentation: <https://brolly.standardagents.ai>
 - Source and contributions: <https://github.com/standardagents/brolly>
 - Runtime fuse: <https://www.npmjs.com/package/@standardagents/brolly-runtime>
