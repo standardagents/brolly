@@ -28,6 +28,8 @@ describe("Deploy to Cloudflare inputs", () => {
     expect(siteSource).not.toContain("tree/main/deploy");
     expect(readme).not.toContain("tree/main/deploy");
     expect(workflow).toContain("contents: write");
+    expect(workflow).toContain("npm --prefix deploy run build");
+    expect(workflow).toContain("git add deploy");
     expect(workflow).toContain("git subtree split --prefix=deploy --branch deploy-template");
     expect(workflow).toContain("git push --force origin deploy-template");
     expect(templateDeployHelper).toBe(sourceDeployHelper);
