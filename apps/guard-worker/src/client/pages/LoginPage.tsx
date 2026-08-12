@@ -1,4 +1,4 @@
-import { Brand } from "../components/ui";
+import { Brand, CloudflareLogo } from "../components/ui";
 
 export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { error: string; oauthConfigured: boolean; credentialStorageReady: boolean }) {
   return (
@@ -12,8 +12,8 @@ export function LoginPage({ error, oauthConfigured, credentialStorageReady }: { 
         {!oauthConfigured && <p className="form-error">This Brolly release is missing its publisher OAuth client. The installer does not need to create one.</p>}
         {!credentialStorageReady && <p className="form-error">Automatic credential-key setup did not complete. Redeploy Brolly, or add <code>BROLLY_CREDENTIAL_KEY</code> as a Worker secret, before signing in.</p>}
         {oauthConfigured && credentialStorageReady
-          ? <a className="button primary full" href="/api/auth/login">Continue with Cloudflare</a>
-          : <button className="button primary full" type="button" disabled>Continue with Cloudflare</button>}
+          ? <a className="button primary full min-h-[46px]" href="/api/auth/login"><CloudflareLogo /> Login with Cloudflare</a>
+          : <button className="button primary full min-h-[46px]" type="button" disabled><CloudflareLogo /> Login with Cloudflare</button>}
         <p className="fine-print">The first successful sign-in binds this deployment to that Cloudflare account—not to one person. Later operators must be able to authorize the same account. Brolly stores the latest encrypted, revocable OAuth grant in your own D1 database. <a className="link-button inline" href="https://brolly.standardagents.ai/#install">Read the installation guide.</a></p>
       </section>
       <div className="auth-art" aria-hidden="true">

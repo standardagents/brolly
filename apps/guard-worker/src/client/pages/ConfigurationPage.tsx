@@ -86,7 +86,7 @@ function ConnectionSection({ data, connection }: { data: DashboardData; connecti
           {connection.kind !== "connected" && (
             <p className="recovery-note">
               <strong>To repair:</strong> {connection.kind === "local"
-                ? <>deploy Brolly, open its URL, and choose <em>Continue with Cloudflare</em> to authorize exactly one account, then scan.</>
+                ? <>deploy Brolly, open its URL, and choose <em>Login with Cloudflare</em> to authorize exactly one account, then scan.</>
                 : "reconnect the Cloudflare account or replace the expired/revoked credential, then run an account scan."}
             </p>
           )}

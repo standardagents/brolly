@@ -51,7 +51,7 @@ verify that the secret exists and preserve it, so credentials already encrypted
 in D1 remain readable.
 Account ID, OAuth client, timezone, summary hour, optional billing access, and
 the optional break-glass token are not installation questions. On first visit,
-**Continue with Cloudflare** authorizes exactly
+**Login with Cloudflare** authorizes exactly
 one account. The first successful sign-in binds that Cloudflare account to the
 installation—not the individual user—until its D1 binding is deliberately reset
 or the instance is replaced. Later sign-ins must authorize the same account; any
