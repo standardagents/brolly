@@ -24,6 +24,7 @@ describe("Tailwind color-mode styling", () => {
     expect(themes).toContain("color-scheme: dark");
     expect(source("../index.html")).toContain('media="(prefers-color-scheme: light)"');
     expect(source("../index.html")).toContain('media="(prefers-color-scheme: dark)"');
+    expect(source("../index.html")).toContain('<link rel="icon" href="/brolly-logo.svg" type="image/svg+xml" />');
   });
 
   it("builds the public site with Tailwind and system color modes", () => {
