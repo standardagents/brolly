@@ -7,6 +7,7 @@ import {
   type SpendLimits,
 } from "@standardagents/brolly-core";
 import { CloudflareClient, type BillingUsageRecord } from "./cloudflare.js";
+import { sealJson } from "./credentials.js";
 import type { Env } from "./env.js";
 
 const DAY_MS = 86_400_000;
@@ -47,6 +48,36 @@ export class BudgetEstimateInProgressError extends Error {
     super("A recent-usage estimate is already running. Try again in a few seconds.");
     this.name = "BudgetEstimateInProgressError";
   }
+}
+
+export async function configureOnboardingBillingAccess(env: Env, token: string): Promise<{ records: number }> {
+  const normalized = token.trim();
+  if (!validBillingToken(normalized)) throw new Error("Enter a valid Cloudflare API token without spaces");
+  if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
+  const budget = new RunBudget({ apiCalls: 1, databaseRows: 10, samples: 10_000, wallMs: 10_000 });
+  const client = new CloudflareClient({ ...env, CLOUDFLARE_BILLING_TOKEN: normalized }, budget);
+  const records = await client.billingUsage(Date.now() - 2 * DAY_MS, Date.now());
+  if (!records) throw new Error("Cloudflare Billing Read access could not be verified");
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO settings(key,value,updated_at) VALUES('billing_credentials',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+    ).bind(await sealJson({ token: normalized }, env.BROLLY_CREDENTIAL_KEY), now),
+    env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY),
+  ]);
+  return { records: records.length };
+}
+
+export async function removeOnboardingBillingAccess(env: Env): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM settings WHERE key='billing_credentials'`),
+    env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY),
+  ]);
+}
+
+export function validBillingToken(value: string): boolean {
+  return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
 }
 
 export async function onboardingBudgetEstimates(env: Env): Promise<OnboardingBudgetEstimates> {

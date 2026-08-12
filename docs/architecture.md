@@ -116,6 +116,15 @@ the Cloudflare queries. Suggested warning, critical, and emergency budgets add
 zero-cost families keep their existing draft values, and partial account data
 never overwrites the account-wide draft budget.
 
+Access verification and draft mutation are separate client actions. The first
+screen runs the bounded collectors only to display access state. Reauthorizing
+OAuth invalidates the 15-minute access cache. A Billing Read token submitted in
+setup is tested against the bound account before its AES-GCM envelope is stored
+under `billing_credentials` in D1; it is never returned to the client. A Worker
+secret with the same purpose takes precedence. Only the explicit historical
+usage action on the following account-budget screen copies suggestions into
+the editable policy draft.
+
 Scoped budgets take precedence over family defaults. Per-object Durable Object
 cost also inherits its namespace budget when no exact-object budget exists.
 Namespace spend is the sum of all returned object operations plus namespace-level

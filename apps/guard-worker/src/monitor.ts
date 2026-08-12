@@ -168,10 +168,14 @@ export async function runMonitor(env: Env): Promise<void> {
     if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {
       let billing: Awaited<ReturnType<CloudflareClient["billingUsage"]>> = null;
       let authoritativeBilledCost: number | null = null;
-      let billingState: CoverageResult["state"] = env.CLOUDFLARE_BILLING_TOKEN ? "healthy" : "permission_denied";
-      let billingDetail = env.CLOUDFLARE_BILLING_TOKEN ? undefined : "Configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
+      let billingState: CoverageResult["state"] = "permission_denied";
+      let billingDetail: string | undefined = "Add Billing Read access in Brolly setup or configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
       try {
         billing = await client.billingUsage(now - 2 * 86_400_000, now);
+        if (billing) {
+          billingState = "healthy";
+          billingDetail = undefined;
+        }
       } catch (error) {
         billingState = "unavailable";
         billingDetail = error instanceof Error ? error.message : String(error);

@@ -116,9 +116,17 @@ Cloudflare preview before merging. If organization policy disables write
 access for `GITHUB_TOKEN`, enable read/write workflow permissions for the
 repository before running the updater.
 
-On first authenticated login, optionally check usage access, then complete all
-four budget steps. The usage check is built into Brolly and requires no local
-agent or additional service. Brolly requires
+On first authenticated login, optionally verify usage access, then complete all
+four budget steps. The access screen is built into Brolly and requires no local
+agent or additional service. It does not apply suggested limits. Operators can
+reauthorize the shared Cloudflare OAuth grant there. Because Billing Read is an
+account API-token permission rather than a Brolly OAuth scope, the same screen
+can verify and save a narrowly scoped Billing Read token. That token is
+AES-GCM-encrypted in the installation's D1; plaintext exists only for the
+request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
+Worker secret, remains the higher-precedence operator-managed alternative.
+The next account-budget screen can apply the cached historical suggestions.
+Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported
 per-object Durable Object windows. Product or resource limits marked `Limited

@@ -51,6 +51,11 @@ describe("Cloudflare OAuth authentication", () => {
     expect(writes.some(write => write.sql.includes("INSERT INTO oauth_states"))).toBe(true);
   });
 
+  it("clears cached access results when Cloudflare is reauthorized", async () => {
+    const source = await import("node:fs/promises").then(fs => fs.readFile("apps/guard-worker/src/auth.ts", "utf8"));
+    expect(source).toContain("DELETE FROM settings WHERE key='onboarding_budget_estimates'");
+  });
+
   it("uses the publisher OAuth client without deploy-time OAuth fields", async () => {
     const { db } = database();
     const env = environment(db);

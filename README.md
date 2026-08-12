@@ -65,6 +65,15 @@ using the latest available daily billing record for billing-only products. It
 caches the result for 15 minutes, leaves products without measurable cost
 unchanged, and saves nothing until the final setup step.
 
+First-run setup separates permission verification from limit generation. The
+access screen can reauthorize the Cloudflare OAuth grant and can accept an
+account-scoped **Billing Read** token. A token entered there is verified before
+it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
+the installation's D1. The following account-budget screen has the historical
+usage button; verifying access alone never changes a limit. An operator may
+instead continue supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which
+takes precedence over the D1 credential.
+
 Browser sign-in briefly passes through Brolly's separately operated, stateless
 OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the
 installation's one-time state and returns only the short-lived authorization

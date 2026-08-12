@@ -6,7 +6,7 @@ import { sealJson } from "./credentials.js";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
-import { BudgetEstimateInProgressError, onboardingBudgetEstimates } from "./budget-estimates.js";
+import { BudgetEstimateInProgressError, configureOnboardingBillingAccess, onboardingBudgetEstimates, removeOnboardingBillingAccess } from "./budget-estimates.js";
 import { releaseStatus, saveUpdateRepository } from "./updates.js";
 
 export default {
@@ -79,6 +79,24 @@ export default {
           { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 },
         );
       }
+    }
+
+    if (url.pathname === "/api/onboarding/billing-access" && request.method === "PUT") {
+      const body = await request.json<{ token?: string }>();
+      try {
+        const result = await configureOnboardingBillingAccess(env, body.token ?? "");
+        await audit(env.DB, actor.actor, "billing_access.configure", env.BROLLY_ACCOUNT_ID, { verified: true, records: result.records });
+        return Response.json({ ok: true, ...result });
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
+    }
+
+    if (url.pathname === "/api/onboarding/billing-access" && request.method === "DELETE") {
+      if (env.CLOUDFLARE_BILLING_TOKEN) return Response.json({ error: "Billing access is supplied as a Worker secret and must be removed in Cloudflare" }, { status: 409 });
+      await removeOnboardingBillingAccess(env);
+      await audit(env.DB, actor.actor, "billing_access.remove", env.BROLLY_ACCOUNT_ID, {});
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {

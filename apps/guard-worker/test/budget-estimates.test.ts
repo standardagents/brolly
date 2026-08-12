@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MetricSample } from "@standardagents/brolly-core";
-import { buildOnboardingBudgetEstimates } from "../src/budget-estimates.js";
+import { buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
 
 const start = Date.UTC(2026, 7, 11);
 const end = start + 86_400_000;
@@ -27,6 +27,13 @@ function sample(family: string, id: string, cost: number, options: { parentId?: 
 }
 
 describe("onboarding budget estimates", () => {
+  it("accepts bounded API-token values without accepting whitespace or empty secrets", () => {
+    expect(validBillingToken(`cfat_${"a".repeat(40)}`)).toBe(true);
+    expect(validBillingToken("short")).toBe(false);
+    expect(validBillingToken(`cfat_${"a".repeat(20)} pasted`)).toBe(false);
+    expect(validBillingToken("a".repeat(257))).toBe(false);
+  });
+
   it("adds graduated headroom and groups Workers and Durable Objects by enforceable resource", () => {
     const result = buildOnboardingBudgetEstimates({
       generatedAt: end,

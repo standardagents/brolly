@@ -30,6 +30,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [estimateBusy, setEstimateBusy] = useState(false);
   const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
   const [estimateNotice, setEstimateNotice] = useState("");
+  const [accessNotice, setAccessNotice] = useState("");
   const [error, setError] = useState("");
   const steps = ["Check usage access", "Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
   const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
@@ -58,39 +59,54 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     }
   }
 
+  function applySuggestions(result: OnboardingBudgetEstimates) {
+    const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
+    const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
+    const appliedFamilies = familySuggestions.length;
+    const appliedAssets = assetSuggestions.length;
+    setPolicy(current => {
+      const familyDailySpend = { ...current.familyDailySpend };
+      const assetDailySpend = { ...current.assetDailySpend };
+      for (const [family, suggestion] of familySuggestions) familyDailySpend[family] = suggestion.limits;
+      for (const [key, suggestion] of assetSuggestions) assetDailySpend[key] = suggestion.limits;
+      return {
+        ...current,
+        familyDailySpend,
+        assetDailySpend,
+        accountDailySpend: result.account && !result.account.partial ? result.account.limits : current.accountDailySpend,
+      };
+    });
+    if (appliedFamilies === 0) {
+      setEstimateNotice("Cloudflare returned no non-zero cost estimate for this window, so no limits were changed.");
+    } else {
+      const accountNote = result.account?.partial ? " The account-wide limit was left unchanged because the scan had partial product coverage." : " The account-wide limit was updated too.";
+      setEstimateNotice(`Filled ${appliedFamilies} product ${appliedFamilies === 1 ? "budget" : "budgets"}${appliedAssets ? ` and ${appliedAssets} resource ${appliedAssets === 1 ? "budget" : "budgets"}` : ""}.${accountNote}`);
+    }
+  }
+
+  async function verifyUsageAccess() {
+    setEstimateBusy(true);
+    setAccessNotice("");
+    setError("");
+    try {
+      const result = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      setEstimates(result);
+      setAccessNotice("Access verified. No limits were changed.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
   async function suggestFromRecentUsage() {
     setEstimateBusy(true);
     setEstimateNotice("");
     setError("");
     try {
-      const result = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
-      const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
-      const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
-      const appliedFamilies = familySuggestions.length;
-      const appliedAssets = assetSuggestions.length;
-      setPolicy(current => {
-        const familyDailySpend = { ...current.familyDailySpend };
-        const assetDailySpend = { ...current.assetDailySpend };
-        for (const [family, suggestion] of familySuggestions) {
-          familyDailySpend[family] = suggestion.limits;
-        }
-        for (const [key, suggestion] of assetSuggestions) {
-          assetDailySpend[key] = suggestion.limits;
-        }
-        return {
-          ...current,
-          familyDailySpend,
-          assetDailySpend,
-          accountDailySpend: result.account && !result.account.partial ? result.account.limits : current.accountDailySpend,
-        };
-      });
+      const result = estimates ?? await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       setEstimates(result);
-      if (appliedFamilies === 0) {
-        setEstimateNotice("Cloudflare returned no non-zero cost estimate for this window, so no limits were changed.");
-      } else {
-        const accountNote = result.account?.partial ? " The account-wide limit was left unchanged because the scan had partial product coverage." : " The account-wide limit was updated too.";
-        setEstimateNotice(`Filled ${appliedFamilies} product ${appliedFamilies === 1 ? "budget" : "budgets"}${appliedAssets ? ` and ${appliedAssets} resource ${appliedAssets === 1 ? "budget" : "budgets"}` : ""}.${accountNote}`);
-      }
+      applySuggestions(result);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -123,8 +139,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
             <>
               <p className="eyebrow orange">Step 1 of 6 · Optional</p>
               <h2>Check what Brolly can see</h2>
-              <p className="section-copy">Brolly reads usage through Cloudflare's own APIs. You do not need to install another agent or service. Run this optional check to confirm access and prefill safer limits from your account's previous 24 hours.</p>
-              <RecentUsageEstimator busy={estimateBusy} result={estimates} notice={estimateNotice} onSuggest={() => void suggestFromRecentUsage()} />
+              <p className="section-copy">Confirm that this installation can read the account inventory, Workers Analytics, Durable Object Analytics, and optional daily billing data. This check is read-only and does not change a limit.</p>
+              <AccessActions busy={estimateBusy} result={estimates} notice={accessNotice} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
               {estimates ? <UsageAccessResults result={estimates} /> : <div className="grid gap-3 md:grid-cols-3">
                 <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
                   <Icon name="radar" />
@@ -138,8 +154,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                 </article>
                 <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4">
                   <Icon name="sliders" />
-                  <strong className="mt-3 block text-sm">Suggestions only</strong>
-                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Suggested values stay editable and are not saved until the final setup step.</p>
+                  <strong className="mt-3 block text-sm">Access only</strong>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">This screen verifies permissions. Historical usage fills limits on the next screen.</p>
                 </article>
               </div>}
               {!estimates && <p className="mt-4 text-xs text-[var(--faint)]">You can skip this check and enter every limit manually.</p>}
@@ -150,6 +166,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <p className="eyebrow orange">Step 2 of 6</p>
               <h2>What is an unacceptable account day?</h2>
               <p className="section-copy">These limits apply across all monitored Cloudflare products. Warnings give you time; emergency limits create approval-ready stop actions where a safe control exists.</p>
+              <RecentUsageEstimator busy={estimateBusy} result={estimates} notice={estimateNotice} onSuggest={() => void suggestFromRecentUsage()} />
               <LimitEditor title="Total account spend" value={policy.accountDailySpend} onChange={value => setPolicy({ ...policy, accountDailySpend: value })} />
               <div className="mode-card">
                 <div>
@@ -259,7 +276,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </span>
             )}
             {step < 5
-              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>{step === 0 && !estimates ? "Skip for now" : "Continue"}</button>
+              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>{step === 0 ? estimates ? "Continue to limits" : "Skip access check" : "Continue"}</button>
               : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
@@ -285,6 +302,72 @@ function LimitEditor({ title, value, onChange }: { title: string; value: SpendLi
   );
 }
 
+function AccessActions({ busy, result, notice, token, onVerify, onVerified }: {
+  busy: boolean;
+  result: OnboardingBudgetEstimates | null;
+  notice: string;
+  token: string;
+  onVerify: () => void;
+  onVerified: (result: OnboardingBudgetEstimates) => void;
+}) {
+  const [billingToken, setBillingToken] = useState("");
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState("");
+
+  async function saveBillingAccess() {
+    setBillingBusy(true);
+    setBillingError("");
+    try {
+      await api("/api/onboarding/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
+      setBillingToken("");
+      const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      onVerified(verified);
+    } catch (cause) {
+      setBillingError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-5 grid gap-3">
+      <section className="flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="radar" /></span>
+          <div>
+            <div className="flex items-center gap-2"><strong className="text-sm">Verify current access</strong><InfoTip label="What the access check does">Brolly makes at most two bounded Analytics requests and one billing request when Billing Read is configured. Results are cached for 15 minutes. This screen never changes or saves a spending limit.</InfoTip></div>
+            <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">Test the credentials already connected to this installation and show exactly which usage sources Cloudflare allows Brolly to read.</p>
+            {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
+            {result && <p className="mt-1 text-[11px] text-[var(--faint)]">Checked {new Date(result.generatedAt).toLocaleString()} · {result.apiCalls} bounded API {result.apiCalls === 1 ? "request" : "requests"}</p>}
+          </div>
+        </div>
+        <button type="button" className="button primary shrink-0" disabled={busy || billingBusy} onClick={onVerify}><Icon name="radar" />{busy ? "Verifying…" : result ? "Verify again" : "Verify access"}</button>
+      </section>
+
+      <section className="grid gap-3 md:grid-cols-2" aria-label="Increase Cloudflare access">
+        <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel)] p-4">
+          <div className="flex items-center gap-2"><Icon name="refresh" /><strong className="text-sm">Workers and Durable Object access</strong></div>
+          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">If Analytics or inventory access is blocked, reconnect Cloudflare and approve the current read and control scopes. You will return to this Brolly installation.</p>
+          <a className="button secondary mt-3" href="/api/auth/login"><Icon name="external" /> Reconnect Cloudflare</a>
+        </article>
+        <article className="rounded-[var(--radius)] border border-[var(--line-soft)] bg-[var(--panel)] p-4">
+          <div className="flex items-center gap-2"><Icon name="wallet" /><strong className="text-sm">Daily billing access</strong></div>
+          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">For invoice-aligned daily costs, create an account-scoped token with only <strong>Billing Read</strong>, paste it once, and verify it here. Brolly encrypts it in this installation's D1.</p>
+          <form className="mt-3 grid gap-2" onSubmit={event => { event.preventDefault(); void saveBillingAccess(); }}>
+            <label className="text-xs font-semibold" htmlFor="billing-access-token">Billing Read API token</label>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <input id="billing-access-token" className="min-h-9 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm" type="password" value={billingToken} onChange={event => setBillingToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste token once" />
+              <button type="submit" className="button secondary" disabled={billingBusy || !billingToken.trim()}>{billingBusy ? "Verifying…" : "Save & verify"}</button>
+            </div>
+            <a className="text-xs font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">How to create the token ↗</a>
+            {billingError && <p className="form-error mt-1" role="alert">{billingError}</p>}
+          </form>
+        </article>
+      </section>
+    </div>
+  );
+}
+
 function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
@@ -297,12 +380,12 @@ function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
         <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="trend" /></span>
         <div>
           <div className="flex items-center gap-2">
-            <strong id="recent-usage-estimator-title" className="text-sm">Start from what this account already uses</strong>
+            <strong id="recent-usage-estimator-title" className="text-sm">Fill limits from this account's recent usage</strong>
             <InfoTip label="How recent-usage suggestions work">
               Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.
             </InfoTip>
           </div>
-          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-[var(--muted)]">Read the previous 24 hours, add safety headroom, and fill every product, Worker, and namespace Brolly can estimate. Products without measurable cost stay exactly as they are.</p>
+          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-[var(--muted)]">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
           {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
           {result && (
             <p className="mt-1 text-[11px] text-[var(--faint)]">
@@ -312,7 +395,7 @@ function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
         </div>
       </div>
       <button type="button" className="button secondary shrink-0" disabled={busy} onClick={onSuggest}>
-        <Icon name="trend" />{busy ? "Reading usage…" : result ? "Refresh suggestions" : "Suggest limits"}
+        <Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}
       </button>
     </section>
   );
