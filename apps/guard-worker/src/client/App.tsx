@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, authSession, logoutSession } from "./api";
 import { AppShell } from "./components/layout";
 import { connectionHealth } from "./lib/health";
@@ -10,7 +10,9 @@ import { LoadingScreen, LoginPage } from "./pages/LoginPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { useRoute } from "./router";
-import type { DashboardData, Incident, OnboardingData } from "./types";
+import type { DashboardData, Incident, OnboardingData, ReleaseStatus } from "./types";
+
+const RELEASE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 export default function App() {
   const [token, setToken] = useState("");
@@ -26,6 +28,8 @@ export default function App() {
   const [focusIncidentId, setFocusIncidentId] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
+  const [release, setRelease] = useState<ReleaseStatus | null>(null);
+  const releaseCheckedAt = useRef(0);
 
   const loadDashboard = useCallback(async (activeToken = token) => {
     const next = await api<DashboardData>("/api/dashboard", activeToken);
@@ -50,6 +54,13 @@ export default function App() {
     }
   }, [loadDashboard]);
 
+  const loadRelease = useCallback(async (activeToken = token) => {
+    const next = await api<ReleaseStatus>("/api/releases", activeToken);
+    setRelease(next);
+    releaseCheckedAt.current = Date.now();
+    return next;
+  }, [token]);
+
   useEffect(() => {
     void authSession().then(session => {
       setOauthConfigured(session.oauthConfigured);
@@ -71,11 +82,34 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [loadDashboard, onboarding?.complete, token]);
 
+  useEffect(() => {
+    if (!token || !onboarding?.complete) return;
+    let retry: number | undefined;
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadRelease().then(next => {
+        if (next.checking) retry = window.setTimeout(check, 5_000);
+      }).catch(() => undefined);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && Date.now() - releaseCheckedAt.current >= RELEASE_CHECK_INTERVAL_MS) check();
+    };
+    check();
+    const interval = window.setInterval(check, RELEASE_CHECK_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      if (retry !== undefined) window.clearTimeout(retry);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [loadRelease, onboarding?.complete, token]);
+
   async function logout() {
     await logoutSession();
     setToken("");
     setOnboarding(null);
     setDashboard(null);
+    setRelease(null);
     setError("");
   }
 
@@ -138,6 +172,7 @@ export default function App() {
       onScan={() => void scan()}
       onBudgets={() => void openWizard(1)}
       onLogout={() => void logout()}
+      release={release}
     >
       {route === "overview" && (
         <OverviewPage
@@ -179,6 +214,8 @@ export default function App() {
           onNavigate={navigate}
           onBudgets={() => void openWizard(1)}
           onLogout={logout}
+          release={release}
+          onReleaseRefresh={() => void loadRelease()}
         />
       )}
     </AppShell>

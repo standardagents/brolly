@@ -7,6 +7,7 @@ import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
 import { BudgetEstimateInProgressError, onboardingBudgetEstimates } from "./budget-estimates.js";
+import { releaseStatus, saveUpdateRepository } from "./updates.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -29,6 +30,21 @@ export default {
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
       return Response.json(await dashboardData(env));
+    }
+
+    if (url.pathname === "/api/releases" && request.method === "GET") {
+      return Response.json(await releaseStatus(env), { headers: { "cache-control": "no-store" } });
+    }
+
+    if (url.pathname === "/api/update-settings" && request.method === "PUT") {
+      const body = await request.json<{ repository?: string }>();
+      try {
+        const repository = await saveUpdateRepository(env, body.repository ?? "");
+        await audit(env.DB, actor.actor, "updates.repository", repository ?? "", { repository });
+        return Response.json({ ok: true, repository });
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
     }
 
     if (url.pathname === "/api/assets" && request.method === "GET") {

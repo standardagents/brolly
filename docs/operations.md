@@ -90,6 +90,32 @@ the account ID is derived during first sign-in, and timezone/summary settings
 default to UTC and 09:00. Operators who need break-glass CLI access or
 authoritative billing reconciliation can add those Worker secrets later.
 
+## Application updates
+
+Each installation includes `.github/workflows/brolly-update.yml`. In
+**Settings → Updates**, the operator saves only the installation repository's
+`owner/repository` slug. Brolly does not request or retain GitHub credentials.
+Private repositories are supported because the browser and repo-local workflow
+authenticate through GitHub itself.
+
+An authenticated dashboard asks its own `/api/releases` endpoint on load and
+once per hour while the page remains active. Returning to a visible tab also
+checks only when an hour has elapsed. The Worker keeps the upstream manifest in
+D1 for one hour and uses a short D1 lease, so concurrent tabs or operators
+produce at most one upstream fetch per installation per hour. A failed check is
+non-fatal and retains any older release information as stale.
+
+The update banner opens the repository's manual **Update Brolly** workflow.
+That workflow downloads the public `deploy-template` branch, validates it,
+creates a `brolly/update-*` branch, and opens a pull request. It never merges or
+deploys by itself. The allowlisted update copies the prebuilt Worker, static
+dashboard, migrations, verifier, updater, package metadata, and workflow. It
+deliberately does not replace `wrangler.jsonc`; the provisioned D1 binding,
+Worker variables, and secrets remain installation-owned. Review the diff and
+Cloudflare preview before merging. If organization policy disables write
+access for `GITHUB_TOKEN`, enable read/write workflow permissions for the
+repository before running the updater.
+
 On first authenticated login, optionally check usage access, then complete all
 four budget steps. The usage check is built into Brolly and requires no local
 agent or additional service. Brolly requires

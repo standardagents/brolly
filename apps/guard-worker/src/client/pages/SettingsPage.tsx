@@ -4,16 +4,40 @@ import { Icon } from "../components/ui";
 import { money } from "../format";
 import type { ConnectionHealth } from "../lib/health";
 import type { Route } from "../router";
-import type { DashboardData } from "../types";
+import type { DashboardData, ReleaseStatus } from "../types";
 
-export function SettingsPage({ data, connection, token, onNavigate, onBudgets, onLogout }: {
+export function SettingsPage({ data, connection, token, onNavigate, onBudgets, onLogout, release, onReleaseRefresh }: {
   data: DashboardData;
   connection: ConnectionHealth;
   token: string;
   onNavigate: (route: Route) => void;
   onBudgets: () => void;
   onLogout: () => void;
+  release: ReleaseStatus | null;
+  onReleaseRefresh: () => void;
 }) {
+  const [repository, setRepository] = useState(release?.repository ?? "");
+  const [savingRepository, setSavingRepository] = useState(false);
+  const [repositoryMessage, setRepositoryMessage] = useState("");
+  const [repositoryError, setRepositoryError] = useState("");
+
+  useEffect(() => setRepository(release?.repository ?? ""), [release?.repository]);
+
+  async function saveRepository() {
+    setSavingRepository(true);
+    setRepositoryError("");
+    setRepositoryMessage("");
+    try {
+      await api("/api/update-settings", token, { method: "PUT", body: JSON.stringify({ repository }) });
+      setRepositoryMessage(repository.trim() ? "Update repository saved." : "Update repository cleared.");
+      onReleaseRefresh();
+    } catch (cause) {
+      setRepositoryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSavingRepository(false);
+    }
+  }
+
   return (
     <>
       <section className="panel" aria-label="Budgets and enforcement">
@@ -53,6 +77,35 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
       </section>
 
       <NotificationSection token={token} />
+
+      <section className="panel" aria-label="Brolly updates">
+        <div className="panel-head">
+          <div>
+            <p className="eyebrow">Updates</p>
+            <h2>Review new Brolly releases</h2>
+            <p className="panel-sub">While this dashboard is open, Brolly checks for a release at most once an hour. It never updates or deploys itself.</p>
+          </div>
+          {release?.updateUrl && <a className="button secondary" href={release.updateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Open updater</a>}
+        </div>
+        <div className="update-settings">
+          <div className="update-settings-copy">
+            <strong>{!release ? "Checking release status…" : release.error && !release.latestRelease ? "Release status unavailable" : release.available ? `${release.displayVersion ?? "A new release"} is available` : "This installation is current"}</strong>
+            <p>Save the GitHub repository created by Deploy to Cloudflare. When an update appears, Brolly links you to its manual updater workflow. The workflow opens a pull request for review; your D1 binding, secrets, and Worker settings stay untouched.</p>
+            <p><strong>Private repository?</strong> That works normally. Brolly stores only this repository name—never a GitHub token. GitHub checks your access when you open the updater.</p>
+          </div>
+          <form className="update-repository-form" onSubmit={event => { event.preventDefault(); void saveRepository(); }}>
+            <label htmlFor="update-repository">Installation repository</label>
+            <div>
+              <input id="update-repository" value={repository} onChange={event => setRepository(event.target.value)} placeholder="owner/brolly-guard" autoComplete="off" spellCheck={false} />
+              <button type="submit" className="button primary" disabled={savingRepository}>{savingRepository ? "Saving…" : "Save"}</button>
+            </div>
+            <small>Use the owner/repository name shown in GitHub. Clear it to disable update links.</small>
+            {repositoryError && <p className="form-error" role="alert">{repositoryError}</p>}
+            {repositoryMessage && <p className="form-success" role="status">{repositoryMessage}</p>}
+            {release?.error && <p className="inline-update-error">The last release check could not finish: {release.error}</p>}
+          </form>
+        </div>
+      </section>
 
       <section className="panel" aria-label="Runtime integration">
         <div className="panel-head">
@@ -97,3 +150,5 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
     </>
   );
 }
+import { useEffect, useState } from "react";
+import { api } from "../api";

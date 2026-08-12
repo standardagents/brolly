@@ -16,6 +16,16 @@ The build command performs an offline integrity check of the checked-in Worker,
 dashboard, migrations, and Wrangler upload boundary. The application is already
 compiled, so this check does not fetch source or generate a second bundle.
 
+## Updates
+
+In Brolly, open **Settings → Updates** and save this repository as
+`owner/repository`. While the dashboard is active, Brolly checks for releases
+at most hourly. When a banner appears, click **Review update**, run the
+**Update Brolly** workflow, review its pull request and Cloudflare preview, then
+merge when ready. This works for private repositories and does not give Brolly
+a GitHub token. The workflow preserves `wrangler.jsonc`, your D1 database
+binding, variables, and secrets.
+
 - Product and installation documentation: <https://brolly.standardagents.ai>
 - Source and contributions: <https://github.com/standardagents/brolly>
 - Runtime fuse: <https://www.npmjs.com/package/@standardagents/brolly-runtime>

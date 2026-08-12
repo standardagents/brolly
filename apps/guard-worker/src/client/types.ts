@@ -139,3 +139,18 @@ export interface NotificationTarget {
   lastDeliveryOk: boolean | null;
   lastDeliveryError: string | null;
 }
+
+export interface ReleaseStatus {
+  currentRelease: string;
+  latestRelease: string | null;
+  displayVersion: string | null;
+  publishedAt: string | null;
+  notesUrl: string | null;
+  available: boolean;
+  checkedAt: number | null;
+  stale: boolean;
+  checking: boolean;
+  repository: string | null;
+  updateUrl: string | null;
+  error?: string;
+}

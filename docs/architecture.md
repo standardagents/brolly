@@ -23,6 +23,25 @@ pages. `/api/*` and `/health` run Worker-first while
 navigation requests use the static SPA fallback. The npm installer packages
 both the Worker bundle and the client asset directory.
 
+Release discovery is active-page-driven rather than cron-driven. The client
+calls an authenticated local endpoint on load and at most hourly while open.
+That endpoint fetches one fixed, size-limited manifest from Brolly's public
+`deploy-template` branch, validates its schema, release SHA, and trusted notes
+URL, and caches it in D1 for one hour. A D1 lease deduplicates simultaneous
+tabs. No GitHub credential enters Brolly: D1 stores only the optional
+`owner/repository` slug used to construct the GitHub Actions link.
+
+Updates are a separate repository-local control plane. The shipped manual
+workflow receives a short-lived `GITHUB_TOKEN` from the installation's own
+GitHub repository, copies only an explicit allowlist of release artifacts, and
+opens a pull request. The running, already-installed workflow performs static
+syntax and manifest checks; it does not execute scripts downloaded from the
+candidate release while its write token is present. It cannot merge
+automatically. Installation-owned
+`wrangler.jsonc`, D1 identity, variables, and secrets are outside that copy
+allowlist. This gives public and private installations the same review gate
+without a publisher-owned GitHub App or long-lived token.
+
 Browser login uses Brolly's publisher-owned public OAuth client and one fixed
 redirect URI at `brolly-login.standardagents.ai`. The private, separately
 deployed `brolly-login` Worker contains the stateless relay; relay code and

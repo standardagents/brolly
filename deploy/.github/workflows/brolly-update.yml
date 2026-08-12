@@ -1,0 +1,85 @@
+name: Update Brolly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: brolly-update
+  cancel-in-progress: false
+
+jobs:
+  prepare-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this Brolly installation
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download the current Brolly release
+        run: git clone --depth 1 --branch deploy-template https://github.com/standardagents/brolly.git "$RUNNER_TEMP/brolly-release"
+
+      - name: Create the update branch
+        id: release
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          RELEASE=$(node -p "require('$RUNNER_TEMP/brolly-release/brolly-release.json').release")
+          DISPLAY=$(node -p "require('$RUNNER_TEMP/brolly-release/brolly-release.json').displayVersion")
+          export RELEASE
+          BRANCH="brolly/update-${RELEASE:0:12}"
+          git switch -C "$BRANCH" "origin/$DEFAULT_BRANCH"
+          node scripts/update-from-upstream.mjs "$RUNNER_TEMP/brolly-release"
+          node --check worker.js
+          find assets/assets -type f -name '*.js' -print0 | xargs -0 -n 1 node --check
+          node -e "const release=require('./brolly-release.json'); if(release.release !== process.env.RELEASE) throw new Error('Copied release does not match the requested release')"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "display=$DISPLAY" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the reviewed release artifacts
+        id: commit
+        env:
+          RELEASE: ${{ steps.release.outputs.release }}
+          DISPLAY: ${{ steps.release.outputs.display }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git add .github/workflows/brolly-update.yml LICENSE README.md assets brolly-release.json migrations package.json package-lock.json scripts worker.js
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(brolly): update to $DISPLAY"
+          git push --force-with-lease origin "$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open the update pull request
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.release.outputs.branch }}
+          DISPLAY: ${{ steps.release.outputs.display }}
+          RELEASE: ${{ steps.release.outputs.release }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Updated existing pull request: $EXISTING" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          URL=$(gh pr create \
+            --base "$DEFAULT_BRANCH" \
+            --head "$BRANCH" \
+            --title "Update Brolly to $DISPLAY" \
+            --body "Updates the prebuilt Brolly application to standardagents/brolly@$RELEASE. This preserves this installation's wrangler.jsonc, D1 database binding, variables, and secrets. Merge only after reviewing the changed application artifacts and Cloudflare preview.")
+          echo "Created update pull request: $URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report an already-current installation
+        if: steps.commit.outputs.changed == 'false'
+        run: echo "This Brolly installation already matches the current release." >> "$GITHUB_STEP_SUMMARY"

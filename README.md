@@ -81,6 +81,16 @@ branch. The button targets that branch—not a monorepo subdirectory—so the ne
 installation repository receives the Worker, dashboard assets, migrations,
 package metadata, and deploy scripts required by Workers Builds.
 
+Once installed, save that `owner/repository` name under **Settings → Updates**.
+While the dashboard is open, Brolly checks a small release manifest at most
+once per hour and shows a banner when a release is available. **Review update**
+opens the installation's manual GitHub Actions workflow, which creates a pull
+request. Brolly never stores a GitHub token, updates itself, or auto-merges the
+PR. Private repositories work the same way: GitHub authenticates the operator
+and supplies the workflow's short-lived repository token. The updater replaces
+only published application artifacts and preserves `wrangler.jsonc`, the D1
+binding, variables, and secrets.
+
 Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
 `BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or
 `BROLLY_ADMIN_TOKEN` to the deployed Worker later; none is required to get to

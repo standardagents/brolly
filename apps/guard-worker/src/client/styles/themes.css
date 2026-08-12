@@ -50,7 +50,7 @@
   .detail-block input, .detail-block select,
   .target-controls select, .notification-form input, .notification-form select,
   .money-input, .mode-card select, .limit-table-row label,
-  .object-limit-row input, .runtime-worker-field input {
+  .object-limit-row input, .runtime-worker-field input, .update-repository-form input {
     border-color: #505862;
     background: #111419;
     color: var(--ink);
@@ -78,6 +78,8 @@
   .topbar { background: #171a1ff0; }
   .emergency-banner .button.danger { background: #fff; border-color: #fff; color: #b62525; }
   .emergency-banner .button.danger:hover:not(:disabled) { background: #ffe6e2; }
+  .update-banner { border-color: #694121; background: #322115; color: #ffd0a8; }
+  .update-banner span { color: #d5a77f; }
 
   button.stat-tile:hover, .family-chip:hover { border-color: #59626d; }
   .local-pill { border-color: #59626d; background: #252a31; color: #c6cdd5; }
