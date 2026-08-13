@@ -28,6 +28,20 @@ export interface BillingUsageRecord {
   ListCost?: number;
 }
 
+interface PaygoBillingUsageRecord {
+  BilledCost: number;
+  ChargePeriodStart: string;
+  ChargePeriodEnd: string;
+  ConsumedQuantity: number;
+  ConsumedUnit: string;
+  EffectiveCost?: number;
+  ListCost?: number;
+  ServiceName: string;
+  ServiceFamilyName?: string;
+  ZoneId?: string;
+  ZoneName?: string;
+}
+
 export class CloudflareClient {
   private tokenPromise: Promise<string> | null = null;
   constructor(private readonly env: Env, private readonly budget: BoundedRunContext) {}
@@ -394,12 +408,16 @@ export class CloudflareClient {
     }
   }
 
-  async billingUsage(since: number, until: number): Promise<BillingUsageRecord[] | null> {
+  async billingUsage(_since: number, _until: number): Promise<BillingUsageRecord[] | null> {
     const token = await configuredBillingToken(this.env);
     if (!token) return null;
-    const date = (value: number) => new Date(value).toISOString().slice(0, 10);
-    const params = new URLSearchParams({ from: date(since), to: date(until) });
-    return this.get<BillingUsageRecord[]>(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, token);
+    // Cloudflare's /billable/usage v2 endpoint is explicitly restricted and
+    // rejects ordinary Billing Read tokens. The PayGo v1 endpoint is the
+    // documented account billing surface that accepts Billing Read. Omitting
+    // dates returns the current billing period and avoids v1's requirement
+    // that a custom range include the subscription's cycle-anchor day.
+    const records = await this.get<PaygoBillingUsageRecord[]>(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage`, token);
+    return records.map(normalizePaygoBillingRecord);
   }
 
   private async get<T>(path: string, token?: string): Promise<T> {
@@ -438,6 +456,29 @@ export class CloudflareClient {
     this.tokenPromise ??= operationalToken(this.env);
     return this.tokenPromise;
   }
+}
+
+function normalizePaygoBillingRecord(row: PaygoBillingUsageRecord): BillingUsageRecord {
+  const family = row.ServiceFamilyName ?? row.ServiceName;
+  return {
+    ChargePeriodStart: row.ChargePeriodStart,
+    ChargePeriodEnd: row.ChargePeriodEnd,
+    ConsumedQuantity: row.ConsumedQuantity,
+    ConsumedUnit: row.ConsumedUnit,
+    x_BillableMetricId: slug(row.ServiceName),
+    x_BillableMetricName: row.ServiceName,
+    x_ProductFamilyId: slug(family),
+    x_ProductFamilyName: family,
+    x_ZoneId: row.ZoneId,
+    x_ZoneName: row.ZoneName,
+    BilledCost: row.BilledCost,
+    EffectiveCost: row.EffectiveCost,
+    ListCost: row.ListCost,
+  };
+}
+
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
 }
 
 class CloudflareApiError extends Error {

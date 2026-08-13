@@ -145,3 +145,39 @@ describe("Cloudflare Worker telemetry", () => {
     expect(requestBody).toContain("sum_cpuTimeUs_DESC");
   });
 });
+
+describe("Cloudflare billing telemetry", () => {
+  it("uses the Billing Read-compatible PayGo endpoint and normalizes its service fields", async () => {
+    const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
+    let requestedUrl = "";
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      requestedUrl = url;
+      return Response.json({ success: true, result: [{
+        BilledCost: 0.75,
+        ChargePeriodStart: "2026-08-12T00:00:00Z",
+        ChargePeriodEnd: "2026-08-13T00:00:00Z",
+        ConsumedQuantity: 150_000,
+        ConsumedUnit: "Count",
+        EffectiveCost: 0.75,
+        ListCost: 0.75,
+        ServiceName: "Workers Standard Requests",
+        ServiceFamilyName: "Workers",
+        ZoneId: "zone-1",
+        ZoneName: "example.com",
+      }] });
+    }));
+
+    const result = await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(Date.now() - 86_400_000, Date.now());
+
+    expect(new URL(requestedUrl).pathname).toBe("/client/v4/accounts/account-1/billable-usage");
+    expect(new URL(requestedUrl).search).toBe("");
+    expect(result?.[0]).toMatchObject({
+      x_BillableMetricId: "workers_standard_requests",
+      x_BillableMetricName: "Workers Standard Requests",
+      x_ProductFamilyId: "workers",
+      x_ProductFamilyName: "Workers",
+      x_ZoneId: "zone-1",
+      BilledCost: 0.75,
+    });
+  });
+});

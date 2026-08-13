@@ -391,7 +391,7 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
         <div>
           <p className="eyebrow">One more permission</p>
           <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
-          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only user API token to show your real bill totals. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token is limited to this account and cannot change billing or resources.</p>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only user API token to show real bill totals for Pay-as-you-go accounts. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token is limited to this account and cannot change billing or resources.</p>
         </div>
       </div>
 

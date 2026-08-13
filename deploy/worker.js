@@ -1010,15 +1010,10 @@ var CloudflareClient = class {
 			};
 		}
 	}
-	async billingUsage(since, until) {
+	async billingUsage(_since, _until) {
 		const token = await configuredBillingToken(this.env);
 		if (!token) return null;
-		const date = (value) => new Date(value).toISOString().slice(0, 10);
-		const params = new URLSearchParams({
-			from: date(since),
-			to: date(until)
-		});
-		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, token);
+		return (await this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage`, token)).map(normalizePaygoBillingRecord);
 	}
 	async get(path, token) {
 		return (await this.request(path, token)).result;
@@ -1057,6 +1052,27 @@ var CloudflareClient = class {
 		return this.tokenPromise;
 	}
 };
+function normalizePaygoBillingRecord(row) {
+	const family = row.ServiceFamilyName ?? row.ServiceName;
+	return {
+		ChargePeriodStart: row.ChargePeriodStart,
+		ChargePeriodEnd: row.ChargePeriodEnd,
+		ConsumedQuantity: row.ConsumedQuantity,
+		ConsumedUnit: row.ConsumedUnit,
+		x_BillableMetricId: slug(row.ServiceName),
+		x_BillableMetricName: row.ServiceName,
+		x_ProductFamilyId: slug(family),
+		x_ProductFamilyName: family,
+		x_ZoneId: row.ZoneId,
+		x_ZoneName: row.ZoneName,
+		BilledCost: row.BilledCost,
+		EffectiveCost: row.EffectiveCost,
+		ListCost: row.ListCost
+	};
+}
+function slug(value) {
+	return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
+}
 var CloudflareApiError = class extends Error {
 	status;
 	code;
@@ -3314,7 +3330,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "115b3db91c517aad1abbab67f7715d9dda774123";
+var BROLLY_RELEASE = "4e2f0d72e0b62e936dce786520609d3335b2d03d";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";

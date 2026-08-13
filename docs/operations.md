@@ -166,6 +166,14 @@ than a Brolly OAuth scope, the same screen verifies the token against Cloudflare
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the
 request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
 Worker secret, remains the higher-precedence operator-managed alternative.
+Billing reconciliation reads Cloudflare's PayGo v1 `/billable-usage` endpoint,
+which explicitly accepts Billing Read tokens and returns the current billing
+period. Brolly does not call the similarly named `/billable/usage` v2 endpoint:
+Cloudflare marks v2 as restricted, and ordinary account Billing Read tokens are
+rejected there. Cloudflare currently exposes the billable-usage dashboard and
+API only to Pay-as-you-go accounts; Enterprise contract accounts continue with
+bounded Analytics estimates unless Cloudflare makes an invoice-aligned API
+available to that account.
 The next account-budget screen can apply the cached historical suggestions.
 Brolly OAuth access is renewable: the publisher client enables refresh tokens,
 the authorization request includes `offline_access`, and each installation
