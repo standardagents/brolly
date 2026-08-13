@@ -7,10 +7,4 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
-  build: {
-    ssr: "src/render.tsx",
-    outDir: "dist/server",
-    emptyOutDir: true,
-    minify: true,
-  },
 });
