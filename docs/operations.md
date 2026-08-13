@@ -146,12 +146,12 @@ protected by account and product limits because Cloudflare does not attribute
 them to individual Workers. Reconnecting OAuth is shown only for an actual
 authorization failure, never for a platform-level telemetry limitation.
 Connected rows explicitly require no action.
-The Billing Read handoff is three explicit actions: copy the token settings,
-open the already-bound account's Cloudflare API Tokens page, then paste and
-verify the token Cloudflare creates. The recipe specifies Account → Billing →
-Read for only the connected account, with no zone permissions. Because Billing
-Read is an account API-token permission rather than a Brolly OAuth scope, the
-same screen verifies the token against Cloudflare and only then stores it
+The Billing Read handoff uses Cloudflare's documented API-token template URL.
+Brolly opens the already-bound account's token creation form with the token name
+and Account → Billing → Read permission prefilled. The operator reviews the
+form, creates the token, then pastes the one-time secret back into Brolly for
+verification. Because Billing Read is an account API-token permission rather
+than a Brolly OAuth scope, the same screen verifies the token against Cloudflare and only then stores it
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the
 request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
 Worker secret, remains the higher-precedence operator-managed alternative.

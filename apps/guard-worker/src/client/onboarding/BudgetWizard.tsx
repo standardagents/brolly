@@ -303,7 +303,6 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
   const [billingSuccess, setBillingSuccess] = useState("");
-  const [recipeCopied, setRecipeCopied] = useState(false);
   const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
     const access = result.access[key];
     return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
@@ -325,23 +324,6 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
       setBillingError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBillingBusy(false);
-    }
-  }
-
-  async function copyBillingRecipe() {
-    const recipe = [
-      "Cloudflare API token for Brolly",
-      "Token name: Brolly Billing Read",
-      "Permissions: Account → Billing → Read",
-      "Account resources: Include → the same account connected to Brolly",
-      "Zone permissions: none",
-    ].join("\n");
-    try {
-      await navigator.clipboard.writeText(recipe);
-      setRecipeCopied(true);
-      window.setTimeout(() => setRecipeCopied(false), 2_000);
-    } catch {
-      setBillingError("Your browser could not copy the recipe. Select the settings below and copy them manually.");
     }
   }
 
@@ -378,9 +360,7 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
           busy={billingBusy}
           error={billingError}
           success={billingSuccess}
-          copied={recipeCopied}
           onToken={setBillingToken}
-          onCopy={() => void copyBillingRecipe()}
           onSubmit={() => void saveBillingAccess()}
         />
       )}
@@ -388,17 +368,16 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
   );
 }
 
-function BillingAccessSetup({ accountId, token, busy, error, success, copied, onToken, onCopy, onSubmit }: {
+function BillingAccessSetup({ accountId, token, busy, error, success, onToken, onSubmit }: {
   accountId: string;
   token: string;
   busy: boolean;
   error: string;
   success: string;
-  copied: boolean;
   onToken: (value: string) => void;
-  onCopy: () => void;
   onSubmit: () => void;
 }) {
+  const templateUrl = billingTokenTemplateUrl(accountId);
   return (
     <section className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
       <div className="flex items-start gap-3">
@@ -406,41 +385,26 @@ function BillingAccessSetup({ accountId, token, busy, error, success, copied, on
         <div>
           <p className="eyebrow">One more permission</p>
           <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
-          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only token to show your real bill totals. Copy Brolly&apos;s settings, create the token in Cloudflare, then paste it back here. It cannot change billing or resources.</p>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only token to show your real bill totals. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token cannot change billing or resources.</p>
         </div>
       </div>
 
       <ol className="mt-5 grid gap-3">
-        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start">
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
           <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b>
           <div>
-            <strong className="block text-sm">Copy Brolly&apos;s token settings</strong>
-            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">You&apos;ll paste these exact settings into Cloudflare in the next step.</p>
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
-              <dt className="text-[var(--faint)]">Name</dt><dd className="m-0 font-semibold">Brolly Billing Read</dd>
-              <dt className="text-[var(--faint)]">Permission</dt><dd className="m-0 font-semibold">Account → Billing → Read</dd>
-              <dt className="text-[var(--faint)]">Account</dt><dd className="m-0 font-semibold">Include → this account</dd>
-              <dt className="text-[var(--faint)]">Zone access</dt><dd className="m-0 font-semibold">None</dd>
-            </dl>
+            <strong className="block text-sm">Create the prefilled token in Cloudflare</strong>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Cloudflare will open with <strong>Brolly Billing Read</strong>, <strong>Billing → Read</strong>, and this account already selected. Review it, then click <strong>Continue to summary</strong> and <strong>Create Token</strong>.</p>
           </div>
-          <button type="button" className="button secondary shrink-0" onClick={onCopy}><Icon name="clipboard" /> {copied ? "Recipe copied" : "Copy recipe"}</button>
-        </li>
-
-        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b>
-          <div>
-            <strong className="block text-sm">Open this account&apos;s API Tokens page</strong>
-            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Click <strong>Create Custom Token</strong>, then enter the settings you just copied.</p>
-          </div>
-          <a className="button secondary shrink-0" href={`https://dash.cloudflare.com/${encodeURIComponent(accountId)}/api-tokens`} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</a>
+          <a className="button primary shrink-0" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Create billing token</a>
         </li>
 
         <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
-          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">3</b>
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b>
           <form className="grid gap-3" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
             <div>
-              <strong className="block text-sm">Create the token, then paste it here</strong>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">In Cloudflare, click <strong>Continue to summary</strong>, then <strong>Create Token</strong>. Copy the token Cloudflare shows—it is displayed only once.</p>
+              <strong className="block text-sm">Paste the token Cloudflare shows</strong>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Copy the token before leaving Cloudflare—it is displayed only once—then paste it here.</p>
             </div>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <label className="sr-only" htmlFor="billing-access-token">Paste the new Cloudflare API token</label>
@@ -456,6 +420,14 @@ function BillingAccessSetup({ accountId, token, busy, error, success, copied, on
       <p className="mt-3 text-xs text-[var(--faint)]">Need more help? <a className="font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">See Cloudflare&apos;s token instructions ↗</a></p>
     </section>
   );
+}
+
+export function billingTokenTemplateUrl(accountId: string): string {
+  const url = new URL("https://dash.cloudflare.com/");
+  url.searchParams.set("to", `/${accountId}/api-tokens`);
+  url.searchParams.set("permissionGroupKeys", JSON.stringify([{ key: "billing", type: "read" }]));
+  url.searchParams.set("name", "Brolly Billing Read");
+  return url.toString();
 }
 
 function RecentUsageEstimator({ busy, result, notice, onSuggest }: {

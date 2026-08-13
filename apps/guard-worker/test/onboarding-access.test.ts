@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { billingTokenTemplateUrl } from "../src/client/onboarding/BudgetWizard";
 
 const source = readFileSync("apps/guard-worker/src/client/onboarding/BudgetWizard.tsx", "utf8");
 
@@ -21,14 +22,16 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("<Icon name=\"logout\" /> Sign out");
   });
 
-  it("provides a simple, account-specific Billing Read token handoff", () => {
-    expect(source).toContain("Copy Brolly&apos;s token settings");
-    expect(source).toContain("Account → Billing → Read");
-    expect(source).toContain("Zone permissions: none");
-    expect(source).toContain("Copy recipe");
-    expect(source).toContain("Open this account&apos;s API Tokens page");
-    expect(source).toContain("dash.cloudflare.com/${encodeURIComponent(accountId)}/api-tokens");
-    expect(source).toContain("Create Custom Token");
+  it("opens Cloudflare's prefilled, account-specific Billing Read token form", () => {
+    const url = new URL(billingTokenTemplateUrl("account-123"));
+    expect(url.origin).toBe("https://dash.cloudflare.com");
+    expect(url.searchParams.get("to")).toBe("/account-123/api-tokens");
+    expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([{ key: "billing", type: "read" }]);
+    expect(url.searchParams.get("name")).toBe("Brolly Billing Read");
+    expect(source).toContain("Create the prefilled token in Cloudflare");
+    expect(source).toContain("Billing → Read");
+    expect(source).not.toContain("Copy recipe");
+    expect(source).toContain("Create billing token");
     expect(source).toContain("Continue to summary");
     expect(source).toContain("Verify and save");
     expect(source).toContain("Billing access failed.");
