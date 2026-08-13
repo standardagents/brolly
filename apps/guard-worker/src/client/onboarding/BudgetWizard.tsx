@@ -306,7 +306,7 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
   const [recipeCopied, setRecipeCopied] = useState(false);
   const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
     const access = result.access[key];
-    return access.state === "blocked" || (access.state === "limited" && /permission|denied|forbidden|auth|missing|403/i.test(access.detail));
+    return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
   }) : false;
   const billingNeedsToken = result ? result.access.billing.state !== "connected" : false;
 
@@ -503,31 +503,38 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
       {rows.map(row => {
         const access = result.access[row.key];
         const good = access.state === "connected";
-        const caution = access.state === "limited" || access.state === "not_configured" || access.state === "unknown";
-        const permissionProblem = /permission|denied|forbidden|auth|missing|403/i.test(access.detail);
+        const permissionProblem = accessPermissionProblem(access.detail);
+        const bestAvailable = row.key === "workers" && access.state === "limited" && !permissionProblem;
+        const ready = good || bestAvailable;
+        const caution = !ready && (access.state === "limited" || access.state === "not_configured" || access.state === "unknown");
         const status = access.state === "connected" ? "Ready"
-          : access.state === "limited" ? "Partial data"
+          : bestAvailable ? "Ready for limits"
+            : access.state === "limited" ? "Some data missing"
             : access.state === "blocked" ? "Needs access"
               : access.state === "not_configured" ? "Setup needed"
                 : "Could not verify";
         const nextStep = row.key === "billing" && !good
           ? { href: "#billing-access-title", label: "Add Billing Read below" }
-          : row.key !== "billing" && (access.state === "blocked" || permissionProblem)
+          : bestAvailable && result.access.billing.state !== "connected"
+            ? { href: "#billing-access-title", label: "Add exact account totals below" }
+            : row.key !== "billing" && (access.state === "blocked" || permissionProblem)
             ? { href: "/api/auth/login", label: "Reconnect Cloudflare" }
-            : row.key === "workers" && access.state === "limited" && result.access.billing.state !== "connected"
-              ? { href: "#billing-access-title", label: "Add bill totals below" }
               : null;
         return (
           <article key={row.key} className="grid gap-2 border-t border-[var(--line-soft)] px-4 py-3 first:border-t-0 md:grid-cols-[minmax(190px,.65fr)_auto_minmax(0,1.35fr)] md:items-center md:gap-4">
             <div className="flex items-center gap-2">
-              <span className={good ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={good ? "check" : caution ? "info" : "alert"} /></span>
+              <span className={ready ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={ready ? "check" : caution ? "info" : "alert"} /></span>
               <strong className="text-sm">{row.label}</strong>
             </div>
-            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold ${good ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{status}</span>
+            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold ${ready ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{status}</span>
             <div>
               <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
-              {row.key === "workers" && access.state === "limited" && !permissionProblem && (
-                <p className="mt-1 text-xs font-semibold leading-5 text-[var(--ink)]">What to do: use Billing Read for the account-wide total and leave extra safety room in each Worker limit. Cloudflare does not currently provide the missing per-Worker breakdown.</p>
+              {bestAvailable && (
+                <p className="mt-1 text-xs font-semibold leading-5 text-[var(--ink)]">
+                  {result.access.billing.state === "connected"
+                    ? "Account-wide billing is connected too. This is the complete Worker cost coverage Cloudflare currently makes available."
+                    : "The Billing Read step below adds exact account-wide charges. Together, those totals and these per-Worker signals provide the complete coverage Cloudflare currently makes available."}
+                </p>
               )}
               {nextStep && <a className="mt-2 inline-block text-xs font-bold text-[var(--blue)] hover:underline" href={nextStep.href}>{nextStep.label} →</a>}
               {good && <p className="mt-1 text-xs font-semibold text-[var(--good)]">No action needed.</p>}
@@ -537,6 +544,10 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
       })}
     </section>
   );
+}
+
+function accessPermissionProblem(detail: string): boolean {
+  return /permission denied|access denied|forbidden|unauthorized|authentication|missing required|\b403\b/i.test(detail);
 }
 
 function FamilyLimitRow({ family, value, estimate, onChange }: { family: OnboardingData["families"][number]; value: SpendLimits; estimate?: OnboardingBudgetEstimates["families"][string]; onChange: (value: SpendLimits) => void }) {

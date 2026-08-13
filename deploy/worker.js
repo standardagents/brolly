@@ -997,7 +997,7 @@ var CloudflareClient = class {
 			this.budget.charge("samples", samples.length);
 			return {
 				samples,
-				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly can read each Worker's requests and CPU time, but Cloudflare does not expose cache-request charges per Worker through this API. No additional OAuth permission can unlock that data.", "resource")]
+				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource")]
 			};
 		} catch (error) {
 			return {
@@ -3287,7 +3287,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "c2790641581099d8ad93fc5763606529c748bfcb";
+var BROLLY_RELEASE = "828ad01d624b110fe3bada763b8366db56282f32";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";

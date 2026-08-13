@@ -385,7 +385,7 @@ export class CloudflareClient {
         samples,
         coverage: [
           ...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", detail, "resource"),
-          ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly can read each Worker's requests and CPU time, but Cloudflare does not expose cache-request charges per Worker through this API. No additional OAuth permission can unlock that data.", "resource"),
+          ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource"),
         ],
       };
     } catch (error) {
