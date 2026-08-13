@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MetricSample } from "@standardagents/brolly-core";
-import { buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
+import { billingTokenValidationError, buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
 
 const start = Date.UTC(2026, 7, 11);
 const end = start + 86_400_000;
@@ -32,6 +32,12 @@ describe("onboarding budget estimates", () => {
     expect(validBillingToken("short")).toBe(false);
     expect(validBillingToken(`cfat_${"a".repeat(20)} pasted`)).toBe(false);
     expect(validBillingToken("a".repeat(257))).toBe(false);
+  });
+
+  it("rejects account-owned tokens with instructions for the required user token", () => {
+    expect(billingTokenValidationError(`cfat_${"a".repeat(40)}`)).toContain("account-owned token");
+    expect(billingTokenValidationError(`cfat_${"a".repeat(40)}`)).toContain("cfut_");
+    expect(billingTokenValidationError(`cfut_${"a".repeat(40)}`)).toBeNull();
   });
 
   it("adds graduated headroom and groups Workers and Durable Objects by enforceable resource", () => {

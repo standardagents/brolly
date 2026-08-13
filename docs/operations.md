@@ -146,11 +146,14 @@ protected by account and product limits because Cloudflare does not attribute
 them to individual Workers. Reconnecting OAuth is shown only for an actual
 authorization failure, never for a platform-level telemetry limitation.
 Connected rows explicitly require no action.
-The Billing Read handoff uses Cloudflare's documented API-token template URL.
-Brolly opens the already-bound account's token creation form with the token name
-and Account → Billing → Read permission prefilled. The operator reviews the
-form, creates the token, then pastes the one-time secret back into Brolly for
-verification. Because Billing Read is an account API-token permission rather
+The Billing Read handoff uses Cloudflare's documented user API-token template
+URL. Brolly opens the user token creation form with the already-bound account,
+token name, and Account → Billing → Read permission prefilled. The operator
+reviews the form, creates the token, then pastes the one-time secret back into
+Brolly for verification. Cloudflare's restricted billable-usage API rejects
+account-owned (`cfat_`) tokens even when they carry Billing Read, so Brolly
+rejects that token type with corrective instructions before making an API
+request. Because Billing Read is a separate user API-token permission rather
 than a Brolly OAuth scope, the same screen verifies the token against Cloudflare and only then stores it
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the
 request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a

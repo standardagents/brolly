@@ -385,7 +385,7 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
         <div>
           <p className="eyebrow">One more permission</p>
           <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
-          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only token to show your real bill totals. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token cannot change billing or resources.</p>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only user API token to show your real bill totals. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token is limited to this account and cannot change billing or resources.</p>
         </div>
       </div>
 
@@ -394,7 +394,7 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
           <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b>
           <div>
             <strong className="block text-sm">Create the prefilled token in Cloudflare</strong>
-            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Cloudflare will open with <strong>Brolly Billing Read</strong>, <strong>Billing → Read</strong>, and this account already selected. Review it, then click <strong>Continue to summary</strong> and <strong>Create Token</strong>.</p>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Cloudflare will open a <strong>user API token</strong> with <strong>Brolly Billing Read</strong>, <strong>Billing → Read</strong>, and only this account selected. Review it, then click <strong>Continue to summary</strong> and <strong>Create Token</strong>.</p>
           </div>
           <a className="button primary shrink-0" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Create billing token</a>
         </li>
@@ -404,7 +404,7 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
           <form className="grid gap-3" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
             <div>
               <strong className="block text-sm">Paste the token Cloudflare shows</strong>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Copy the token before leaving Cloudflare—it is displayed only once—then paste it here.</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Copy the token before leaving Cloudflare—it is displayed only once—then paste it here. A new user API token normally starts with <strong>cfut_</strong>; an account token starting with <strong>cfat_</strong> will not work with Cloudflare&apos;s billable-usage API.</p>
             </div>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <label className="sr-only" htmlFor="billing-access-token">Paste the new Cloudflare API token</label>
@@ -423,9 +423,10 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
 }
 
 export function billingTokenTemplateUrl(accountId: string): string {
-  const url = new URL("https://dash.cloudflare.com/");
-  url.searchParams.set("to", `/${accountId}/api-tokens`);
+  const url = new URL("https://dash.cloudflare.com/profile/api-tokens");
   url.searchParams.set("permissionGroupKeys", JSON.stringify([{ key: "billing", type: "read" }]));
+  url.searchParams.set("accountId", accountId);
+  url.searchParams.set("zoneId", "all");
   url.searchParams.set("name", "Brolly Billing Read");
   return url.toString();
 }

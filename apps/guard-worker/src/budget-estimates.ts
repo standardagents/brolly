@@ -52,11 +52,18 @@ export class BudgetEstimateInProgressError extends Error {
 
 export async function configureOnboardingBillingAccess(env: Env, token: string): Promise<{ records: number }> {
   const normalized = token.trim();
-  if (!validBillingToken(normalized)) throw new Error("Enter a valid Cloudflare API token without spaces");
+  const validationError = billingTokenValidationError(normalized);
+  if (validationError) throw new Error(validationError);
   if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
   const budget = new RunBudget({ apiCalls: 1, databaseRows: 10, samples: 10_000, wallMs: 10_000 });
   const client = new CloudflareClient({ ...env, CLOUDFLARE_BILLING_TOKEN: normalized }, budget);
-  const records = await client.billingUsage(Date.now() - 2 * DAY_MS, Date.now());
+  const records = await client.billingUsage(Date.now() - 2 * DAY_MS, Date.now()).catch(error => {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/insufficient_permissions|permission|forbidden|unauthorized/i.test(detail)) {
+      throw new Error("Cloudflare rejected this token for billable usage. Create a user API token scoped to this account with Billing Read, then try again.");
+    }
+    throw error;
+  });
   if (!records) throw new Error("Cloudflare Billing Read access could not be verified");
   const now = Date.now();
   await env.DB.batch([
@@ -78,6 +85,13 @@ export async function removeOnboardingBillingAccess(env: Env): Promise<void> {
 
 export function validBillingToken(value: string): boolean {
   return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
+}
+
+export function billingTokenValidationError(value: string): string | null {
+  if (value.startsWith("cfat_")) {
+    return "Cloudflare created an account-owned token, but its billable-usage API requires a user API token. Delete that token, click Create billing token again, and paste the new token that starts with cfut_.";
+  }
+  return validBillingToken(value) ? null : "Enter a valid Cloudflare API token without spaces";
 }
 
 export async function onboardingBudgetEstimates(env: Env): Promise<OnboardingBudgetEstimates> {

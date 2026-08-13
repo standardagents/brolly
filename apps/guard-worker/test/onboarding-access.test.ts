@@ -25,11 +25,17 @@ describe("progressive monitoring-access onboarding", () => {
   it("opens Cloudflare's prefilled, account-specific Billing Read token form", () => {
     const url = new URL(billingTokenTemplateUrl("account-123"));
     expect(url.origin).toBe("https://dash.cloudflare.com");
-    expect(url.searchParams.get("to")).toBe("/account-123/api-tokens");
+    expect(url.pathname).toBe("/profile/api-tokens");
+    expect(url.searchParams.get("to")).toBeNull();
     expect(JSON.parse(url.searchParams.get("permissionGroupKeys")!)).toEqual([{ key: "billing", type: "read" }]);
+    expect(url.searchParams.get("accountId")).toBe("account-123");
+    expect(url.searchParams.get("zoneId")).toBe("all");
     expect(url.searchParams.get("name")).toBe("Brolly Billing Read");
     expect(source).toContain("Create the prefilled token in Cloudflare");
     expect(source).toContain("Billing → Read");
+    expect(source).toContain("user API token");
+    expect(source).toContain("cfut_");
+    expect(source).toContain("cfat_");
     expect(source).not.toContain("Copy recipe");
     expect(source).toContain("Create billing token");
     expect(source).toContain("Continue to summary");

@@ -3066,7 +3066,8 @@ var BudgetEstimateInProgressError = class extends Error {
 };
 async function configureOnboardingBillingAccess(env, token) {
 	const normalized = token.trim();
-	if (!validBillingToken(normalized)) throw new Error("Enter a valid Cloudflare API token without spaces");
+	const validationError = billingTokenValidationError(normalized);
+	if (validationError) throw new Error(validationError);
 	if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
 	const budget = new RunBudget({
 		apiCalls: 1,
@@ -3077,7 +3078,11 @@ async function configureOnboardingBillingAccess(env, token) {
 	const records = await new CloudflareClient({
 		...env,
 		CLOUDFLARE_BILLING_TOKEN: normalized
-	}, budget).billingUsage(Date.now() - 2 * DAY_MS, Date.now());
+	}, budget).billingUsage(Date.now() - 2 * DAY_MS, Date.now()).catch((error) => {
+		const detail = error instanceof Error ? error.message : String(error);
+		if (/insufficient_permissions|permission|forbidden|unauthorized/i.test(detail)) throw new Error("Cloudflare rejected this token for billable usage. Create a user API token scoped to this account with Billing Read, then try again.");
+		throw error;
+	});
 	if (!records) throw new Error("Cloudflare Billing Read access could not be verified");
 	const now = Date.now();
 	await env.DB.batch([env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('billing_credentials',?1,?2)
@@ -3089,6 +3094,10 @@ async function removeOnboardingBillingAccess(env) {
 }
 function validBillingToken(value) {
 	return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
+}
+function billingTokenValidationError(value) {
+	if (value.startsWith("cfat_")) return "Cloudflare created an account-owned token, but its billable-usage API requires a user API token. Delete that token, click Create billing token again, and paste the new token that starts with cfut_.";
+	return validBillingToken(value) ? null : "Enter a valid Cloudflare API token without spaces";
 }
 async function onboardingBudgetEstimates(env) {
 	const now = Date.now();
@@ -3287,7 +3296,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "1a6eee9dbf5e969952862d4ec294c37b98b132eb";
+var BROLLY_RELEASE = "7ca18094b332cd2c50ec37fdaa44745997682aed";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
