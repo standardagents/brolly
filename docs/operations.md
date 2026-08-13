@@ -139,12 +139,13 @@ Billing token instructions are revealed only when Billing Read is unavailable.
 Each result says what Brolly can monitor, what remains missing, and the next
 action. A partial Worker result is not presented as a permission failure when
 Cloudflare simply does not expose a per-Worker billing breakdown; the screen
-marks requests and CPU time as **Ready for limits** and directs the operator to
-add Billing Read for exact account totals. Cache charges remain protected by
-account and product limits because Cloudflare does not attribute them to
-individual Workers. Reconnecting OAuth is shown only for an actual authorization
-failure, never for a platform-level telemetry limitation. Connected rows
-explicitly require no action.
+marks the row **Setup needed** until the operator adds Billing Read for exact
+account totals. Once connected, Worker requests and CPU time combine with
+account billing to cover every signal Cloudflare exposes. Cache charges remain
+protected by account and product limits because Cloudflare does not attribute
+them to individual Workers. Reconnecting OAuth is shown only for an actual
+authorization failure, never for a platform-level telemetry limitation.
+Connected rows explicitly require no action.
 The Billing Read handoff is three explicit actions: copy the token settings,
 open the already-bound account's Cloudflare API Tokens page, then paste and
 verify the token Cloudflare creates. The recipe specifies Account → Billing →

@@ -505,10 +505,12 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
         const good = access.state === "connected";
         const permissionProblem = accessPermissionProblem(access.detail);
         const bestAvailable = row.key === "workers" && access.state === "limited" && !permissionProblem;
-        const ready = good || bestAvailable;
+        const workerSetupNeeded = bestAvailable && result.access.billing.state !== "connected";
+        const ready = good || (bestAvailable && !workerSetupNeeded);
         const caution = !ready && (access.state === "limited" || access.state === "not_configured" || access.state === "unknown");
         const status = access.state === "connected" ? "Ready"
-          : bestAvailable ? "Ready for limits"
+          : workerSetupNeeded ? "Setup needed"
+            : bestAvailable ? "Ready"
             : access.state === "limited" ? "Some data missing"
             : access.state === "blocked" ? "Needs access"
               : access.state === "not_configured" ? "Setup needed"
@@ -528,12 +530,16 @@ function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
             </div>
             <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold ${ready ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{status}</span>
             <div>
-              <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">{access.detail}</p>
+              <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">
+                {bestAvailable
+                  ? "Brolly can monitor each Worker's requests and CPU time. Cloudflare reports cache charges only for the whole account."
+                  : access.detail}
+              </p>
               {bestAvailable && (
                 <p className="mt-1 text-xs font-semibold leading-5 text-[var(--ink)]">
                   {result.access.billing.state === "connected"
-                    ? "Account-wide billing is connected too. This is the complete Worker cost coverage Cloudflare currently makes available."
-                    : "The Billing Read step below adds exact account-wide charges. Together, those totals and these per-Worker signals provide the complete coverage Cloudflare currently makes available."}
+                    ? "Billing Read is connected, so Worker, product, and account limits cover every cost signal Cloudflare makes available."
+                    : "To finish setup, add Billing Read below. It adds exact account-wide charges, including cache costs Cloudflare cannot assign to one Worker."}
                 </p>
               )}
               {nextStep && <a className="mt-2 inline-block text-xs font-bold text-[var(--blue)] hover:underline" href={nextStep.href}>{nextStep.label} →</a>}

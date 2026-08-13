@@ -33,9 +33,10 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("Verify and save");
     expect(source).toContain("Billing access failed.");
     expect(source).toContain("Add Billing Read below");
-    expect(source).toContain("Ready for limits");
+    expect(source).toContain('workerSetupNeeded ? "Setup needed"');
+    expect(source).not.toContain("Ready for limits");
     expect(source).toContain("Add exact account totals below");
-    expect(source).toContain("complete coverage Cloudflare currently makes available");
+    expect(source).toContain("To finish setup, add Billing Read below");
     expect(source).toContain("permission denied|access denied|forbidden|unauthorized|authentication|missing required");
     expect(source).not.toContain("/permission|denied|forbidden|auth|missing|403/i");
     expect(source).toContain("Reconnect Cloudflare");
