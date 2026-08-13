@@ -6,6 +6,8 @@ import { sealJson } from "./credentials.js";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
+import { BudgetEstimateInProgressError, configureOnboardingBillingAccess, onboardingBudgetEstimates, removeOnboardingBillingAccess } from "./budget-estimates.js";
+import { releaseStatus, saveUpdateRepository } from "./updates.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -30,6 +32,21 @@ export default {
       return Response.json(await dashboardData(env));
     }
 
+    if (url.pathname === "/api/releases" && request.method === "GET") {
+      return Response.json(await releaseStatus(env), { headers: { "cache-control": "no-store" } });
+    }
+
+    if (url.pathname === "/api/update-settings" && request.method === "PUT") {
+      const body = await request.json<{ repository?: string }>();
+      try {
+        const repository = await saveUpdateRepository(env, body.repository ?? "");
+        await audit(env.DB, actor.actor, "updates.repository", repository ?? "", { repository });
+        return Response.json({ ok: true, repository });
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
+    }
+
     if (url.pathname === "/api/assets" && request.method === "GET") {
       return Response.json(await assetList(request, env));
     }
@@ -51,6 +68,35 @@ export default {
 
     if (url.pathname === "/api/onboarding" && request.method === "GET") {
       return Response.json(await onboardingData(env));
+    }
+
+    if (url.pathname === "/api/onboarding/estimates" && request.method === "POST") {
+      try {
+        return Response.json(await onboardingBudgetEstimates(env), { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 },
+        );
+      }
+    }
+
+    if (url.pathname === "/api/onboarding/billing-access" && request.method === "PUT") {
+      const body = await request.json<{ token?: string }>();
+      try {
+        const result = await configureOnboardingBillingAccess(env, body.token ?? "");
+        await audit(env.DB, actor.actor, "billing_access.configure", env.BROLLY_ACCOUNT_ID, { verified: true, records: result.records });
+        return Response.json({ ok: true, ...result });
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
+    }
+
+    if (url.pathname === "/api/onboarding/billing-access" && request.method === "DELETE") {
+      if (env.CLOUDFLARE_BILLING_TOKEN) return Response.json({ error: "Billing access is supplied as a Worker secret and must be removed in Cloudflare" }, { status: 409 });
+      await removeOnboardingBillingAccess(env);
+      await audit(env.DB, actor.actor, "billing_access.remove", env.BROLLY_ACCOUNT_ID, {});
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {

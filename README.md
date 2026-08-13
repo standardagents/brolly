@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/main/deploy"><img src="https://deploy.workers.cloudflare.com/button" height="32" alt="Deploy to Cloudflare"></a>
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/deploy-template"><img src="https://deploy.workers.cloudflare.com/button" height="32" alt="Deploy to Cloudflare"></a>
   &nbsp;
   <a href="https://brolly.standardagents.ai"><img src="https://img.shields.io/badge/Read_the_docs-202124?style=for-the-badge&logo=readthedocs&logoColor=white" height="32" alt="Read the docs"></a>
 </p>
@@ -51,28 +51,70 @@ verify that the secret exists and preserve it, so credentials already encrypted
 in D1 remain readable.
 Account ID, OAuth client, timezone, summary hour, optional billing access, and
 the optional break-glass token are not installation questions. On first visit,
-**Continue with Cloudflare** authorizes exactly
+**Login with Cloudflare** authorizes exactly
 one account. The first successful sign-in binds that Cloudflare account to the
 installation—not the individual user—until its D1 binding is deliberately reset
 or the instance is replaced. Later sign-ins must authorize the same account; any
 Cloudflare member able to grant Brolly's requested scopes for that account may
 sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
-and asks for limits for every discovered product, Worker, and namespace.
+and asks for limits for every discovered product, Worker, and namespace. The
+first setup step verifies monitoring access. The following budget step can read
+the previous rolling 24 hours and prefill
+suggested limits with 25%, 75%, and 150% headroom. It uses at most two bounded
+Analytics requests plus one Billing request when Billing Read is configured,
+using the latest available daily billing record for billing-only products. It
+caches the result for 15 minutes, leaves products without measurable cost
+unchanged, and saves nothing until the final setup step.
+
+First-run setup separates permission verification from limit generation. The
+required access screen initially shows one monitoring-access check. Setup cannot
+continue until that check has run. It reveals
+results and only the remediation actually needed: OAuth reconnection for a
+denied Analytics scope, or guided Billing Read setup when billing is missing.
+The billing guide provides a copyable least-privilege token recipe. A token
+entered there is verified before
+it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
+the installation's D1. The following account-budget screen has the historical
+usage button; verifying access alone never changes a limit. An operator may
+instead continue supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which
+takes precedence over the D1 credential.
 
 Browser sign-in briefly passes through Brolly's separately operated, stateless
 OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the
 installation's one-time state and returns only the short-lived authorization
 code. It never receives an access or refresh token, and its implementation is
 not included in this open-source package or customer deployments.
+The installation exchanges that code directly with Cloudflare and requires a
+refresh token for unattended monitoring. Short-lived access tokens are renewed
+five minutes before expiry and the rotated credentials remain encrypted in the
+installation's D1. If a login does not grant renewable access, Brolly rejects
+the connection immediately instead of failing after the first token expires.
 
 For local development, copy `dev.vars.example` to `.dev.vars` and generate the
 local-only credential key described in that file. Automatic provisioning is for
 remote deployments and never writes production secrets into the repository.
 
-The button targets the self-contained `deploy/` release template rather than
-the workspace root. Cloudflare treats that directory as the root of the new
-installation repository, so the generated repository contains the Worker,
-dashboard assets, migrations, and deploy scripts required by Workers Builds.
+The canonical self-contained template lives in `deploy/`. After every verified
+push to `main`, CI publishes that directory as the root-only `deploy-template`
+branch. The button targets that branch—not a monorepo subdirectory—so the new
+installation repository receives the Worker, dashboard assets, migrations,
+package metadata, and deploy scripts required by Workers Builds.
+
+Once installed, save that `owner/repository` name under **Settings → Updates**.
+While the dashboard is open, Brolly checks a small release manifest at most
+once per hour and shows a banner when a release is available. **Review update**
+opens the installation's manual GitHub Actions workflow, which creates a pull
+request. Brolly never stores a GitHub token, updates itself, or auto-merges the
+PR. Private repositories work the same way: GitHub authenticates the operator
+and supplies the workflow's short-lived repository token. The updater replaces
+only published application artifacts and preserves `wrangler.jsonc`, the D1
+binding, variables, and secrets.
+
+Some GitHub organizations disable pull-request creation by Actions. In that
+case the workflow still succeeds after pushing the verified update branch and
+puts a prefilled **Open pull request** comparison link in its run summary.
+Routine application updates never rewrite the repository's updater workflow;
+GitHub intentionally forbids a workflow token from modifying workflow files.
 
 Brolly defaults to UTC with a 09:00 daily summary. Advanced operators can add
 `BROLLY_TIMEZONE`, `BROLLY_DAILY_SUMMARY_HOUR`, `CLOUDFLARE_BILLING_TOKEN`, or

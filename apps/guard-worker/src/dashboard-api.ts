@@ -90,6 +90,7 @@ export async function onboardingData(env: Env): Promise<Record<string, unknown>>
   const policy = readPolicy(policyRow?.value);
   const coverage = coverageResult.results;
   return {
+    accountId: env.BROLLY_ACCOUNT_ID,
     complete: completeRow?.value === "true",
     policy: { ...policy, familyDailySpend: { ...DEFAULT_FAMILY_DAILY_SPEND, ...policy.familyDailySpend }, assetDailySpend: policy.assetDailySpend ?? {} },
     families: METRIC_CATALOG.map(definition => ({

@@ -5,7 +5,7 @@
 .setup-shell { min-height: 100vh; background: var(--bg); }
 .setup-header { height: 60px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 28px; gap: 24px; font-weight: 680; }
 .setup-header > div { padding-left: 24px; border-left: 1px solid var(--line); color: var(--muted); font-size: 14px; }
-.setup-header .button { margin-left: auto; }
+.setup-header > .button { margin-left: auto; }
 
 .setup-layout { max-width: 1280px; margin: 0 auto; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 56px; padding: 56px 32px 100px; }
 .setup-steps { position: sticky; top: 96px; height: max-content; }

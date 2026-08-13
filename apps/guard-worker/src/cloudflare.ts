@@ -1,7 +1,7 @@
 import type { AssetRef, BoundedRunContext, CoverageResult, MetricSample } from "@standardagents/brolly-core";
 import { METRIC_CATALOG } from "@standardagents/brolly-core";
 import type { Env } from "./env.js";
-import { operationalToken } from "./credentials.js";
+import { configuredBillingToken, operationalToken } from "./credentials.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -385,7 +385,7 @@ export class CloudflareClient {
         samples,
         coverage: [
           ...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", detail, "resource"),
-          ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Cache-side billed requests are not yet separated from invocation misses without double-counting", "resource"),
+          ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource"),
         ],
       };
     } catch (error) {
@@ -395,10 +395,11 @@ export class CloudflareClient {
   }
 
   async billingUsage(since: number, until: number): Promise<BillingUsageRecord[] | null> {
-    if (!this.env.CLOUDFLARE_BILLING_TOKEN) return null;
+    const token = await configuredBillingToken(this.env);
+    if (!token) return null;
     const date = (value: number) => new Date(value).toISOString().slice(0, 10);
     const params = new URLSearchParams({ from: date(since), to: date(until) });
-    return this.get<BillingUsageRecord[]>(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, this.env.CLOUDFLARE_BILLING_TOKEN);
+    return this.get<BillingUsageRecord[]>(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, token);
   }
 
   private async get<T>(path: string, token?: string): Promise<T> {

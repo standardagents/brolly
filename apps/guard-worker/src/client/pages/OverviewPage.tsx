@@ -267,7 +267,7 @@ function LocalPreviewPanel({ connection, scanError, onNavigate }: {
         </div>
         <div>
           <strong>To connect</strong>
-          <p>Deploy Brolly, open its URL, and choose <em>Continue with Cloudflare</em> to authorize exactly one account, then use <em>Scan now</em>.</p>
+          <p>Deploy Brolly, open its URL, and choose <em>Login with Cloudflare</em> to authorize exactly one account, then use <em>Scan now</em>.</p>
         </div>
       </div>
       {(connection.errors.length > 0 || scanError) && (

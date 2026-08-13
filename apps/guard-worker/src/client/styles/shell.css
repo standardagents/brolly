@@ -100,6 +100,16 @@
 .degraded-banner .icon { width: 17px; height: 17px; margin-top: 1px; flex: none; }
 .degraded-banner .link-button { color: #6e4a08; text-decoration: underline; }
 
+.update-banner {
+  display: flex; align-items: center; gap: 12px; padding: 10px 24px; background: #fff3e8;
+  border-bottom: 1px solid #f1c394; color: #6d3508;
+}
+.update-banner > .icon { width: 18px; height: 18px; flex: none; color: var(--orange-deep); }
+.update-banner div { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 1px; }
+.update-banner strong { font-size: 13.5px; }
+.update-banner span { color: #86532c; font-size: 12.5px; }
+.update-banner .button.update { border-color: var(--orange); background: var(--orange); color: #fff; white-space: nowrap; }
+
 .page { flex: 1; width: 100%; max-width: 1240px; margin: 0 auto; padding: 20px 24px 80px; }
 
 /* Responsive --------------------------------------------------------------- */
@@ -128,5 +138,5 @@
   .topbar { flex-wrap: wrap; padding: 8px 14px; }
   .topbar-actions { flex-wrap: wrap; }
   .page { padding: 14px 14px 60px; }
-  .emergency-banner, .degraded-banner { padding-left: 14px; padding-right: 14px; flex-wrap: wrap; }
+  .emergency-banner, .degraded-banner, .update-banner { padding-left: 14px; padding-right: 14px; flex-wrap: wrap; }
 }

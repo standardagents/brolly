@@ -137,7 +137,10 @@ describe("Cloudflare Worker telemetry", () => {
     const result = await new CloudflareClient(env, new RunBudget()).workerUsage(0, 300_000);
     expect(result.samples.find(sample => sample.metric === "requests")).toMatchObject({ asset: { id: "checkout", scope: "resource" }, value: 1_000_000, estimatedCostUsd: 0.3 });
     expect(result.samples.find(sample => sample.metric === "cpu_ms")).toMatchObject({ value: 1_000_000, estimatedCostUsd: 0.02 });
-    expect(result.coverage.find(item => item.metric === "cache_requests")).toMatchObject({ state: "unavailable" });
+    expect(result.coverage.find(item => item.metric === "cache_requests")).toMatchObject({
+      state: "unavailable",
+      detail: expect.stringContaining("complete per-Worker data Cloudflare provides"),
+    });
     expect(requestBody).toContain("workersInvocationsAdaptive");
     expect(requestBody).toContain("sum_cpuTimeUs_DESC");
   });

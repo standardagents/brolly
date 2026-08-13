@@ -48,6 +48,15 @@ export async function operationalToken(env: Env): Promise<string> {
   }
 }
 
+export async function configuredBillingToken(env: Env): Promise<string | undefined> {
+  if (env.CLOUDFLARE_BILLING_TOKEN) return env.CLOUDFLARE_BILLING_TOKEN;
+  if (!env.BROLLY_CREDENTIAL_KEY) return undefined;
+  const row = await env.DB.prepare(`SELECT value FROM settings WHERE key='billing_credentials' LIMIT 1`).first<{ value: string }>();
+  if (!row) return undefined;
+  const stored = await openJson<{ token: string }>(row.value, env.BROLLY_CREDENTIAL_KEY);
+  return stored.token;
+}
+
 function fallbackToken(env: Env): string {
   if (!env.CLOUDFLARE_OAUTH_TOKEN) throw new Error("Connect this Brolly instance to Cloudflare before scanning or controlling resources");
   return env.CLOUDFLARE_OAUTH_TOKEN;

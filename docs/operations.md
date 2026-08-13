@@ -18,6 +18,16 @@ operations, 20,000 samples, and 45 seconds. They are workload ceilings, not a
 guaranteed dollar ceiling. A manual dashboard scan runs the same monitor; the
 55-second lease prevents it from overlapping the automatic minute pass.
 
+The optional first-run usage check is narrower than a monitor pass. It makes
+one rolling-24-hour Durable Objects Analytics request and one rolling-24-hour
+Workers Analytics request. If a separate Billing Read token exists, it may add
+one billing request and use its latest available daily record for other product
+families. The result is cached in
+the installation's D1 database for 15 minutes, concurrent checks are refused,
+and no incidents, notifications, controls, or policy changes are created. The
+browser applies returned suggestions only to its editable draft; setup must be
+finished before any suggested limit is saved.
+
 Live Durable Object evaluation covers every object returned by eight bounded
 per-metric operation queries, plus retained storage at Cloudflare's available
 namespace/account scopes. Historical baseline retention runs only every
@@ -37,7 +47,8 @@ The dashboard separates response and observability state:
 
 - **Usage incidents** crossed a configured hard or anomaly threshold and can
   be acknowledged or routed into a reversible control.
-- **Coverage gaps** mean a collector is missing, delayed, or lacks permission.
+- **Coverage gaps** mean Cloudflare did not expose a usage signal, returned it
+  late, or denied the installation permission to read it. They do not mean zero usage.
   They are prominent but are not counted as spend incidents.
 - **Current daily spend** is a gross rolling-24-hour telemetry estimate by
   product category. It is not an invoice and is labeled as such.
@@ -59,9 +70,11 @@ changing accounts requires deliberately resetting the D1 binding and stored
 credentials or deploying a new Brolly instance. The CLI installer pre-binds its
 selected account before the Worker becomes available.
 
-The Deploy to Cloudflare button targets the isolated `deploy/` release
-template, not the multi-application workspace root. Cloudflare copies that
-directory into the new installation repository and requires only the
+The canonical Deploy to Cloudflare release is generated in `deploy/`. CI
+publishes that directory as the root-only `deploy-template` branch, and the
+button targets that branch rather than the multi-application workspace root or
+a nested directory. This avoids Cloudflare creating a placeholder repository
+with only its rewritten Wrangler file. The installation requires only the
 automatically provisioned D1 binding. Its explicit `npm run build` command
 validates the precompiled Worker, dashboard, migrations, and upload boundary
 without network access; Cloudflare then runs the separate `npm run deploy`
@@ -77,11 +90,83 @@ the account ID is derived during first sign-in, and timezone/summary settings
 default to UTC and 09:00. Operators who need break-glass CLI access or
 authoritative billing reconciliation can add those Worker secrets later.
 
-On first authenticated login, complete all four budget steps. Brolly requires
+## Application updates
+
+Each installation includes `.github/workflows/brolly-update.yml`. In
+**Settings → Updates**, the operator saves only the installation repository's
+`owner/repository` slug. Brolly does not request or retain GitHub credentials.
+Private repositories are supported because the browser and repo-local workflow
+authenticate through GitHub itself.
+
+An authenticated dashboard asks its own `/api/releases` endpoint on load and
+once per hour while the page remains active. Returning to a visible tab also
+checks only when an hour has elapsed. The Worker keeps the upstream manifest in
+D1 for one hour and uses a short D1 lease, so concurrent tabs or operators
+produce at most one upstream fetch per installation per hour. A failed check is
+non-fatal and retains any older release information as stale.
+
+The update banner opens the repository's manual **Update Brolly** workflow.
+That workflow downloads the public `deploy-template` branch, validates it,
+creates a `brolly/update-*` branch, and opens a pull request. It never merges or
+deploys by itself. The allowlisted update copies the prebuilt Worker, static
+dashboard, migrations, verifier, updater, package metadata, and workflow. It
+deliberately does not replace `wrangler.jsonc`; the provisioned D1 binding,
+Worker variables, and secrets remain installation-owned. Review the diff and
+Cloudflare preview before merging. If organization policy disables write
+access for `GITHUB_TOKEN`, enable read/write workflow permissions for the
+repository before running the updater.
+If repository policy separately forbids Actions from creating pull requests,
+the workflow leaves the verified update branch in place and emits a prefilled
+GitHub comparison URL in the run summary. The operator opens that URL to create
+the same review PR manually; no direct deployment occurs.
+Routine updates exclude `.github/workflows/brolly-update.yml` from their copy
+allowlist because GitHub does not let a workflow's own token create or modify
+workflow files. New installations receive the canonical workflow from the
+Deploy Button template. A future workflow-infrastructure migration must be an
+explicit owner-authorized repository change rather than a self-update.
+
+On first authenticated login, verify usage access, then complete all four budget
+steps. The access check is required before onboarding can continue. The access
+screen is built into Brolly and requires no local agent or additional service.
+The setup header always includes **Sign out**. Signing out ends only the current
+browser session; it does not mark onboarding complete, clear saved settings, or
+unbind the installation's Cloudflare account. The operator can authenticate
+again and continue setup.
+It starts with one bounded read-only check and does not apply suggested limits.
+Results are shown before any credential form.
+OAuth reconnection is revealed only for an Analytics permission problem;
+Billing token instructions are revealed only when Billing Read is unavailable.
+Each result says what Brolly can monitor, what remains missing, and the next
+action. A partial Worker result is not presented as a permission failure when
+Cloudflare simply does not expose a per-Worker billing breakdown; the screen
+marks the row **Setup needed** until the operator adds Billing Read for exact
+account totals. Once connected, Worker requests and CPU time combine with
+account billing to cover every signal Cloudflare exposes. Cache charges remain
+protected by account and product limits because Cloudflare does not attribute
+them to individual Workers. Reconnecting OAuth is shown only for an actual
+authorization failure, never for a platform-level telemetry limitation.
+Connected rows explicitly require no action.
+The Billing Read handoff is three explicit actions: copy the token settings,
+open the already-bound account's Cloudflare API Tokens page, then paste and
+verify the token Cloudflare creates. The recipe specifies Account → Billing →
+Read for only the connected account, with no zone permissions. Because Billing
+Read is an account API-token permission rather than a Brolly OAuth scope, the
+same screen verifies the token against Cloudflare and only then stores it
+AES-GCM-encrypted in the installation's D1; plaintext exists only for the
+request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
+Worker secret, remains the higher-precedence operator-managed alternative.
+The next account-budget screen can apply the cached historical suggestions.
+Brolly OAuth access is renewable: the publisher client enables refresh tokens,
+the authorization request includes `offline_access`, and each installation
+refreshes its encrypted grant five minutes before expiry. An installation that
+was authorized before renewable access was enabled must use **Reconnect
+Cloudflare** once; subsequent access-token rotation is automatic.
+Brolly requires
 ordered account limits, a limit for every product family, a limit for every
 discovered Worker script and Durable Object namespace, and all supported
-per-object Durable Object windows. Product or resource limits marked `Collector pending`
-are retained but cannot be enforced until coverage becomes healthy. Reopen the
+per-object Durable Object windows. Product or resource limits marked `Limited
+usage data` are retained, but alerts can evaluate only the billing signals
+Cloudflare currently exposes to the installation. Reopen the
 same wizard with **Budgets** in the dashboard header.
 
 Before enabling automatic controls:

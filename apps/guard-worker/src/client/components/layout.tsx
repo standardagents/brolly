@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { relativeTime, shortId } from "../format";
 import type { ConnectionHealth } from "../lib/health";
 import { ROUTE_PATHS, ROUTE_TITLES, type Route } from "../router";
-import type { DashboardData } from "../types";
+import type { DashboardData, ReleaseStatus } from "../types";
 import { ScanInfoTip } from "./protection";
 import { Brand, Icon, InfoTip, type IconName } from "./ui";
 
@@ -12,7 +12,7 @@ const NAV_GROUPS: Array<{ label: string; items: Array<{ route: Route; icon: Icon
   { label: "Protect", items: [{ route: "configuration", icon: "shield" }, { route: "settings", icon: "sliders" }] },
 ];
 
-export function AppShell({ route, onNavigate, data, connection, scanning, onScan, onBudgets, onLogout, children }: {
+export function AppShell({ route, onNavigate, data, connection, scanning, onScan, onBudgets, onLogout, release, children }: {
   route: Route;
   onNavigate: (route: Route) => void;
   data: DashboardData;
@@ -21,6 +21,7 @@ export function AppShell({ route, onNavigate, data, connection, scanning, onScan
   onScan: () => void;
   onBudgets: () => void;
   onLogout: () => void;
+  release: ReleaseStatus | null;
   children: ReactNode;
 }) {
   const emergencies = data.incidents.filter(incident => incident.status === "open" && incident.severity === "emergency").length;
@@ -110,6 +111,21 @@ export function AppShell({ route, onNavigate, data, connection, scanning, onScan
               <span> {connection.errors[0] ?? connection.detail} </span>
               <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>See connection details</button>
             </div>
+          </div>
+        )}
+
+        {release?.available && (
+          <div className="update-banner" role="status">
+            <Icon name="refresh" />
+            <div>
+              <strong>Brolly {release.displayVersion ?? "update"} is ready to review.</strong>
+              <span>Your current installation stays unchanged until you merge its update pull request.</span>
+            </div>
+            {release.updateUrl ? (
+              <a className="button update" href={release.updateUrl} target="_blank" rel="noreferrer">Review update</a>
+            ) : (
+              <button type="button" className="button update" onClick={() => onNavigate("settings")}>Set up updates</button>
+            )}
           </div>
         )}
 

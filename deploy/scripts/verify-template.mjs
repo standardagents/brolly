@@ -10,6 +10,9 @@ const requiredFiles = [
   "assets/assets/index.css",
   "migrations/0001_initial.sql",
   "migrations/0002_auth_and_actuator_safety.sql",
+  ".github/workflows/brolly-update.yml",
+  "brolly-release.json",
+  "scripts/update-from-upstream.mjs",
   "wrangler.jsonc",
 ];
 
@@ -20,6 +23,11 @@ for (const file of requiredFiles) {
 const wrangler = JSON.parse(readFileSync(path.join(templateRoot, "wrangler.jsonc"), "utf8"));
 if (wrangler.main !== "worker.js" || wrangler.no_bundle !== true || wrangler.find_additional_modules !== false) {
   throw new Error("Brolly's prebuilt Worker upload boundary is invalid");
+}
+
+const release = JSON.parse(readFileSync(path.join(templateRoot, "brolly-release.json"), "utf8"));
+if (release.schemaVersion !== 1 || release.configVersion !== 1 || !/^[a-f0-9]{40}$/.test(release.release ?? "") || release.workflowFile !== "brolly-update.yml") {
+  throw new Error("Brolly's release manifest is invalid");
 }
 if (!wrangler.d1_databases?.some(database => database.binding === "DB")) {
   throw new Error("Brolly's required D1 binding is missing");

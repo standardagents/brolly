@@ -11,13 +11,15 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -37,10 +39,22 @@ jobs:
           pnpm --filter @standardagents/brolly-docs typecheck
           pnpm build:docs
 
-      - name: Verify isolated Deploy Button template
+      - name: Build and verify isolated Deploy Button template
         run: |
           pnpm build:deploy-template
-          git diff --exit-code -- deploy
+          npm --prefix deploy run build
+          pnpm exec vitest run apps/guard-worker/test/deploy-button.test.ts
+
+      - name: Publish Deploy Button template branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy
+          if ! git diff --cached --quiet; then
+            git commit -m "build(deploy): publish ${GITHUB_SHA}"
+          fi
+          git subtree split --prefix=deploy --branch deploy-template
+          git push --force origin deploy-template
 
       - name: Deploy to Cloudflare Workers
         run: pnpm --filter @standardagents/brolly-docs deploy:ci

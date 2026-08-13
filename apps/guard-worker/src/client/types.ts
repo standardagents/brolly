@@ -17,10 +17,35 @@ export interface Policy {
 }
 
 export interface OnboardingData {
+  accountId: string;
   complete: boolean;
   policy: Policy;
   families: Array<{ family: string; label: string; metrics: string[]; protection: "active" | "coverage_gap" }>;
   scopedAssets: Array<{ key: string; family: "workers" | "durable_objects"; id: string; name: string; scope: "resource" | "namespace"; protection: "active" | "coverage_gap"; tags: Record<string, string> }>;
+}
+
+export interface SuggestedBudget {
+  observedUsd: number;
+  limits: SpendLimits;
+  source: "analytics" | "billing";
+  partial: boolean;
+}
+
+export interface OnboardingBudgetEstimates {
+  generatedAt: number;
+  windowStartAt: number;
+  windowEndAt: number;
+  cached: boolean;
+  apiCalls: number;
+  headroom: { warning: number; critical: number; emergency: number };
+  account: SuggestedBudget | null;
+  families: Record<string, SuggestedBudget>;
+  assets: Record<string, SuggestedBudget>;
+  unchangedFamilies: string[];
+  access: Record<"workers" | "durable_objects" | "billing", {
+    state: "connected" | "limited" | "blocked" | "not_configured" | "unknown";
+    detail: string;
+  }>;
 }
 
 export interface Incident {
@@ -114,4 +139,19 @@ export interface NotificationTarget {
   lastDeliveryAt: number | null;
   lastDeliveryOk: boolean | null;
   lastDeliveryError: string | null;
+}
+
+export interface ReleaseStatus {
+  currentRelease: string;
+  latestRelease: string | null;
+  displayVersion: string | null;
+  publishedAt: string | null;
+  notesUrl: string | null;
+  available: boolean;
+  checkedAt: number | null;
+  stale: boolean;
+  checking: boolean;
+  repository: string | null;
+  updateUrl: string | null;
+  error?: string;
 }

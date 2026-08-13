@@ -520,6 +520,13 @@ async function operationalToken(env) {
 		await env.DB.prepare(`DELETE FROM cron_lease WHERE name='oauth-refresh' AND holder=?1`).bind(holder).run();
 	}
 }
+async function configuredBillingToken(env) {
+	if (env.CLOUDFLARE_BILLING_TOKEN) return env.CLOUDFLARE_BILLING_TOKEN;
+	if (!env.BROLLY_CREDENTIAL_KEY) return void 0;
+	const row = await env.DB.prepare(`SELECT value FROM settings WHERE key='billing_credentials' LIMIT 1`).first();
+	if (!row) return void 0;
+	return (await openJson(row.value, env.BROLLY_CREDENTIAL_KEY)).token;
+}
 function fallbackToken(env) {
 	if (!env.CLOUDFLARE_OAUTH_TOKEN) throw new Error("Connect this Brolly instance to Cloudflare before scanning or controlling resources");
 	return env.CLOUDFLARE_OAUTH_TOKEN;
@@ -990,7 +997,7 @@ var CloudflareClient = class {
 			this.budget.charge("samples", samples.length);
 			return {
 				samples,
-				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Cache-side billed requests are not yet separated from invocation misses without double-counting", "resource")]
+				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; highest-cost Workers are included" : void 0, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource")]
 			};
 		} catch (error) {
 			return {
@@ -1004,13 +1011,14 @@ var CloudflareClient = class {
 		}
 	}
 	async billingUsage(since, until) {
-		if (!this.env.CLOUDFLARE_BILLING_TOKEN) return null;
+		const token = await configuredBillingToken(this.env);
+		if (!token) return null;
 		const date = (value) => new Date(value).toISOString().slice(0, 10);
 		const params = new URLSearchParams({
 			from: date(since),
 			to: date(until)
 		});
-		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, this.env.CLOUDFLARE_BILLING_TOKEN);
+		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?${params}`, token);
 	}
 	async get(path, token) {
 		return (await this.request(path, token)).result;
@@ -1825,10 +1833,14 @@ async function runMonitor(env) {
 		if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {
 			let billing = null;
 			let authoritativeBilledCost = null;
-			let billingState = env.CLOUDFLARE_BILLING_TOKEN ? "healthy" : "permission_denied";
-			let billingDetail = env.CLOUDFLARE_BILLING_TOKEN ? void 0 : "Configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
+			let billingState = "permission_denied";
+			let billingDetail = "Add Billing Read access in Brolly setup or configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
 			try {
 				billing = await client.billingUsage(now - 1728e5, now);
+				if (billing) {
+					billingState = "healthy";
+					billingDetail = void 0;
+				}
 			} catch (error) {
 				billingState = "unavailable";
 				billingDetail = error instanceof Error ? error.message : String(error);
@@ -2225,6 +2237,7 @@ async function onboardingData(env) {
 	const policy = readPolicy(policyRow?.value);
 	const coverage = coverageResult.results;
 	return {
+		accountId: env.BROLLY_ACCOUNT_ID,
 		complete: completeRow?.value === "true",
 		policy: {
 			...policy,
@@ -2739,6 +2752,7 @@ var SESSION_TTL_MS = 432e5;
 var SESSION_COOKIE = "brolly_session";
 var STATE_COOKIE = "brolly_oauth_state";
 var BROLLY_OAUTH_SCOPES = [
+	"offline_access",
 	"user-details.read",
 	"memberships.read",
 	"account-settings.read",
@@ -2862,6 +2876,7 @@ async function finishLogin(request, env) {
 	});
 	if (!tokenResponse.ok) return htmlError(`Cloudflare token exchange failed (${tokenResponse.status}).`, 502);
 	const oauth = await tokenResponse.json();
+	if (!hasRenewableAccess(oauth)) return htmlError("Cloudflare did not grant Brolly ongoing access. Return to Brolly and reconnect, making sure ongoing access is approved.", 502);
 	const [user, accounts] = await Promise.all([fetchJson(USERINFO_ENDPOINT, oauth.access_token), cloudflare(oauth.access_token, "/accounts")]);
 	if (!user.sub) return htmlError("Cloudflare did not return a stable user identity.", 502);
 	if (accounts.length !== 1) return htmlError(accounts.length === 0 ? "No Cloudflare account was authorized. Start again and choose the account Brolly should protect." : "Brolly requires one account per installation. Start again and authorize exactly one Cloudflare account.", 409);
@@ -2881,6 +2896,7 @@ async function finishLogin(request, env) {
 	await env.DB.batch([
 		env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('account_name',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(account.name, now),
 		env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('oauth_credentials',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(credentials, now),
+		env.DB.prepare(`DELETE FROM settings WHERE key='onboarding_budget_estimates'`),
 		env.DB.prepare(`INSERT INTO auth_sessions(token_hash,user_id,email,display_name,account_id,created_at,last_seen_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?6,?7)`).bind(sessionHash, user.sub, user.email ?? null, user.name ?? user.preferred_username ?? null, account.id, now, now + SESSION_TTL_MS),
 		env.DB.prepare(`DELETE FROM auth_sessions WHERE expires_at < ?1`).bind(now)
 	]);
@@ -2894,6 +2910,9 @@ async function finishLogin(request, env) {
 		status: 302,
 		headers
 	});
+}
+function hasRenewableAccess(oauth) {
+	return Boolean(oauth.refresh_token?.trim());
 }
 async function sessionStatus(request, env) {
 	const actor = await authenticate(request, env);
@@ -3029,6 +3048,396 @@ function htmlError(message, status) {
 	});
 }
 //#endregion
+//#region src/budget-estimates.ts
+var DAY_MS = 864e5;
+var CACHE_MS$1 = 9e5;
+var CACHE_KEY$1 = "onboarding_budget_estimates";
+var LEASE_NAME$1 = "onboarding-budget-estimates";
+var ESTIMATE_HEADROOM = {
+	warning: 1.25,
+	critical: 1.75,
+	emergency: 2.5
+};
+var BudgetEstimateInProgressError = class extends Error {
+	constructor() {
+		super("A recent-usage estimate is already running. Try again in a few seconds.");
+		this.name = "BudgetEstimateInProgressError";
+	}
+};
+async function configureOnboardingBillingAccess(env, token) {
+	const normalized = token.trim();
+	if (!validBillingToken(normalized)) throw new Error("Enter a valid Cloudflare API token without spaces");
+	if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
+	const budget = new RunBudget({
+		apiCalls: 1,
+		databaseRows: 10,
+		samples: 1e4,
+		wallMs: 1e4
+	});
+	const records = await new CloudflareClient({
+		...env,
+		CLOUDFLARE_BILLING_TOKEN: normalized
+	}, budget).billingUsage(Date.now() - 2 * DAY_MS, Date.now());
+	if (!records) throw new Error("Cloudflare Billing Read access could not be verified");
+	const now = Date.now();
+	await env.DB.batch([env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('billing_credentials',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(await sealJson({ token: normalized }, env.BROLLY_CREDENTIAL_KEY), now), env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY$1)]);
+	return { records: records.length };
+}
+async function removeOnboardingBillingAccess(env) {
+	await env.DB.batch([env.DB.prepare(`DELETE FROM settings WHERE key='billing_credentials'`), env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY$1)]);
+}
+function validBillingToken(value) {
+	return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
+}
+async function onboardingBudgetEstimates(env) {
+	const now = Date.now();
+	const cached = await env.DB.prepare(`SELECT value,updated_at FROM settings WHERE key=?1 LIMIT 1`).bind(CACHE_KEY$1).first();
+	if (cached && cached.updated_at >= now - CACHE_MS$1) return {
+		...JSON.parse(cached.value),
+		cached: true
+	};
+	const holder = crypto.randomUUID();
+	const lease = await env.DB.prepare(`INSERT INTO cron_lease(name,holder,expires_at) VALUES(?1,?2,?3)
+     ON CONFLICT(name) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at
+     WHERE cron_lease.expires_at<?4`).bind(LEASE_NAME$1, holder, now + 3e4, now).run();
+	if (Number(lease.meta.changes ?? 0) !== 1) throw new BudgetEstimateInProgressError();
+	try {
+		const windowEndAt = Date.now();
+		const windowStartAt = windowEndAt - DAY_MS;
+		const budget = new RunBudget({
+			apiCalls: 4,
+			databaseRows: 100,
+			samples: 2e4,
+			wallMs: 2e4
+		});
+		const client = new CloudflareClient(env, budget);
+		const [durableObjects, workers, billingResult] = await Promise.all([
+			client.durableObjectUsage(windowStartAt, windowEndAt),
+			client.workerUsage(windowStartAt, windowEndAt),
+			client.billingUsage(windowStartAt - DAY_MS, windowEndAt).then((records) => ({
+				records,
+				error: null
+			})).catch((error) => ({
+				records: null,
+				error: error instanceof Error ? error.message : String(error)
+			}))
+		]);
+		const result = buildOnboardingBudgetEstimates({
+			generatedAt: Date.now(),
+			windowStartAt,
+			windowEndAt,
+			samples: [...durableObjects.samples, ...workers.samples],
+			billing: billingResult.records ?? [],
+			coverage: [...durableObjects.coverage, ...workers.coverage],
+			billingAccess: billingResult.error ? {
+				state: "blocked",
+				detail: `Cloudflare rejected the Billing Read check. Add or replace the read-only billing token below. Technical detail: ${billingResult.error}`
+			} : billingResult.records ? {
+				state: "connected",
+				detail: "Brolly can compare its fast usage estimates with Cloudflare's daily billed charges for this account."
+			} : {
+				state: "not_configured",
+				detail: "Brolly can monitor live activity, but it cannot yet compare those estimates with the charges on your Cloudflare bill. Add the read-only Billing token below."
+			},
+			apiCalls: budget.usage.apiCalls
+		});
+		await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(CACHE_KEY$1, JSON.stringify(result), result.generatedAt).run();
+		return result;
+	} finally {
+		await env.DB.prepare(`DELETE FROM cron_lease WHERE name=?1 AND holder=?2`).bind(LEASE_NAME$1, holder).run();
+	}
+}
+function buildOnboardingBudgetEstimates(input) {
+	const analyticsFamilies = costBy(input.samples, (sample) => sample.asset.family);
+	const analyticsAssets = costBy(input.samples, (sample) => {
+		if (sample.asset.family === "workers" && sample.asset.scope === "resource") return assetBudgetKey(sample.asset);
+		if (sample.asset.family === "durable_objects") {
+			const namespaceId = sample.asset.scope === "namespace" ? sample.asset.id : sample.asset.parentId;
+			if (namespaceId) return assetBudgetKey({
+				family: "durable_objects",
+				scope: "namespace",
+				id: namespaceId
+			});
+		}
+		return null;
+	});
+	const billingFamilies = /* @__PURE__ */ new Map();
+	let billingAccountUsd = 0;
+	const billingRows = input.billing ?? [];
+	const latestBillingDay = Math.max(...billingRows.map((row) => Date.parse(row.ChargePeriodStart)).filter(Number.isFinite));
+	for (const row of billingRows) {
+		if (Date.parse(row.ChargePeriodStart) !== latestBillingDay) continue;
+		const family = billingFamily(row);
+		const cost = row.BilledCost ?? row.EffectiveCost ?? row.ListCost;
+		if (!Number.isFinite(cost) || cost <= 0) continue;
+		billingAccountUsd += cost;
+		if (!family) continue;
+		billingFamilies.set(family, (billingFamilies.get(family) ?? 0) + cost);
+	}
+	const families = {};
+	for (const definition of METRIC_CATALOG) {
+		const analytics = analyticsFamilies.get(definition.family) ?? 0;
+		const billed = billingFamilies.get(definition.family) ?? 0;
+		if (analytics > 0) families[definition.family] = suggestion(analytics, "analytics", input.samples.some((sample) => sample.asset.family === definition.family && sample.sampled));
+		else if (billed > 0) families[definition.family] = suggestion(billed, "billing", false);
+	}
+	const assets = Object.fromEntries([...analyticsAssets.entries()].filter(([, observed]) => observed > 0).map(([key, observed]) => [key, suggestion(observed, "analytics", false)]));
+	const observedAnalyticsAccountUsd = Object.values(families).reduce((sum, item) => sum + item.observedUsd, 0);
+	const hasCompleteBilling = input.billingAccess?.state === "connected" && billingAccountUsd > 0;
+	const observedAccountUsd = hasCompleteBilling ? billingAccountUsd : observedAnalyticsAccountUsd;
+	const account = observedAccountUsd > 0 ? suggestion(observedAccountUsd, hasCompleteBilling ? "billing" : "analytics", !hasCompleteBilling) : null;
+	return {
+		generatedAt: input.generatedAt,
+		windowStartAt: input.windowStartAt,
+		windowEndAt: input.windowEndAt,
+		cached: false,
+		apiCalls: input.apiCalls ?? 0,
+		headroom: ESTIMATE_HEADROOM,
+		account,
+		families,
+		assets,
+		unchangedFamilies: METRIC_CATALOG.map((item) => item.family).filter((family) => !families[family]),
+		access: {
+			workers: accessFor("workers", input.coverage ?? []),
+			durable_objects: accessFor("durable_objects", input.coverage ?? []),
+			billing: input.billingAccess ?? {
+				state: "unknown",
+				detail: "Billing access was not checked."
+			}
+		}
+	};
+}
+function accessFor(family, coverage) {
+	const relevant = coverage.filter((item) => item.family === family);
+	if (!relevant.length) return {
+		state: "unknown",
+		detail: "No usage response was returned."
+	};
+	const healthy = relevant.filter((item) => item.state === "healthy").length;
+	const delayed = relevant.filter((item) => item.state === "delayed").length;
+	const failures = relevant.filter((item) => item.state === "unavailable" || item.state === "permission_denied");
+	const detail = [...new Set(failures.map((item) => item.detail).filter((value) => Boolean(value)))].slice(0, 2).join(" ");
+	if (healthy === relevant.length) return {
+		state: "connected",
+		detail: family === "durable_objects" ? "Brolly can monitor requests, compute time, WebSocket messages, SQL rows, and storage for individual Durable Objects and namespaces. Nothing else is needed." : "Brolly can monitor this service at the most detailed level Cloudflare provides. Nothing else is needed."
+	};
+	if (healthy > 0 || delayed > 0) return {
+		state: "limited",
+		detail: detail || "Some usage signals are available, but one or more are delayed or unavailable."
+	};
+	return {
+		state: "blocked",
+		detail: detail || "Cloudflare did not return the requested usage signals. Reconnect Brolly and verify account permissions."
+	};
+}
+function costBy(samples, keyFor) {
+	const costs = /* @__PURE__ */ new Map();
+	for (const sample of samples) {
+		const key = keyFor(sample);
+		const cost = sample.estimatedCostUsd;
+		if (!key || !Number.isFinite(cost) || cost <= 0) continue;
+		costs.set(key, (costs.get(key) ?? 0) + cost);
+	}
+	return costs;
+}
+function suggestion(observedUsd, source, partial) {
+	const warning = roundBudget(observedUsd * ESTIMATE_HEADROOM.warning);
+	const critical = roundBudget(Math.max(observedUsd * ESTIMATE_HEADROOM.critical, warning + budgetStep(warning)));
+	return {
+		observedUsd,
+		limits: {
+			warning,
+			critical,
+			emergency: roundBudget(Math.max(observedUsd * ESTIMATE_HEADROOM.emergency, critical + budgetStep(critical)))
+		},
+		source,
+		partial
+	};
+}
+function roundBudget(value) {
+	const step = budgetStep(value);
+	return Number((Math.ceil(value / step) * step).toFixed(2));
+}
+function budgetStep(value) {
+	if (value < 1) return .01;
+	if (value < 10) return .1;
+	if (value < 100) return 1;
+	if (value < 1e3) return 5;
+	return 25;
+}
+function billingFamily(row) {
+	const value = `${row.x_ProductFamilyId ?? ""} ${row.x_ProductFamilyName ?? ""} ${row.x_BillableMetricId ?? ""} ${row.x_BillableMetricName ?? ""}`.toLowerCase().replaceAll(/[^a-z0-9]+/g, " ");
+	return [
+		["durable_objects", /durable object/],
+		["workers_ai", /workers ai|ai inference/],
+		["ai_gateway", /ai gateway/],
+		["kv", /workers kv|key value/],
+		["d1", /\bd1\b/],
+		["r2", /\br2\b/],
+		["queues", /\bqueue/],
+		["vectorize", /vectorize/],
+		["hyperdrive", /hyperdrive/],
+		["pages", /cloudflare pages|pages build/],
+		["images", /cloudflare images|image transformation/],
+		["stream", /cloudflare stream|stream video/],
+		["workers", /\bworkers?\b/]
+	].find(([, pattern]) => pattern.test(value))?.[0] ?? null;
+}
+//#endregion
+//#region src/release.ts
+var BROLLY_RELEASE = "aae2749e2e448d145e64483dc27d39b94e3092db";
+//#endregion
+//#region src/updates.ts
+var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
+var CACHE_KEY = "brolly_release_cache";
+var REPOSITORY_KEY = "update_repository";
+var LEASE_NAME = "release-check";
+var CACHE_MS = 36e5;
+var FETCH_TIMEOUT_MS = 5e3;
+var MAX_MANIFEST_BYTES = 8192;
+async function releaseStatus(env) {
+	const now = Date.now();
+	const [cacheRow, repositoryRow] = await Promise.all([env.DB.prepare(`SELECT value,updated_at FROM settings WHERE key=?1 LIMIT 1`).bind(CACHE_KEY).first(), env.DB.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(REPOSITORY_KEY).first()]);
+	const repository = repositoryRow?.value && validRepository(repositoryRow.value) ? repositoryRow.value : null;
+	const cached = parseCache(cacheRow?.value);
+	if (cached && now - cached.checkedAt < CACHE_MS) return toStatus(cached, repository, Boolean(cached.error), false);
+	const holder = crypto.randomUUID();
+	if (((await env.DB.prepare(`INSERT INTO cron_lease(name,holder,expires_at) VALUES(?1,?2,?3)
+     ON CONFLICT(name) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at
+     WHERE cron_lease.expires_at<?4`).bind(LEASE_NAME, holder, now + 2e4, now).run()).meta.changes ?? 0) === 0) return cached ? toStatus(cached, repository, true, true) : emptyStatus(repository, {
+		checking: true,
+		stale: true
+	});
+	try {
+		const next = {
+			manifest: await fetchReleaseManifest(),
+			checkedAt: Date.now()
+		};
+		await saveCache(env.DB, next);
+		return toStatus(next, repository, false, false);
+	} catch (cause) {
+		const error = cause instanceof Error ? cause.message : String(cause);
+		const failed = {
+			manifest: cached?.manifest,
+			checkedAt: Date.now(),
+			error
+		};
+		await saveCache(env.DB, failed);
+		return toStatus(failed, repository, true, false);
+	} finally {
+		await env.DB.prepare(`DELETE FROM cron_lease WHERE name=?1 AND holder=?2`).bind(LEASE_NAME, holder).run();
+	}
+}
+async function saveUpdateRepository(env, repository) {
+	const normalized = repository.trim();
+	if (normalized && !validRepository(normalized)) throw new Error("Use a GitHub repository in owner/repository format");
+	if (!normalized) {
+		await env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(REPOSITORY_KEY).run();
+		return null;
+	}
+	await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(REPOSITORY_KEY, normalized, Date.now()).run();
+	return normalized;
+}
+function parseReleaseManifest(value) {
+	if (!value || typeof value !== "object") throw new Error("Brolly release manifest is not an object");
+	const manifest = value;
+	if (manifest.schemaVersion !== 1 || manifest.configVersion !== 1 || manifest.workflowFile !== "brolly-update.yml") throw new Error("Brolly release manifest uses an unsupported format");
+	if (typeof manifest.release !== "string" || !/^[a-f0-9]{40}$/.test(manifest.release)) throw new Error("Brolly release identifier is invalid");
+	if (typeof manifest.displayVersion !== "string" || !/^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]{7}$/.test(manifest.displayVersion)) throw new Error("Brolly release version is invalid");
+	if (typeof manifest.publishedAt !== "string" || !Number.isFinite(Date.parse(manifest.publishedAt))) throw new Error("Brolly release date is invalid");
+	if (typeof manifest.notesUrl !== "string") throw new Error("Brolly release notes URL is missing");
+	const notesUrl = new URL(manifest.notesUrl);
+	if (notesUrl.protocol !== "https:" || notesUrl.hostname !== "github.com" || !notesUrl.pathname.startsWith("/standardagents/brolly/")) throw new Error("Brolly release notes URL is not trusted");
+	return manifest;
+}
+function validRepository(value) {
+	if (value.length > 200 || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)) return false;
+	return value.split("/").every((segment) => segment !== "." && segment !== "..");
+}
+async function fetchReleaseManifest() {
+	const response = await fetch(RELEASE_URL, {
+		headers: {
+			accept: "application/json",
+			"user-agent": "brolly-release-check"
+		},
+		redirect: "manual",
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
+	if (!response.ok) throw new Error(`Release check returned HTTP ${response.status}`);
+	if (response.type === "opaqueredirect" || response.status >= 300) throw new Error("Release check refused an unexpected redirect");
+	if (Number(response.headers.get("content-length") ?? "0") > MAX_MANIFEST_BYTES) throw new Error("Release manifest is unexpectedly large");
+	const text = await response.text();
+	if (new TextEncoder().encode(text).byteLength > MAX_MANIFEST_BYTES) throw new Error("Release manifest is unexpectedly large");
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		throw new Error("Release manifest is not valid JSON");
+	}
+	return parseReleaseManifest(value);
+}
+function parseCache(value) {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value);
+		if (typeof parsed.checkedAt !== "number" || !Number.isFinite(parsed.checkedAt)) return null;
+		const manifest = parsed.manifest === void 0 ? void 0 : parseReleaseManifest(parsed.manifest);
+		const error = typeof parsed.error === "string" ? parsed.error : void 0;
+		return {
+			checkedAt: parsed.checkedAt,
+			manifest,
+			error
+		};
+	} catch {
+		return null;
+	}
+}
+function toStatus(cache, repository, stale, checking) {
+	if (!cache.manifest) return emptyStatus(repository, {
+		checkedAt: cache.checkedAt,
+		stale,
+		checking,
+		...cache.error ? { error: cache.error } : {}
+	});
+	return {
+		currentRelease: BROLLY_RELEASE,
+		latestRelease: cache.manifest.release,
+		displayVersion: cache.manifest.displayVersion,
+		publishedAt: cache.manifest.publishedAt,
+		notesUrl: cache.manifest.notesUrl,
+		available: cache.manifest.release !== BROLLY_RELEASE,
+		checkedAt: cache.checkedAt,
+		stale,
+		checking,
+		repository,
+		updateUrl: repository ? `https://github.com/${repository}/actions/workflows/${cache.manifest.workflowFile}` : null,
+		...cache.error ? { error: cache.error } : {}
+	};
+}
+async function saveCache(db, cache) {
+	await db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(CACHE_KEY, JSON.stringify(cache), cache.checkedAt).run();
+}
+function emptyStatus(repository, extra) {
+	return {
+		currentRelease: BROLLY_RELEASE,
+		latestRelease: null,
+		displayVersion: null,
+		publishedAt: null,
+		notesUrl: null,
+		available: false,
+		checkedAt: null,
+		stale: false,
+		checking: false,
+		repository,
+		updateUrl: repository ? `https://github.com/${repository}/actions/workflows/brolly-update.yml` : null,
+		...extra
+	};
+}
+//#endregion
 //#region src/index.ts
 var src_default = {
 	async scheduled(_controller, env, ctx) {
@@ -3051,6 +3460,20 @@ var src_default = {
 		if (!activeEnv) return Response.json({ error: "Choose one Cloudflare account during sign-in before using Brolly" }, { status: 409 });
 		env = activeEnv;
 		if (url.pathname === "/api/dashboard" && request.method === "GET") return Response.json(await dashboardData(env));
+		if (url.pathname === "/api/releases" && request.method === "GET") return Response.json(await releaseStatus(env), { headers: { "cache-control": "no-store" } });
+		if (url.pathname === "/api/update-settings" && request.method === "PUT") {
+			const body = await request.json();
+			try {
+				const repository = await saveUpdateRepository(env, body.repository ?? "");
+				await audit(env.DB, actor.actor, "updates.repository", repository ?? "", { repository });
+				return Response.json({
+					ok: true,
+					repository
+				});
+			} catch (error) {
+				return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+			}
+		}
 		if (url.pathname === "/api/assets" && request.method === "GET") return Response.json(await assetList(request, env));
 		if (url.pathname === "/api/configuration" && request.method === "GET") return Response.json(await configurationData(env));
 		if (url.pathname === "/api/configuration/verify" && request.method === "POST") {
@@ -3064,6 +3487,33 @@ var src_default = {
 			}
 		}
 		if (url.pathname === "/api/onboarding" && request.method === "GET") return Response.json(await onboardingData(env));
+		if (url.pathname === "/api/onboarding/estimates" && request.method === "POST") try {
+			return Response.json(await onboardingBudgetEstimates(env), { headers: { "cache-control": "no-store" } });
+		} catch (error) {
+			return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 });
+		}
+		if (url.pathname === "/api/onboarding/billing-access" && request.method === "PUT") {
+			const body = await request.json();
+			try {
+				const result = await configureOnboardingBillingAccess(env, body.token ?? "");
+				await audit(env.DB, actor.actor, "billing_access.configure", env.BROLLY_ACCOUNT_ID, {
+					verified: true,
+					records: result.records
+				});
+				return Response.json({
+					ok: true,
+					...result
+				});
+			} catch (error) {
+				return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+			}
+		}
+		if (url.pathname === "/api/onboarding/billing-access" && request.method === "DELETE") {
+			if (env.CLOUDFLARE_BILLING_TOKEN) return Response.json({ error: "Billing access is supplied as a Worker secret and must be removed in Cloudflare" }, { status: 409 });
+			await removeOnboardingBillingAccess(env);
+			await audit(env.DB, actor.actor, "billing_access.remove", env.BROLLY_ACCOUNT_ID, {});
+			return Response.json({ ok: true });
+		}
 		if (url.pathname === "/api/onboarding" && request.method === "POST") {
 			const body = await request.json();
 			if (!validPolicy(body.policy, true)) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered warning ≤ critical ≤ emergency" }, { status: 400 });

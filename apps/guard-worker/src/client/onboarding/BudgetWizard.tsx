@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { ProtectionExplainer, RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
-import { Brand, Icon, ProductIcon } from "../components/ui";
+import { Brand, Icon, InfoTip, ProductIcon } from "../components/ui";
 import { normalizeNumericDraft } from "../format";
-import type { OnboardingData, Policy, SpendLimits, Threshold } from "../types";
+import type { OnboardingBudgetEstimates, OnboardingData, Policy, SpendLimits, Threshold } from "../types";
 
 const LIMIT_ROWS = [
   { metric: "projected_daily_cost_usd", windowMs: 86_400_000, label: "Projected cost per Durable Object", unit: "USD / day", defaults: [0.5, 2, 5] },
@@ -15,20 +15,26 @@ const LIMIT_ROWS = [
 
 type RuntimeIntegration = { workerScript: string; installed: boolean };
 
-export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onSaved }: {
+export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onLogout, onSaved }: {
   data: OnboardingData;
   token: string;
   editing: boolean;
   initialStep?: number;
   onCancel?: () => void;
+  onLogout: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [step, setStep] = useState(initialStep);
   const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [busy, setBusy] = useState(false);
+  const [estimateBusy, setEstimateBusy] = useState(false);
+  const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
+  const [estimateNotice, setEstimateNotice] = useState("");
+  const [accessNotice, setAccessNotice] = useState("");
+  const [accessError, setAccessError] = useState("");
   const [error, setError] = useState("");
-  const steps = ["Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
+  const steps = ["Check usage access", "Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
   const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
 
   async function save() {
@@ -55,12 +61,70 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     }
   }
 
+  function applySuggestions(result: OnboardingBudgetEstimates) {
+    const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
+    const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
+    const appliedFamilies = familySuggestions.length;
+    const appliedAssets = assetSuggestions.length;
+    setPolicy(current => {
+      const familyDailySpend = { ...current.familyDailySpend };
+      const assetDailySpend = { ...current.assetDailySpend };
+      for (const [family, suggestion] of familySuggestions) familyDailySpend[family] = suggestion.limits;
+      for (const [key, suggestion] of assetSuggestions) assetDailySpend[key] = suggestion.limits;
+      return {
+        ...current,
+        familyDailySpend,
+        assetDailySpend,
+        accountDailySpend: result.account && !result.account.partial ? result.account.limits : current.accountDailySpend,
+      };
+    });
+    if (appliedFamilies === 0) {
+      setEstimateNotice("Cloudflare returned no non-zero cost estimate for this window, so no limits were changed.");
+    } else {
+      const accountNote = result.account?.partial ? " The account-wide limit was left unchanged because the scan had partial product coverage." : " The account-wide limit was updated too.";
+      setEstimateNotice(`Filled ${appliedFamilies} product ${appliedFamilies === 1 ? "budget" : "budgets"}${appliedAssets ? ` and ${appliedAssets} resource ${appliedAssets === 1 ? "budget" : "budgets"}` : ""}.${accountNote}`);
+    }
+  }
+
+  async function verifyUsageAccess() {
+    setEstimateBusy(true);
+    setAccessNotice("");
+    setAccessError("");
+    try {
+      const result = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      setEstimates(result);
+      setAccessNotice("Monitoring access check complete. No limits were changed.");
+    } catch (cause) {
+      setAccessError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
+  async function suggestFromRecentUsage() {
+    setEstimateBusy(true);
+    setEstimateNotice("");
+    setError("");
+    try {
+      const result = estimates ?? await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      setEstimates(result);
+      applySuggestions(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEstimateBusy(false);
+    }
+  }
+
   return (
     <main className="setup-shell">
       <header className="setup-header">
         <Brand />
         <div>{editing ? "Budget settings" : "First-run protection setup"}</div>
-        {onCancel && <button type="button" className="button quiet" onClick={onCancel}>Close</button>}
+        <span className="ml-auto flex items-center gap-2">
+          {onCancel && <button type="button" className="button quiet" onClick={onCancel}>Close</button>}
+          <button type="button" className="button quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</button>
+        </span>
       </header>
       <div className="setup-layout">
         <aside className="setup-steps">
@@ -78,9 +142,18 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
         <section className="setup-panel">
           {step === 0 && (
             <>
-              <p className="eyebrow orange">Step 1 of 5</p>
+              <p className="eyebrow orange">Step 1 of 6</p>
+              <h2>Check what Brolly can see</h2>
+              <p className="section-copy">Brolly works by using existing Cloudflare APIs to monitor individual services and the billed usage for those services. To get started, let&apos;s make sure Brolly has the appropriate permissions to safely monitor your account&apos;s usage.</p>
+              <AccessActions accountId={data.accountId} busy={estimateBusy} result={estimates} notice={accessNotice} error={accessError} token={token} onVerify={() => void verifyUsageAccess()} onVerified={result => { setEstimates(result); setAccessError(""); setAccessNotice("Billing access saved and verified. No limits were changed."); }} />
+            </>
+          )}
+          {step === 1 && (
+            <>
+              <p className="eyebrow orange">Step 2 of 6</p>
               <h2>What is an unacceptable account day?</h2>
               <p className="section-copy">These limits apply across all monitored Cloudflare products. Warnings give you time; emergency limits create approval-ready stop actions where a safe control exists.</p>
+              <RecentUsageEstimator busy={estimateBusy} result={estimates} notice={estimateNotice} onSuggest={() => void suggestFromRecentUsage()} />
               <LimitEditor title="Total account spend" value={policy.accountDailySpend} onChange={value => setPolicy({ ...policy, accountDailySpend: value })} />
               <div className="mode-card">
                 <div>
@@ -95,11 +168,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </div>
             </>
           )}
-          {step === 1 && (
+          {step === 2 && (
             <>
-              <p className="eyebrow orange">Step 2 of 5</p>
+              <p className="eyebrow orange">Step 3 of 6</p>
               <h2>Daily spend by product</h2>
-              <p className="section-copy">Set a limit for every billable family. Limits with partial telemetry are saved now and gain full enforcement as the remaining collectors are connected.</p>
+              <p className="section-copy">Set a limit for every billable family. Brolly saves every limit now and clearly marks products where Cloudflare exposes only some of the usage data needed for alerts.</p>
               <TelemetryLegend />
               <div className="limit-table-head"><span>Product</span><span>Warn</span><span>Critical</span><span>Emergency</span></div>
               <div className="limit-table">
@@ -108,15 +181,16 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     key={family.family}
                     family={family}
                     value={policy.familyDailySpend[family.family]!}
+                    estimate={estimates?.families[family.family]}
                     onChange={value => setPolicy({ ...policy, familyDailySpend: { ...policy.familyDailySpend, [family.family]: value } })}
                   />
                 ))}
               </div>
             </>
           )}
-          {step === 2 && (
+          {step === 3 && (
             <>
-              <p className="eyebrow orange">Step 3 of 5</p>
+              <p className="eyebrow orange">Step 4 of 6</p>
               <h2>Limits for each Worker and namespace</h2>
               <p className="section-copy">These daily budgets override the product default for one Worker script or one Durable Object namespace. Newly discovered resources inherit their product limit until you assign an explicit budget here.</p>
               <TelemetryLegend />
@@ -127,6 +201,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     key={asset.key}
                     asset={asset}
                     value={policy.assetDailySpend[asset.key]!}
+                    estimate={estimates?.assets[asset.key]}
                     onChange={value => setPolicy({ ...policy, assetDailySpend: { ...policy.assetDailySpend, [asset.key]: value } })}
                   />
                 )) : (
@@ -135,9 +210,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </div>
             </>
           )}
-          {step === 3 && (
+          {step === 4 && (
             <>
-              <p className="eyebrow orange">Step 4 of 5</p>
+              <p className="eyebrow orange">Step 5 of 6</p>
               <h2>Durable Object kill-switch limits</h2>
               <p className="section-copy">Brolly evaluates each returned Durable Object ID independently, so one runaway object can be isolated without deleting its storage or taking an entire account offline.</p>
               <div className="object-limits">
@@ -153,9 +228,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <ProtectionExplainer mode={policy.mode} />
             </>
           )}
-          {step === 4 && (
+          {step === 5 && (
             <>
-              <p className="eyebrow orange">Step 5 of 5</p>
+              <p className="eyebrow orange">Step 6 of 6</p>
               <h2>Make quarantine available</h2>
               <p className="section-copy">Brolly can monitor and alert as soon as you finish setup. To let it quarantine a runaway Worker or one Durable Object, your application needs a tiny local runtime guard.</p>
               <div className="runtime-readiness">
@@ -180,15 +255,15 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           {error && <p className="form-error">{error}</p>}
           <footer className="setup-actions">
             <button type="button" className="button secondary" disabled={step === 0 || busy} onClick={() => setStep(step - 1)}>Back</button>
-            {step === 4 && (
+            {step === 5 && (
               <span className={`runtime-finish-note ${policy.mode === "automatic" && installedIntegrations === 0 ? "caution" : ""}`}>
                 {data.scopedAssets.length
                   ? <><strong>{installedIntegrations} of {data.scopedAssets.length} resources reported installed.</strong> {installedIntegrations ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
                   : <><strong>No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
               </span>
             )}
-            {step < 4
-              ? <button type="button" className="button primary" onClick={() => setStep(step + 1)}>Continue</button>
+            {step < 5
+              ? <button type="button" className="button primary" disabled={busy || (step === 0 && (!estimates || estimateBusy))} onClick={() => setStep(step + 1)}>{step === 0 ? "Continue to limits" : "Continue"}</button>
               : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
@@ -214,14 +289,281 @@ function LimitEditor({ title, value, onChange }: { title: string; value: SpendLi
   );
 }
 
-function FamilyLimitRow({ family, value, onChange }: { family: OnboardingData["families"][number]; value: SpendLimits; onChange: (value: SpendLimits) => void }) {
+function AccessActions({ accountId, busy, result, notice, error, token, onVerify, onVerified }: {
+  accountId: string;
+  busy: boolean;
+  result: OnboardingBudgetEstimates | null;
+  notice: string;
+  error: string;
+  token: string;
+  onVerify: () => void;
+  onVerified: (result: OnboardingBudgetEstimates) => void;
+}) {
+  const [billingToken, setBillingToken] = useState("");
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState("");
+  const [billingSuccess, setBillingSuccess] = useState("");
+  const [recipeCopied, setRecipeCopied] = useState(false);
+  const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
+    const access = result.access[key];
+    return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
+  }) : false;
+  const billingNeedsToken = result ? result.access.billing.state !== "connected" : false;
+
+  async function saveBillingAccess() {
+    setBillingBusy(true);
+    setBillingError("");
+    setBillingSuccess("");
+    try {
+      await api("/api/onboarding/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
+      setBillingToken("");
+      const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
+      if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");
+      setBillingSuccess("Billing Read is connected. The token is encrypted in this Brolly installation and will not be shown again.");
+      onVerified(verified);
+    } catch (cause) {
+      setBillingError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
+  async function copyBillingRecipe() {
+    const recipe = [
+      "Cloudflare API token for Brolly",
+      "Token name: Brolly Billing Read",
+      "Permissions: Account → Billing → Read",
+      "Account resources: Include → the same account connected to Brolly",
+      "Zone permissions: none",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(recipe);
+      setRecipeCopied(true);
+      window.setTimeout(() => setRecipeCopied(false), 2_000);
+    } catch {
+      setBillingError("Your browser could not copy the recipe. Select the settings below and copy them manually.");
+    }
+  }
+
+  return (
+    <div className="mb-5 grid gap-4">
+      <section className="flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--good-line)] bg-[var(--good-bg)] p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--panel)] text-[var(--good)] [&_.icon]:size-5"><Icon name="shield" /></span>
+          <div>
+            <div className="flex items-center gap-2"><strong className="text-sm">Check Brolly&apos;s access</strong><InfoTip label="How Brolly checks access">Brolly makes at most two read-only Analytics requests and one billing request only when Billing Read is configured. Results are cached for 15 minutes. This check never changes limits or Cloudflare resources.</InfoTip></div>
+            <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">Brolly reads Cloudflare's usage APIs. It cannot deploy, quarantine, pause, delete, or change anything during this check, and it does not write monitoring traffic into your applications.</p>
+            {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
+            {result && <p className="mt-1 text-[11px] text-[var(--faint)]">Checked {new Date(result.generatedAt).toLocaleString()} · {result.apiCalls} bounded API {result.apiCalls === 1 ? "request" : "requests"}</p>}
+          </div>
+        </div>
+        <button type="button" className="button primary shrink-0" disabled={busy || billingBusy} onClick={onVerify}><Icon name="radar" />{busy ? "Checking…" : result ? "Check again" : "Check monitoring access"}</button>
+        {error && <p className="form-error basis-full" role="alert"><strong>Monitoring access check failed.</strong> {error}</p>}
+      </section>
+
+      {result && <UsageAccessResults result={result} />}
+
+      {analyticsNeedsReconnect && (
+        <article className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--warn-bg)] p-4">
+          <div className="flex items-center gap-2"><Icon name="refresh" /><strong className="text-sm">Workers and Durable Object access</strong></div>
+          <p className="mt-2 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare denied at least one Analytics permission. Reconnect the account, approve Brolly's current scopes, then run the monitoring check again. You will return to this installation.</p>
+          <a className="button secondary mt-3" href="/api/auth/login"><Icon name="external" /> Reconnect Cloudflare</a>
+        </article>
+      )}
+
+      {(billingNeedsToken || billingSuccess) && (
+        <BillingAccessSetup
+          accountId={accountId}
+          token={billingToken}
+          busy={billingBusy}
+          error={billingError}
+          success={billingSuccess}
+          copied={recipeCopied}
+          onToken={setBillingToken}
+          onCopy={() => void copyBillingRecipe()}
+          onSubmit={() => void saveBillingAccess()}
+        />
+      )}
+    </div>
+  );
+}
+
+function BillingAccessSetup({ accountId, token, busy, error, success, copied, onToken, onCopy, onSubmit }: {
+  accountId: string;
+  token: string;
+  busy: boolean;
+  error: string;
+  success: string;
+  copied: boolean;
+  onToken: (value: string) => void;
+  onCopy: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <section className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
+      <div className="flex items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--warn-bg)] text-[var(--warn)] [&_.icon]:size-5"><Icon name="wallet" /></span>
+        <div>
+          <p className="eyebrow">One more permission</p>
+          <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
+          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only token to show your real bill totals. Copy Brolly&apos;s settings, create the token in Cloudflare, then paste it back here. It cannot change billing or resources.</p>
+        </div>
+      </div>
+
+      <ol className="mt-5 grid gap-3">
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b>
+          <div>
+            <strong className="block text-sm">Copy Brolly&apos;s token settings</strong>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">You&apos;ll paste these exact settings into Cloudflare in the next step.</p>
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
+              <dt className="text-[var(--faint)]">Name</dt><dd className="m-0 font-semibold">Brolly Billing Read</dd>
+              <dt className="text-[var(--faint)]">Permission</dt><dd className="m-0 font-semibold">Account → Billing → Read</dd>
+              <dt className="text-[var(--faint)]">Account</dt><dd className="m-0 font-semibold">Include → this account</dd>
+              <dt className="text-[var(--faint)]">Zone access</dt><dd className="m-0 font-semibold">None</dd>
+            </dl>
+          </div>
+          <button type="button" className="button secondary shrink-0" onClick={onCopy}><Icon name="clipboard" /> {copied ? "Recipe copied" : "Copy recipe"}</button>
+        </li>
+
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b>
+          <div>
+            <strong className="block text-sm">Open this account&apos;s API Tokens page</strong>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Click <strong>Create Custom Token</strong>, then enter the settings you just copied.</p>
+          </div>
+          <a className="button secondary shrink-0" href={`https://dash.cloudflare.com/${encodeURIComponent(accountId)}/api-tokens`} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</a>
+        </li>
+
+        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
+          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">3</b>
+          <form className="grid gap-3" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+            <div>
+              <strong className="block text-sm">Create the token, then paste it here</strong>
+              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">In Cloudflare, click <strong>Continue to summary</strong>, then <strong>Create Token</strong>. Copy the token Cloudflare shows—it is displayed only once.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="sr-only" htmlFor="billing-access-token">Paste the new Cloudflare API token</label>
+              <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste the Cloudflare API token" />
+              <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Verifying…" : "Verify and save"}</button>
+            </div>
+            <small className="leading-5 text-[var(--faint)]">Brolly verifies the token first, encrypts it in this installation, and never displays it again.</small>
+            {error && <p className="form-error mt-1" role="alert"><strong>Billing access failed.</strong> {error}</p>}
+            {success && <p className="form-success mt-1" role="status">{success}</p>}
+          </form>
+        </li>
+      </ol>
+      <p className="mt-3 text-xs text-[var(--faint)]">Need more help? <a className="font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">See Cloudflare&apos;s token instructions ↗</a></p>
+    </section>
+  );
+}
+
+function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
+  busy: boolean;
+  result: OnboardingBudgetEstimates | null;
+  notice: string;
+  onSuggest: () => void;
+}) {
+  return (
+    <section className="mb-5 flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="recent-usage-estimator-title">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="trend" /></span>
+        <div>
+          <div className="flex items-center gap-2">
+            <strong id="recent-usage-estimator-title" className="text-sm">Fill limits from this account's recent usage</strong>
+            <InfoTip label="How recent-usage suggestions work">
+              Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.
+            </InfoTip>
+          </div>
+          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-[var(--muted)]">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
+          {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
+          {result && (
+            <p className="mt-1 text-[11px] text-[var(--faint)]">
+              {result.cached ? "Reused the 15-minute cache" : `${result.apiCalls} bounded Cloudflare API ${result.apiCalls === 1 ? "request" : "requests"}`} · Window ended {new Date(result.windowEndAt).toLocaleString()}
+            </p>
+          )}
+        </div>
+      </div>
+      <button type="button" className="button secondary shrink-0" disabled={busy} onClick={onSuggest}>
+        <Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}
+      </button>
+    </section>
+  );
+}
+
+function UsageAccessResults({ result }: { result: OnboardingBudgetEstimates }) {
+  const rows = [
+    { key: "workers" as const, label: "Worker activity" },
+    { key: "durable_objects" as const, label: "Durable Object activity" },
+    { key: "billing" as const, label: "Cloudflare bill totals" },
+  ];
+  return (
+    <section className="overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)]" aria-label="Cloudflare usage access results">
+      <header className="border-b border-[var(--line-soft)] bg-[var(--panel-soft)] px-4 py-3"><strong className="text-sm">Monitoring access results</strong></header>
+      {rows.map(row => {
+        const access = result.access[row.key];
+        const good = access.state === "connected";
+        const permissionProblem = accessPermissionProblem(access.detail);
+        const bestAvailable = row.key === "workers" && access.state === "limited" && !permissionProblem;
+        const workerSetupNeeded = bestAvailable && result.access.billing.state !== "connected";
+        const ready = good || (bestAvailable && !workerSetupNeeded);
+        const caution = !ready && (access.state === "limited" || access.state === "not_configured" || access.state === "unknown");
+        const status = access.state === "connected" ? "Ready"
+          : workerSetupNeeded ? "Setup needed"
+            : bestAvailable ? "Ready"
+            : access.state === "limited" ? "Some data missing"
+            : access.state === "blocked" ? "Needs access"
+              : access.state === "not_configured" ? "Setup needed"
+                : "Could not verify";
+        const nextStep = row.key === "billing" && !good
+          ? { href: "#billing-access-title", label: "Add Billing Read below" }
+          : bestAvailable && result.access.billing.state !== "connected"
+            ? { href: "#billing-access-title", label: "Add exact account totals below" }
+            : row.key !== "billing" && (access.state === "blocked" || permissionProblem)
+            ? { href: "/api/auth/login", label: "Reconnect Cloudflare" }
+              : null;
+        return (
+          <article key={row.key} className="grid gap-2 border-t border-[var(--line-soft)] px-4 py-3 first:border-t-0 md:grid-cols-[minmax(190px,.65fr)_auto_minmax(0,1.35fr)] md:items-center md:gap-4">
+            <div className="flex items-center gap-2">
+              <span className={ready ? "text-[var(--good)]" : caution ? "text-[var(--warn)]" : "text-[var(--danger)]"}><Icon name={ready ? "check" : caution ? "info" : "alert"} /></span>
+              <strong className="text-sm">{row.label}</strong>
+            </div>
+            <span className={`w-max rounded-full px-2 py-1 text-[11px] font-bold ${ready ? "bg-[var(--good-bg)] text-[var(--good)]" : caution ? "bg-[var(--warn-bg)] text-[var(--warn)]" : "bg-[var(--danger-bg)] text-[var(--danger)]"}`}>{status}</span>
+            <div>
+              <p className="m-0 break-words text-xs leading-5 text-[var(--muted)]">
+                {bestAvailable
+                  ? "Brolly can monitor each Worker's requests and CPU time. Cloudflare reports cache charges only for the whole account."
+                  : access.detail}
+              </p>
+              {bestAvailable && (
+                <p className="mt-1 text-xs font-semibold leading-5 text-[var(--ink)]">
+                  {result.access.billing.state === "connected"
+                    ? "Billing Read is connected, so Worker, product, and account limits cover every cost signal Cloudflare makes available."
+                    : "To finish setup, add Billing Read below. It adds exact account-wide charges, including cache costs Cloudflare cannot assign to one Worker."}
+                </p>
+              )}
+              {nextStep && <a className="mt-2 inline-block text-xs font-bold text-[var(--blue)] hover:underline" href={nextStep.href}>{nextStep.label} →</a>}
+              {good && <p className="mt-1 text-xs font-semibold text-[var(--good)]">No action needed.</p>}
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function accessPermissionProblem(detail: string): boolean {
+  return /permission denied|access denied|forbidden|unauthorized|authentication|missing required|\b403\b/i.test(detail);
+}
+
+function FamilyLimitRow({ family, value, estimate, onChange }: { family: OnboardingData["families"][number]; value: SpendLimits; estimate?: OnboardingBudgetEstimates["families"][string]; onChange: (value: SpendLimits) => void }) {
   return (
     <div className="limit-table-row">
       <div className="resource-label">
         <ProductIcon family={family.family} />
         <span className="resource-label-copy">
           <strong>{family.label}</strong>
-          <small><i className={`coverage-dot ${family.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{family.protection === "active" ? "Full telemetry" : "Partial telemetry"}</small>
+          <small><i className={`coverage-dot ${family.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{estimate ? `$${estimate.observedUsd.toFixed(2)} in ${estimate.source === "billing" ? "latest billing day" : "prior 24 hr"}` : family.protection === "active" ? "Usage connected" : "Limited usage data"}</small>
         </span>
       </div>
       {(["warning", "critical", "emergency"] as const).map(key => (
@@ -234,7 +576,7 @@ function FamilyLimitRow({ family, value, onChange }: { family: OnboardingData["f
   );
 }
 
-function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["scopedAssets"][number]; value: SpendLimits; onChange: (value: SpendLimits) => void }) {
+function ScopedLimitRow({ asset, value, estimate, onChange }: { asset: OnboardingData["scopedAssets"][number]; value: SpendLimits; estimate?: OnboardingBudgetEstimates["assets"][string]; onChange: (value: SpendLimits) => void }) {
   const kind = asset.family === "workers" ? "Worker script" : "Durable Object namespace";
   return (
     <div className="limit-table-row">
@@ -242,7 +584,7 @@ function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["sco
         <ProductIcon family={asset.family} />
         <span className="resource-label-copy">
           <strong>{asset.name}</strong>
-          <small><i className={`coverage-dot ${asset.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{kind} · {asset.protection === "active" ? "Full telemetry" : "Partial telemetry"}</small>
+          <small><i className={`coverage-dot ${asset.protection === "active" ? "active" : "gap"}`} aria-hidden="true" />{kind} · {estimate ? `$${estimate.observedUsd.toFixed(2)} in ${estimate.source === "billing" ? "latest billing day" : "prior 24 hr"}` : asset.protection === "active" ? "Usage connected" : "Limited usage data"}</small>
         </span>
       </div>
       {(["warning", "critical", "emergency"] as const).map(key => (
@@ -257,9 +599,9 @@ function ScopedLimitRow({ asset, value, onChange }: { asset: OnboardingData["sco
 
 function TelemetryLegend() {
   return (
-    <div className="telemetry-legend" aria-label="Telemetry status legend">
-      <span><i className="coverage-dot active" aria-hidden="true" /><span><strong>Full telemetry</strong><small>All known billing signals are monitored</small></span></span>
-      <span><i className="coverage-dot gap" aria-hidden="true" /><span><strong>Partial telemetry</strong><small>One or more billing signals still need a collector</small></span></span>
+    <div className="telemetry-legend" aria-label="Usage data status legend">
+      <span><i className="coverage-dot active" aria-hidden="true" /><span><strong>Usage connected</strong><small>Brolly can read every known billing signal for this product</small></span></span>
+      <span><i className="coverage-dot gap" aria-hidden="true" /><span><strong>Limited usage data</strong><small>Cloudflare currently exposes only some signals to this installation</small></span></span>
     </div>
   );
 }

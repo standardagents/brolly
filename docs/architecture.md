@@ -23,6 +23,29 @@ pages. `/api/*` and `/health` run Worker-first while
 navigation requests use the static SPA fallback. The npm installer packages
 both the Worker bundle and the client asset directory.
 
+Release discovery is active-page-driven rather than cron-driven. The client
+calls an authenticated local endpoint on load and at most hourly while open.
+That endpoint fetches one fixed, size-limited manifest from Brolly's public
+`deploy-template` branch, validates its schema, release SHA, and trusted notes
+URL, and caches it in D1 for one hour. A D1 lease deduplicates simultaneous
+tabs. No GitHub credential enters Brolly: D1 stores only the optional
+`owner/repository` slug used to construct the GitHub Actions link.
+
+Updates are a separate repository-local control plane. The shipped manual
+workflow receives a short-lived `GITHUB_TOKEN` from the installation's own
+GitHub repository, copies only an explicit allowlist of release artifacts, and
+opens a pull request. The running, already-installed workflow performs static
+syntax and manifest checks; it does not execute scripts downloaded from the
+candidate release while its write token is present. It cannot merge
+automatically. Installation-owned
+`wrangler.jsonc`, D1 identity, variables, and secrets are outside that copy
+allowlist. This gives public and private installations the same review gate
+without a publisher-owned GitHub App or long-lived token.
+The workflow file itself is outside the routine update allowlist because GitHub
+does not permit a workflow token to modify workflow files. It is provisioned at
+installation time and changed only through an explicit owner-authorized
+infrastructure migration.
+
 Browser login uses Brolly's publisher-owned public OAuth client and one fixed
 redirect URI at `brolly-login.standardagents.ai`. The private, separately
 deployed `brolly-login` Worker contains the stateless relay; relay code and
@@ -34,6 +57,15 @@ own D1 database, then returns the one-time code only to that origin's
 exact origin matching prevent another installation from claiming the code. The
 relay never exchanges the code and therefore never receives Cloudflare access
 or refresh tokens.
+
+The publisher OAuth client enables both authorization-code and refresh-token
+grants. Brolly explicitly requests `offline_access` and refuses to persist an
+OAuth exchange that does not include a refresh token. Each installation stores
+the access token, refresh token, and expiry together in its own D1 using
+AES-GCM. `operationalToken()` refreshes the grant five minutes before expiry
+under a D1 lease so overlapping monitor and control requests cannot race token
+rotation. Installations authorized before refresh-token support was enabled
+must reconnect once to replace their original short-lived grant.
 
 An unbound deployment accepts exactly one account in its first successful
 browser authorization and persists that account ID in D1. This binds the
@@ -60,12 +92,12 @@ both receive Cloudflare's 20:1 billing conversion exactly once. Five-minute tele
 minute; a direct 24-hour query runs every 15 minutes. Brolly separately imports Cloudflare billing usage when
 a Billing Read token is configured. Billing usage can be delayed and is
 reconciled rather than used for sub-minute shutdown decisions. Every cataloged
-family without a fast collector is persisted as unavailable and opens a
+family without a fast usage source is persisted as unavailable and opens a
 coverage incident.
 
 For charting, the minute pass writes one account-level projected-spend sample,
-and the 15-minute pass writes one rolling-24-hour cost sample per active
-collector family. This avoids reconstructing charts by repeatedly scanning
+and the 15-minute pass writes one rolling-24-hour cost sample per active usage
+family. This avoids reconstructing charts by repeatedly scanning
 per-object samples. The dashboard reads bounded aggregates, at most 2,500 spend
 points and 250 incidents per request.
 
@@ -86,6 +118,26 @@ First-run completion is stored in D1 as `onboarding_complete`. A new browser
 does not bypass setup, and the browser never receives or stores the break-glass
 admin token. Existing policies without `familyDailySpend` are migrated in the wizard
 by merging conservative defaults before saving.
+
+The optional first-run usage check is a separate, read-only path. A 20-second
+`RunBudget` caps it at four API calls and 20,000 returned samples, while the
+implementation normally uses exactly the aggregate Durable Objects and Workers
+Analytics requests and optionally a Billing Read request. A D1 lease prevents
+overlap and a 15-minute D1 cache prevents repeated button clicks from repeating
+the Cloudflare queries. Suggested warning, critical, and emergency budgets add
+25%, 75%, and 150% headroom to measurable prior-24-hour cost. Missing or
+zero-cost families keep their existing draft values, and partial account data
+never overwrites the account-wide draft budget.
+
+Access verification and draft mutation are separate client actions. The first
+screen initially presents a single bounded check, then progressively reveals a
+compact result list and only the relevant remediation. Reauthorizing
+OAuth invalidates the 15-minute access cache. A Billing Read token submitted in
+setup is tested against the bound account before its AES-GCM envelope is stored
+under `billing_credentials` in D1; it is never returned to the client. A Worker
+secret with the same purpose takes precedence. Only the explicit historical
+usage action on the following account-budget screen copies suggestions into
+the editable policy draft.
 
 Scoped budgets take precedence over family defaults. Per-object Durable Object
 cost also inherits its namespace budget when no exact-object budget exists.

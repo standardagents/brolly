@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import billingStories from "../../../docs/cloudflare-x-post-images/posts.json";
 
-const DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/main/deploy";
+const DEPLOY_URL = "https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/deploy-template";
 const GITHUB_URL = "https://github.com/standardagents/brolly";
 const SERVICES = [
   ["durable-objects", "Durable Objects"],
@@ -153,9 +153,10 @@ export function App() {
                 <li className={NUMBERED_LI}><b className={NUMBERED_B}>4</b><span><strong className="mb-[3px] block">Choose your protection.</strong><p className={NUMBERED_P}>Set per-resource limits, select observe, approval, or automatic mode, and connect Discord, Slack, or SMS alerts.</p></span></li>
               </ol>
               <div className={CALLOUT_ORANGE}><span className="flex items-center gap-[11px]"><Check className="text-orange" /><span className="flex flex-col"><strong>You are ready to protect your account</strong><small className={CALLOUT_ORANGE_SMALL}>Start in observe mode, confirm the readings and limits, then enable approval or automatic quarantine when you are comfortable.</small></span></span></div>
+              <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>How do updates work?</strong> Save the GitHub repository name in Settings. While you use Brolly, it checks at most hourly and shows a banner for new releases. The button runs a repo-local workflow that opens a pull request for you to review; it never silently deploys. Private repositories work normally, no GitHub token is stored in Brolly, and your D1 binding, variables, and secrets are preserved.</p></div>
               <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>Who can sign in later?</strong> A Cloudflare member who can authorize Brolly's requested scopes for the bound account may sign in. A user who authorizes a different account is rejected. Changing accounts requires deliberately resetting the installation's D1 binding or deploying a new instance; the latest successful authorization supplies the revocable Cloudflare grant Brolly uses for monitoring and controls.</p></div>
               <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>What passes through Brolly's login service?</strong> Only the one-time Cloudflare authorization result. The separate stateless relay verifies the requesting installation, returns the short-lived code to that exact deployment, and never receives the access or refresh token stored in your D1 database.</p></div>
-              <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>Billing reconciliation is optional.</strong> Fast telemetry works with OAuth. A separate Billing Read token enables authoritative invoice comparison because Cloudflare does not expose that permission through its OAuth scope catalog.</p></div>
+              <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>Billing reconciliation is optional.</strong> Start with one bounded monitoring-access check. Brolly shows the results first, then reveals OAuth reconnection or a copyable least-privilege Billing Read recipe only if needed. A verified billing token is encrypted inside your D1. The next screen—not the access check—can fill editable limits from recent usage.</p></div>
             </section>
 
             <section className="py-[70px] first:border-t-0 border-t border-line max-[680px]:py-[55px]" id="limits">
