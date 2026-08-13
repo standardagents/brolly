@@ -13,6 +13,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "dev:demo": "vite --config vite.demo.config.ts",
     "preview": "vite preview",
     "deploy": "pnpm build && pnpm db:migrate:remote && pnpm deploy:built",
     "deploy:built": "node ../../scripts/deploy-guard.mjs",
