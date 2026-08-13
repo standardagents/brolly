@@ -176,19 +176,20 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
  */
 const ACCESS_CAPABILITIES = [
   { key: "monitoring" as const, label: "Usage monitoring", detail: "Live usage meters and alerts for every service.", icon: "pulse" as const },
-  { key: "billing" as const, label: "Billing access", detail: "Unlocks spending caps and true invoice dollars.", icon: "wallet" as const },
+  { key: "billing" as const, label: "Billing access", detail: "Enables daily and monthly spending caps based on actual invoiced dollar amounts.", icon: "wallet" as const },
 ];
 
 type CapabilityStatus =
   | { state: "checking" }
   | { state: "ready"; note: string }
+  | { state: "attention"; note: string }
   | { state: "action"; href: string; label: string };
 
 function capabilityStatus(key: (typeof ACCESS_CAPABILITIES)[number]["key"], result: OnboardingBudgetEstimates): CapabilityStatus {
   if (key === "billing") {
     return result.access.billing.state === "connected"
       ? { state: "ready", note: "Connected" }
-      : { state: "action", href: "#billing-access-title", label: "Billing access required" };
+      : { state: "attention", note: "Not connected" };
   }
   const analyticsBlocked = (["workers", "durable_objects"] as const).some(surface => {
     const access = result.access[surface];
@@ -222,7 +223,7 @@ function UsageAccessResults({ result, checking }: { result: OnboardingBudgetEsti
       {ACCESS_CAPABILITIES.map((row, index) => {
         const status: CapabilityStatus = !checking && result && index < revealed ? capabilityStatus(row.key, result) : { state: "checking" };
         const badge = status.state === "ready" ? { icon: "check" as const, tone: "bg-[var(--good-bg)] text-[var(--good)]" }
-          : status.state === "action" ? { icon: "alert" as const, tone: "bg-[var(--warn-bg)] text-[var(--warn)]" }
+          : status.state === "action" || status.state === "attention" ? { icon: "alert" as const, tone: "bg-[var(--warn-bg)] text-[var(--warn)]" }
             : null;
         return (
           <article
@@ -248,6 +249,7 @@ function UsageAccessResults({ result, checking }: { result: OnboardingBudgetEsti
             </div>
             {status.state === "checking" && <span className="text-xs text-[var(--faint)]">Checking…</span>}
             {status.state === "ready" && <span className="text-xs font-semibold text-[var(--good)]">{status.note}</span>}
+            {status.state === "attention" && <span className="text-xs font-semibold text-[var(--warn)]">{status.note}</span>}
             {status.state === "action" && <a className="text-xs font-bold text-[var(--blue)] hover:underline" href={status.href}>{status.label} →</a>}
           </article>
         );
@@ -262,15 +264,20 @@ function UsageAccessResults({ result, checking }: { result: OnboardingBudgetEsti
  * Read connects — the grid exists to make that upgrade worth the manual token
  * paste, so the carrot line stays visible until billing is connected.
  */
+// Bright status-light hues, deliberately hotter than the muted --good/--warn
+// text tokens so the dots read as lights in both themes.
+const LIGHT_GREEN = "bg-[#2fd05e] shadow-[0_0_6px_#2fd05e66]";
+const LIGHT_YELLOW = "bg-[#ffc53d] shadow-[0_0_6px_#ffc53d66]";
+
 function ServiceCoverageGrid({ families, checking, capped }: { families: OnboardingData["families"]; checking: boolean; capped?: boolean }) {
-  const dot = checking ? "bg-[var(--faint)] opacity-40" : capped ? "bg-[var(--good)]" : "bg-[var(--warn)]";
+  const dot = checking ? "bg-[var(--faint)] opacity-40" : capped ? LIGHT_GREEN : LIGHT_YELLOW;
   return (
     <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4 [animation:access-reveal_.4s_cubic-bezier(.2,.7,.3,1)_both] [animation-delay:180ms] motion-reduce:animate-none" aria-label="Service coverage">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">Service coverage</strong>
         <span className="flex items-center gap-4 text-[11px] text-[var(--muted)]">
-          <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[var(--good)]" /> Monitoring + spending caps</span>
-          <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[var(--warn)]" /> Monitor only</span>
+          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_YELLOW}`} /> Monitor only</span>
+          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_GREEN}`} /> Monitoring + spending caps</span>
         </span>
       </header>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -281,11 +288,6 @@ function ServiceCoverageGrid({ families, checking, capped }: { families: Onboard
           </span>
         ))}
       </div>
-      {!checking && !capped && (
-        <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
-          <a className="font-bold text-[var(--blue)] hover:underline" href="#billing-access-title">Connect billing access →</a> to turn on spending caps for every service.
-        </p>
-      )}
     </section>
   );
 }

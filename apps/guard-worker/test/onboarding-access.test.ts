@@ -47,8 +47,8 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("greatly improves protection for your account");
     expect(source).toContain("Continue without billing access");
     expect(wizardSource).toContain('billingConnected ? "Continue to limits"');
-    expect(source).toContain("Billing access required");
-    expect(source).toContain("#billing-access-title");
+    expect(source).toContain("Enables daily and monthly spending caps based on actual invoiced dollar amounts.");
+    expect(source).toContain('id="billing-access-title"');
     expect(source).not.toContain("Ready for limits");
     expect(source).toContain("permission denied|access denied|forbidden|unauthorized|authentication|missing required");
     expect(source).not.toContain("/permission|denied|forbidden|auth|missing|403/i");
