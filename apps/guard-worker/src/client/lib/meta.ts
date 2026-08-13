@@ -14,6 +14,7 @@ export const PRODUCT_ICON: Record<string, string> = {
   hyperdrive: "hyperdrive",
   ai_gateway: "ai-gateway",
   zones: "dns",
+  billing: "billing",
 };
 
 const CATEGORY_COLORS: Record<string, string> = {

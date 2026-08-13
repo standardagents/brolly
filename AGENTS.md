@@ -12,6 +12,35 @@ Brolly is a self-hosted Cloudflare cost sentinel and emergency control plane.
 - Exact Durable Object quarantine is only available through a signed runtime integration.
 - A forensic hold prevents cleanup and resume until an operator explicitly releases it.
 
+## Frontend code standards
+
+These apply to the marketing site (`apps/docs-site`) and the guard dashboard
+client (`apps/guard-worker/src/client`):
+
+- **DRY.** Give each shared concept one implementation. Near-duplicates count:
+  if code is copied and then varied slightly, extract the common behavior and
+  express the variation through data, parameters, slots, or child components.
+- **Composition first.** Compose behavior from focused components, hooks, and
+  reusable functions in the Composition API sense. Components should
+  orchestrate; extract state, effects, and domain logic into hooks, and extract
+  repeated UI into shared components. Do not let page components accumulate
+  unrelated responsibilities.
+- **Tailwind 4 first.** Style with Tailwind utilities in markup whenever
+  Tailwind can express the behavior. Semantic CSS is permissible when Tailwind
+  4 cannot express it correctly; explain the limitation next to the semantic
+  CSS. Keyframes and design tokens (CSS variables) are valid semantic CSS.
+  Migrate existing semantic CSS opportunistically when touching it.
+- **1,000-line file limit.** A file over 1,000 lines is a code smell — split it
+  before it gets there. Enforced by `test/frontend-line-limit.test.ts`, which
+  fails `pnpm test` on any oversized file in these trees. Do not raise the
+  limit, baseline an oversized file, or add an exemption; rewrite the file.
+- **No self-licking ice cream cones, process porn, or compliance theater.**
+  Tooling, tests, metrics, abstractions, and documentation must improve the
+  product code directly, not exist mainly to justify or perpetuate more tooling
+  and process. When a quality violation is found, demand an immediate rewrite
+  and fix the code now; never substitute a baseline, exception ledger,
+  compliance test, or ceremonial workflow for the refactor.
+
 ## Commands
 
 ```bash

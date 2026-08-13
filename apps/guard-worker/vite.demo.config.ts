@@ -41,10 +41,18 @@ const session = {
   account: { id: "placeholder-demo-account", name: "Demo Account (local preview)" },
 };
 
+/**
+ * Billing Read access is the one piece of harness state that changes, because
+ * step 1 of the wizard cannot be walked end to end without it: saveBillingAccess()
+ * in BudgetWizard.tsx saves a token, re-runs the estimate, and throws unless
+ * Cloudflare comes back `connected`. A frozen fixture makes that a dead end.
+ * Submitting any token here flips both this record and the estimate access block;
+ * nothing leaves the process and a restart resets it.
+ */
 const billingAccess = {
   configured: false,
-  source: "none" as const,
-  updatedAt: null,
+  source: "none" as "worker_secret" | "encrypted_database" | "none",
+  updatedAt: null as number | null,
 };
 
 const policy = {
@@ -64,22 +72,145 @@ const policy = {
   ],
 };
 
+/**
+ * First-run mode. `BROLLY_DEMO_FIRST_RUN=1 pnpm dev:demo` reports onboarding as
+ * incomplete, which is the only thing App.tsx uses to tell a brand-new install
+ * from a returning operator opening Budget settings: it renders the same
+ * BudgetWizard with `editing={false}` and no `onCancel`, so the header, headline,
+ * and Close button match what someone sees right after installing Brolly.
+ *
+ * The policy it starts from is DEFAULT_POLICY from packages/core/src/policy.ts,
+ * copied rather than imported because packages/core has no dist until something
+ * runs a build and this harness must keep working without one. Coverage is a gap
+ * on every family because a fresh D1 has no metric_coverage rows until the first
+ * monitor pass.
+ *
+ * `BROLLY_DEMO_FIRST_RUN=empty` additionally discovers no Workers or namespaces,
+ * which is what the wizard shows before that first pass has inventoried anything.
+ */
+const firstRun = process.env.BROLLY_DEMO_FIRST_RUN;
+const freshInstall = firstRun === "1" || firstRun === "empty";
+
+const defaultFamilyDailySpend = Object.fromEntries([
+  "workers", "durable_objects", "workers_ai", "queues", "d1", "r2", "kv", "pages", "images", "stream",
+  "vectorize", "hyperdrive", "ai_gateway", "zones",
+].map(family => [family, spendLimits(1, 5, 10)]));
+
+const defaultPolicy = {
+  version: "2026-08-09.1",
+  mode: "approval",
+  accountDailySpend: spendLimits(5, 12.5, 25),
+  familyDailySpend: defaultFamilyDailySpend,
+  assetDailySpend: {},
+  thresholds: [
+    { metric: "rows_read", windowMs: 5 * 60_000, warning: 1_000_000, critical: 2_500_000, emergency: 5_000_000, minimumBaselineSamples: 12, anomalyMultiplier: 8 },
+    { metric: "rows_written", windowMs: 5 * 60_000, warning: 5_000, critical: 12_500, emergency: 25_000, minimumBaselineSamples: 12, anomalyMultiplier: 8 },
+    { metric: "rows_read", windowMs: 24 * 60 * 60_000, emergency: 100_000_000 },
+    { metric: "rows_written", windowMs: 24 * 60 * 60_000, emergency: 500_000 },
+    { metric: "projected_daily_cost_usd", windowMs: 24 * 60 * 60_000, warning: 0.5, critical: 2, emergency: 5, minimumBaselineSamples: 12, anomalyMultiplier: 6 },
+  ],
+};
+
+// Step 3 of the wizard asks for a budget per cataloged family, so a fresh
+// install lists all of METRIC_CATALOG rather than the five families the
+// returning-operator fixture happens to have signal for. Labels match
+// familyLabel() in src/dashboard-api.ts.
+const catalogFamilies = [
+  { family: "workers", label: "Workers", metrics: ["requests", "cpu_ms", "cache_requests"] },
+  { family: "durable_objects", label: "Durable Objects", metrics: ["requests", "duration_gb_seconds", "incoming_websocket_messages", "rows_read", "rows_written", "kv_read_units", "kv_write_units", "kv_delete_requests", "sql_storage_bytes", "kv_storage_bytes"] },
+  { family: "workers_ai", label: "Workers AI", metrics: ["neurons", "requests"] },
+  { family: "queues", label: "Queues", metrics: ["operations", "messages", "bytes"] },
+  { family: "d1", label: "D1", metrics: ["rows_read", "rows_written", "storage_bytes"] },
+  { family: "r2", label: "R2", metrics: ["class_a", "class_b", "storage_bytes", "egress_bytes"] },
+  { family: "kv", label: "Workers KV", metrics: ["reads", "writes", "deletes", "lists", "storage_bytes"] },
+  { family: "pages", label: "Pages", metrics: ["requests", "builds"] },
+  { family: "images", label: "Images", metrics: ["transformations", "stored_images", "delivery"] },
+  { family: "stream", label: "Stream", metrics: ["minutes_stored", "minutes_delivered"] },
+  { family: "vectorize", label: "Vectorize", metrics: ["queried_dimensions", "stored_dimensions"] },
+  { family: "hyperdrive", label: "Hyperdrive", metrics: ["database_queries"] },
+  { family: "ai_gateway", label: "AI Gateway", metrics: ["requests", "tokens", "cost_usd"] },
+  { family: "zones", label: "Zones", metrics: ["requests", "bandwidth_bytes"] },
+];
+
+const discoveredAssets = [
+  { key: "workers:api-gateway", family: "workers", id: "api-gateway", name: "api-gateway", scope: "resource", protection: "active", tags: { env: "production" } },
+  { key: "workers:image-resizer", family: "workers", id: "image-resizer", name: "image-resizer", scope: "resource", protection: "active", tags: {} },
+  { key: "durable_objects:agent-thread", family: "durable_objects", id: "agent-thread", name: "AgentThread", scope: "namespace", protection: "active", tags: { app: "agents" } },
+  { key: "durable_objects:rate-limiter", family: "durable_objects", id: "rate-limiter", name: "RateLimiter", scope: "namespace", protection: "coverage_gap", tags: {} },
+];
+
+/**
+ * `POST /api/onboarding/estimates` backs both the step 1 access check and the
+ * step 2 "suggest from recent usage" action. Without it the catch-all `{ ok: true }`
+ * reply reaches AccessActions, which reads `result.access.workers` while rendering
+ * and takes the whole wizard down with a blank page.
+ *
+ * The default access states are chosen to render the most surface at once:
+ * Workers `limited` with a non-permission detail is the `bestAvailable` branch, so
+ * it reads "Setup needed" until Billing Read connects and then flips to "Ready";
+ * Durable Objects `connected` shows the plain healthy row; billing `not_configured`
+ * reveals BillingAccessSetup. accessPermissionProblem() matches on wording, so the
+ * Workers detail must avoid "denied", "forbidden", "unauthorized", and "403" or the
+ * reconnect callout appears instead.
+ */
+const suggested = (observedUsd: number, warning: number, critical: number, emergency: number, partial = false) => ({
+  observedUsd, limits: spendLimits(warning, critical, emergency), source: "analytics" as const, partial,
+});
+
+const estimateAccess = {
+  workers: {
+    state: "limited" as "connected" | "limited" | "blocked" | "not_configured" | "unknown",
+    detail: "Per-script requests and CPU time are available. Cache-side requests are reported only at account scope.",
+  },
+  durable_objects: {
+    state: "connected" as "connected" | "limited" | "blocked" | "not_configured" | "unknown",
+    detail: "Per-object requests, duration, and storage are readable.",
+  },
+  billing: {
+    state: "not_configured" as "connected" | "limited" | "blocked" | "not_configured" | "unknown",
+    detail: "No Billing Read token is configured, so exact account totals are unavailable.",
+  },
+};
+
+const estimates = {
+  generatedAt: now - 90_000,
+  windowStartAt: now - 24 * HOUR,
+  windowEndAt: now,
+  cached: false,
+  apiCalls: 3,
+  headroom: { warning: 0.25, critical: 0.75, emergency: 1.5 },
+  account: suggested(18.4, 23, 32.2, 46, true),
+  families: {
+    workers: suggested(6.2, 7.75, 10.85, 15.5),
+    durable_objects: suggested(9.1, 11.38, 15.93, 22.75),
+    d1: suggested(2.4, 3, 4.2, 6),
+    kv: suggested(0.7, 0.88, 1.23, 1.75),
+  },
+  assets: {
+    "durable_objects:agent-thread": suggested(5.6, 7, 9.8, 14),
+    "workers:api-gateway": suggested(3.9, 4.88, 6.83, 9.75),
+  },
+  unchangedFamilies: ["queues", "r2", "workers_ai"],
+  access: estimateAccess,
+};
+
 const onboarding = {
-  complete: true,
-  policy,
-  families: [
-    { family: "workers", label: "Workers", metrics: ["requests", "duration_gbs", "subrequests"], protection: "active" },
-    { family: "durable_objects", label: "Durable Objects", metrics: ["duration_gbs", "requests", "storage_bytes"], protection: "active" },
-    { family: "d1", label: "D1", metrics: ["rows_read", "rows_written"], protection: "active" },
-    { family: "kv", label: "Workers KV", metrics: ["reads", "writes"], protection: "active" },
-    { family: "queues", label: "Queues", metrics: ["backlog", "operations"], protection: "coverage_gap" },
-  ],
-  scopedAssets: [
-    { key: "workers:api-gateway", family: "workers", id: "api-gateway", name: "api-gateway", scope: "resource", protection: "active", tags: { env: "production" } },
-    { key: "workers:image-resizer", family: "workers", id: "image-resizer", name: "image-resizer", scope: "resource", protection: "active", tags: {} },
-    { key: "durable_objects:agent-thread", family: "durable_objects", id: "agent-thread", name: "AgentThread", scope: "namespace", protection: "active", tags: { app: "agents" } },
-    { key: "durable_objects:rate-limiter", family: "durable_objects", id: "rate-limiter", name: "RateLimiter", scope: "namespace", protection: "coverage_gap", tags: {} },
-  ],
+  complete: !freshInstall,
+  policy: freshInstall ? defaultPolicy : policy,
+  families: freshInstall
+    ? catalogFamilies.map(definition => ({ ...definition, protection: "coverage_gap" }))
+    : [
+      { family: "workers", label: "Workers", metrics: ["requests", "duration_gbs", "subrequests"], protection: "active" },
+      { family: "durable_objects", label: "Durable Objects", metrics: ["duration_gbs", "requests", "storage_bytes"], protection: "active" },
+      { family: "d1", label: "D1", metrics: ["rows_read", "rows_written"], protection: "active" },
+      { family: "kv", label: "Workers KV", metrics: ["reads", "writes"], protection: "active" },
+      { family: "queues", label: "Queues", metrics: ["backlog", "operations"], protection: "coverage_gap" },
+    ],
+  scopedAssets: freshInstall
+    ? firstRun === "empty"
+      ? []
+      : discoveredAssets.map(asset => ({ ...asset, protection: "coverage_gap" }))
+    : discoveredAssets,
 };
 
 const incidents = [
@@ -355,14 +486,31 @@ function demoApi(): Plugin {
           res.end(JSON.stringify(body));
         };
         const get = req.method === "GET";
+        // The Worker answers billing access under both paths; so does this.
+        const billingRoute = url.pathname === "/api/billing-access" || url.pathname === "/api/onboarding/billing-access";
         if (url.pathname === "/api/auth/session") return send(session);
         if (url.pathname === "/api/onboarding" && get) return send(onboarding);
-        if (url.pathname === "/api/billing-access" && get) return send(billingAccess);
+        if (billingRoute && get) return send(billingAccess);
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
         if (url.pathname === "/api/targets" && get) return send(targets);
         if (url.pathname === "/api/assets" && get) return send({ assets });
-        // Every mutation (wizard saves, scans, acks, action approve/execute,
+        if (url.pathname === "/api/onboarding/estimates") return send({ ...estimates, generatedAt: Date.now() });
+        if (billingRoute && req.method === "PUT") {
+          billingAccess.configured = true;
+          billingAccess.source = "encrypted_database";
+          billingAccess.updatedAt = Date.now();
+          estimateAccess.billing = { state: "connected", detail: "Billing Read is connected for this account." };
+          return send({ ok: true, records: 14 });
+        }
+        if (billingRoute && req.method === "DELETE") {
+          billingAccess.configured = false;
+          billingAccess.source = "none";
+          billingAccess.updatedAt = null;
+          estimateAccess.billing = { state: "not_configured", detail: "No Billing Read token is configured, so exact account totals are unavailable." };
+          return send({ ok: true });
+        }
+        // Every other mutation (wizard saves, scans, acks, action approve/execute,
         // tier edits, notification tests) acknowledges without side effects.
         return send({ ok: true });
       });

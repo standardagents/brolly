@@ -5,7 +5,7 @@ import { ControlCapabilities, RuntimeInstallGuide } from "../components/protecti
 import { Icon } from "../components/ui";
 import { money } from "../format";
 import type { ConnectionHealth } from "../lib/health";
-import { billingTokenTemplateUrl } from "../onboarding/BudgetWizard";
+import { billingTokenTemplateUrl } from "../lib/billing";
 import type { Route } from "../router";
 import type { BillingAccessStatus, DashboardData, ReleaseStatus } from "../types";
 

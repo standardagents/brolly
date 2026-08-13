@@ -1,17 +1,19 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { billingTokenTemplateUrl } from "../src/client/onboarding/BudgetWizard";
+import { billingTokenTemplateUrl } from "../src/client/lib/billing";
 
-const source = readFileSync("apps/guard-worker/src/client/onboarding/BudgetWizard.tsx", "utf8");
+const wizardSource = readFileSync("apps/guard-worker/src/client/onboarding/BudgetWizard.tsx", "utf8");
+const accessSource = readFileSync("apps/guard-worker/src/client/onboarding/access.tsx", "utf8");
+const source = `${wizardSource}\n${accessSource}`;
 
 describe("progressive monitoring-access onboarding", () => {
   it("requires one access check and reveals results and remediation afterward", () => {
     expect(source).toContain("Check monitoring access");
     expect(source).toContain("Check Brolly&apos;s access");
-    expect(source).toContain("step === 0 && (!estimates || estimateBusy)");
+    expect(wizardSource).toContain("(index !== 0 || estimates.estimates)");
     expect(source).not.toContain("Skip access check");
     expect(source).not.toContain("Step 1 of 6 · Optional");
-    expect(source).toContain("result && <UsageAccessResults");
+    expect(source).toContain("(busy || result) && <UsageAccessResults");
     expect(source).toContain("analyticsNeedsReconnect &&");
     expect(source).toContain("billingNeedsToken || billingSuccess");
   });
@@ -44,15 +46,12 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("Billing API access is highly recommended.");
     expect(source).toContain("greatly improves protection for your account");
     expect(source).toContain("Continue without billing access");
-    expect(source).toContain('billingAccessConnected ? "Continue to limits"');
-    expect(source).toContain("Add Billing Read below");
-    expect(source).toContain('workerSetupNeeded ? "Setup needed"');
+    expect(wizardSource).toContain('billingConnected ? "Continue to limits"');
+    expect(source).toContain("Billing access required");
+    expect(source).toContain("#billing-access-title");
     expect(source).not.toContain("Ready for limits");
-    expect(source).toContain("Add exact account totals below");
-    expect(source).toContain("To finish setup, add Billing Read below");
     expect(source).toContain("permission denied|access denied|forbidden|unauthorized|authentication|missing required");
     expect(source).not.toContain("/permission|denied|forbidden|auth|missing|403/i");
     expect(source).toContain("Reconnect Cloudflare");
-    expect(source).toContain("No action needed.");
   });
 });

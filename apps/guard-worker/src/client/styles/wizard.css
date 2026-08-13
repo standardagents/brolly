@@ -3,7 +3,7 @@
 --------------------------------------------------------------------------- */
 
 .setup-shell { min-height: 100vh; background: var(--bg); }
-.setup-header { height: 60px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 28px; gap: 24px; font-weight: 680; }
+.setup-header { position: sticky; top: 0; z-index: 40; height: 60px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 28px; gap: 24px; font-weight: 680; }
 .setup-header > div { padding-left: 24px; border-left: 1px solid var(--line); color: var(--muted); font-size: 14px; }
 .setup-header > .button { margin-left: auto; }
 
@@ -13,12 +13,23 @@
 .setup-steps h1 { font-size: 37px; line-height: 1.05; letter-spacing: -.035em; margin: 20px 0 14px; }
 .setup-steps > p { color: var(--muted); line-height: 1.6; font-size: 14px; }
 .setup-steps ol { list-style: none; padding: 18px 0 0; margin: 26px 0 0; border-top: 1px solid var(--line); }
-.setup-steps li { display: flex; align-items: center; gap: 12px; padding: 9px 0; color: var(--faint); font-weight: 640; font-size: 14px; }
-.setup-steps li span { width: 27px; height: 27px; border: 1px solid #cbd1d7; border-radius: 50%; display: grid; place-items: center; font-size: 12px; flex: none; }
+.setup-steps li { color: var(--faint); font-weight: 640; font-size: 14px; }
+.setup-step-button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 0; background: none; border: 0; text-align: left; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; }
+.setup-step-button:disabled { cursor: default; }
+.setup-steps li:not(.locked) .setup-step-button:hover .setup-step-label { color: var(--ink); }
+.setup-step-marker { width: 27px; height: 27px; border: 1px solid #cbd1d7; border-radius: 50%; display: grid; place-items: center; font-size: 12px; flex: none; }
 .setup-steps li.active { color: var(--ink); }
-.setup-steps li.active span { background: var(--orange); border-color: var(--orange); color: #fff; }
+.setup-steps li.active .setup-step-marker { background: var(--orange); border-color: var(--orange); color: #fff; }
 .setup-steps li.done { color: var(--good); }
-.setup-steps li.done span { border-color: #74b996; background: var(--good-bg); }
+.setup-steps li.done .setup-step-marker { border-color: #74b996; background: var(--good-bg); }
+.setup-steps li.locked { opacity: .55; }
+
+/* Keyframes for the access-check cards (layout is Tailwind in BudgetWizard.tsx).
+   Cards reveal once when the check starts, dots pulse in a stagger while it
+   runs, and each status pops in place as its card resolves. */
+@keyframes access-pulse { 0%, 100% { opacity: .25; transform: scale(.7); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes access-reveal { from { opacity: 0; transform: translateY(9px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes access-resolve { from { opacity: 0; transform: scale(.5); } to { opacity: 1; transform: none; } }
 
 .setup-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: clamp(26px, 4vw, 48px); box-shadow: var(--shadow); }
 .setup-panel h2 { font-size: 27px; letter-spacing: -.025em; margin: 0 0 10px; }
@@ -147,7 +158,8 @@
   .setup-steps h1 { font-size: 28px; }
   .setup-steps > p { display: none; }
   .setup-steps ol { display: flex; justify-content: space-between; border-top: 0; padding-top: 8px; margin-top: 8px; }
-  .setup-steps li { font-size: 0; gap: 0; }
+  .setup-step-button { gap: 0; padding: 4px 0; }
+  .setup-step-label { display: none; }
   .setup-panel { padding: 22px 16px; }
   .limit-grid { grid-template-columns: 1fr; }
   .limit-table-head { display: none; }

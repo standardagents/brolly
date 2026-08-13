@@ -14,7 +14,8 @@ describe("post-onboarding Billing Read settings", () => {
     expect(settings).toContain("billingTokenTemplateUrl(accountId)");
     expect(settings).toContain('api<BillingAccessStatus>("/api/billing-access"');
     expect(settings).toContain('api("/api/billing-access", token, { method: "PUT"');
-    expect(demo).toContain('url.pathname === "/api/billing-access" && get');
+    expect(demo).toContain('url.pathname === "/api/billing-access" || url.pathname === "/api/onboarding/billing-access"');
+    expect(demo).toContain("billingRoute && get");
   });
 
   it("exposes only billing credential metadata, never the stored token", () => {
