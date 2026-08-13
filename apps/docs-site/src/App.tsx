@@ -328,4 +328,4 @@ function CloudflareLogo({ className }: { className?: string }) {
     </svg>
   );
 }
-function Umbrella() { return <span className="grid size-[33px] place-items-center rounded-lg bg-orange text-white"><svg className="size-[25px]" viewBox="0 0 40 40" aria-hidden="true"><path d="M4 20a16 16 0 0 1 32 0c-3.5-2.5-7.2-2.5-10.8 0-3.4-2.5-7-2.5-10.4 0C11.2 17.5 7.6 17.5 4 20Z" fill="currentColor" /><path d="M20 7v23.5c0 3.6 5.5 3.6 5.5 0" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" /></svg></span>; }
+function Umbrella() { return <span className="grid size-[33px] place-items-center rounded-lg bg-orange text-white"><svg className="size-[25px]" viewBox="0 0 40 40" aria-hidden="true"><g transform="matrix(-1 0 0 1 40 0)"><path d="M4 20a16 16 0 0 1 32 0c-3.5-2.5-7.2-2.5-10.8 0-3.4-2.5-7-2.5-10.4 0C11.2 17.5 7.6 17.5 4 20Z" fill="currentColor" /><path d="M20 7v23.5c0 3.6 5.5 3.6 5.5 0" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" /></g></svg></span>; }

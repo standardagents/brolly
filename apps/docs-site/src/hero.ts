@@ -646,14 +646,29 @@ if (window.location.hash === "#tune") document.body.appendChild(panel);
 
 computeView();
 applyVisuals();
-for (let c = 0; c < CLOUDS; c++) spawnCloud(c, true);
+if (reduce) {
+  // Static render: place a full field of numbers for the single frame.
+  for (let c = 0; c < CLOUDS; c++) spawnCloud(c, true);
+} else {
+  // Seed the spawn schedule instead of pre-placing numbers, so the rain
+  // starts at the same steady cadence it keeps forever.
+  for (let c = 0; c < CLOUDS; c++) {
+    clouds[c] = { vy: 0, alive: 0, spawnAt: c * (P.spawnGapMin + P.spawnGapVar * 0.5), ix: 0, iy: 0, iz: 0, in: 0 };
+  }
+  nextSpawnAt = CLOUDS * (P.spawnGapMin + P.spawnGapVar * 0.5);
+}
 
 let raf = 0;
 const clock = new Clock();
+// Simulation time advances only while ticking and at most one clamped step
+// per frame, so a paused or throttled tab never accrues a backlog of due
+// spawns that would all fall at once on resume.
+let simT = 0;
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  const t = clock.elapsedTime;
+  simT += dt;
+  const t = simT;
 
   umbrella.rotation.z = Math.sin(t * 0.5) * 0.04;
   umbrella.rotation.y = Math.sin(t * 0.35) * 0.12;
@@ -900,6 +915,9 @@ function onResize() {
   renderer.setSize(width, height);
   computeView();
   updatePointScale();
+  // setSize clears the drawing buffer; paint immediately so resizing never
+  // shows a blank frame.
+  renderer.render(scene, camera);
 }
 const ro = new ResizeObserver(onResize);
 ro.observe(mount);
