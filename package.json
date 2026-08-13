@@ -11,6 +11,7 @@
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
     "deploy:docs": "pnpm build:docs && pnpm --filter @standardagents/brolly-docs deploy:built",
     "dev": "pnpm --filter @standardagents/brolly-guard dev",
+    "dev:demo": "pnpm --filter @standardagents/brolly-guard dev:demo",
     "release:runtime": "node scripts/release-runtime.mjs",
     "release:runtime:dev": "node scripts/release-runtime.mjs --tag=dev",
     "test": "vitest run",
