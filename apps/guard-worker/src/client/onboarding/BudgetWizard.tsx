@@ -36,6 +36,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [error, setError] = useState("");
   const steps = ["Check usage access", "Account budget", "Product budgets", "Resource budgets", "Per-object limits", "Install shutdown fuse"];
   const installedIntegrations = Object.values(integrations).filter(integration => integration.installed).length;
+  const billingAccessConnected = estimates?.access.billing.state === "connected";
 
   async function save() {
     setBusy(true);
@@ -263,7 +264,12 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               </span>
             )}
             {step < 5
-              ? <button type="button" className="button primary" disabled={busy || (step === 0 && (!estimates || estimateBusy))} onClick={() => setStep(step + 1)}>{step === 0 ? "Continue to limits" : "Continue"}</button>
+              ? <span className="ml-auto flex max-w-[40ch] flex-col items-end gap-2 text-right">
+                  {step === 0 && estimates && !billingAccessConnected && (
+                    <small className="leading-5 text-[var(--muted)]"><strong className="text-[var(--ink)]">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>
+                  )}
+                  <button type="button" className="button primary" disabled={busy || (step === 0 && (!estimates || estimateBusy))} onClick={() => setStep(step + 1)}>{step === 0 ? billingAccessConnected ? "Continue to limits" : "Continue without billing access" : "Continue"}</button>
+                </span>
               : <button type="button" className="button primary" disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : editing ? "Save runtime status" : installedIntegrations ? "Finish and verify installs" : "Finish setup — alerts only"}</button>}
           </footer>
         </section>
@@ -314,7 +320,7 @@ function AccessActions({ accountId, busy, result, notice, error, token, onVerify
     setBillingError("");
     setBillingSuccess("");
     try {
-      await api("/api/onboarding/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
+      await api("/api/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
       setBillingToken("");
       const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");

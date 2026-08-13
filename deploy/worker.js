@@ -3068,6 +3068,7 @@ async function configureOnboardingBillingAccess(env, token) {
 	const normalized = token.trim();
 	const validationError = billingTokenValidationError(normalized);
 	if (validationError) throw new Error(validationError);
+	if (env.CLOUDFLARE_BILLING_TOKEN) throw new Error("Billing access is managed by the CLOUDFLARE_BILLING_TOKEN Worker secret. Replace that secret in Cloudflare instead of saving a second token in Brolly.");
 	if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
 	const budget = new RunBudget({
 		apiCalls: 1,
@@ -3091,6 +3092,23 @@ async function configureOnboardingBillingAccess(env, token) {
 }
 async function removeOnboardingBillingAccess(env) {
 	await env.DB.batch([env.DB.prepare(`DELETE FROM settings WHERE key='billing_credentials'`), env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY$1)]);
+}
+async function billingAccessConfiguration(env) {
+	if (env.CLOUDFLARE_BILLING_TOKEN) return {
+		configured: true,
+		source: "worker_secret",
+		updatedAt: null
+	};
+	const row = await env.DB.prepare(`SELECT updated_at FROM settings WHERE key='billing_credentials' LIMIT 1`).first();
+	return row ? {
+		configured: true,
+		source: "encrypted_database",
+		updatedAt: row.updated_at
+	} : {
+		configured: false,
+		source: "none",
+		updatedAt: null
+	};
 }
 function validBillingToken(value) {
 	return value.length >= 20 && value.length <= 256 && !/\s/.test(value);
@@ -3296,7 +3314,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "7ca18094b332cd2c50ec37fdaa44745997682aed";
+var BROLLY_RELEASE = "115b3db91c517aad1abbab67f7715d9dda774123";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -3501,7 +3519,9 @@ var src_default = {
 		} catch (error) {
 			return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: error instanceof BudgetEstimateInProgressError ? 429 : 400 });
 		}
-		if (url.pathname === "/api/onboarding/billing-access" && request.method === "PUT") {
+		const billingAccessRoute = url.pathname === "/api/billing-access" || url.pathname === "/api/onboarding/billing-access";
+		if (billingAccessRoute && request.method === "GET") return Response.json(await billingAccessConfiguration(env), { headers: { "cache-control": "no-store" } });
+		if (billingAccessRoute && request.method === "PUT") {
 			const body = await request.json();
 			try {
 				const result = await configureOnboardingBillingAccess(env, body.token ?? "");
@@ -3517,7 +3537,7 @@ var src_default = {
 				return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
 			}
 		}
-		if (url.pathname === "/api/onboarding/billing-access" && request.method === "DELETE") {
+		if (billingAccessRoute && request.method === "DELETE") {
 			if (env.CLOUDFLARE_BILLING_TOKEN) return Response.json({ error: "Billing access is supplied as a Worker secret and must be removed in Cloudflare" }, { status: 409 });
 			await removeOnboardingBillingAccess(env);
 			await audit(env.DB, actor.actor, "billing_access.remove", env.BROLLY_ACCOUNT_ID, {});

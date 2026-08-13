@@ -48,6 +48,12 @@ export interface OnboardingBudgetEstimates {
   }>;
 }
 
+export interface BillingAccessStatus {
+  configured: boolean;
+  source: "worker_secret" | "encrypted_database" | "none";
+  updatedAt: number | null;
+}
+
 export interface Incident {
   id: string; key: string; status: IncidentStatus; severity: Severity; family: string; familyLabel: string;
   assetId: string; assetName: string | null; parentId: string | null; scope: string; tier: AssetTier;

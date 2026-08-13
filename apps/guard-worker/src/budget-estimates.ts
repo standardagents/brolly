@@ -43,6 +43,12 @@ export interface UsageAccess {
   detail: string;
 }
 
+export interface BillingAccessConfiguration {
+  configured: boolean;
+  source: "worker_secret" | "encrypted_database" | "none";
+  updatedAt: number | null;
+}
+
 export class BudgetEstimateInProgressError extends Error {
   constructor() {
     super("A recent-usage estimate is already running. Try again in a few seconds.");
@@ -54,6 +60,7 @@ export async function configureOnboardingBillingAccess(env: Env, token: string):
   const normalized = token.trim();
   const validationError = billingTokenValidationError(normalized);
   if (validationError) throw new Error(validationError);
+  if (env.CLOUDFLARE_BILLING_TOKEN) throw new Error("Billing access is managed by the CLOUDFLARE_BILLING_TOKEN Worker secret. Replace that secret in Cloudflare instead of saving a second token in Brolly.");
   if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
   const budget = new RunBudget({ apiCalls: 1, databaseRows: 10, samples: 10_000, wallMs: 10_000 });
   const client = new CloudflareClient({ ...env, CLOUDFLARE_BILLING_TOKEN: normalized }, budget);
@@ -81,6 +88,14 @@ export async function removeOnboardingBillingAccess(env: Env): Promise<void> {
     env.DB.prepare(`DELETE FROM settings WHERE key='billing_credentials'`),
     env.DB.prepare(`DELETE FROM settings WHERE key=?1`).bind(CACHE_KEY),
   ]);
+}
+
+export async function billingAccessConfiguration(env: Env): Promise<BillingAccessConfiguration> {
+  if (env.CLOUDFLARE_BILLING_TOKEN) return { configured: true, source: "worker_secret", updatedAt: null };
+  const row = await env.DB.prepare(`SELECT updated_at FROM settings WHERE key='billing_credentials' LIMIT 1`).first<{ updated_at: number }>();
+  return row
+    ? { configured: true, source: "encrypted_database", updatedAt: row.updated_at }
+    : { configured: false, source: "none", updatedAt: null };
 }
 
 export function validBillingToken(value: string): boolean {

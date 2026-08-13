@@ -146,6 +146,14 @@ protected by account and product limits because Cloudflare does not attribute
 them to individual Workers. Reconnecting OAuth is shown only for an actual
 authorization failure, never for a platform-level telemetry limitation.
 Connected rows explicitly require no action.
+Operators may continue onboarding without Billing Read, but the access-step
+footer labels that choice explicitly and recommends adding the token because
+invoice-aligned account totals materially improve protection. Once Billing
+Read is verified, the normal **Continue to limits** action is restored.
+The same account-scoped token generator, paste-and-verify form, connection
+status, and replacement workflow remain available under **Settings → Daily
+billing access** after onboarding. Skipping the first-run prompt therefore
+does not make Billing Read inaccessible later.
 The Billing Read handoff uses Cloudflare's documented user API-token template
 URL. Brolly opens the user token creation form with the already-bound account,
 token name, and Account → Billing → Read permission prefilled. The operator

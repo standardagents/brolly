@@ -41,6 +41,12 @@ const session = {
   account: { id: "placeholder-demo-account", name: "Demo Account (local preview)" },
 };
 
+const billingAccess = {
+  configured: false,
+  source: "none" as const,
+  updatedAt: null,
+};
+
 const policy = {
   version: "4",
   mode: "approval",
@@ -351,6 +357,7 @@ function demoApi(): Plugin {
         const get = req.method === "GET";
         if (url.pathname === "/api/auth/session") return send(session);
         if (url.pathname === "/api/onboarding" && get) return send(onboarding);
+        if (url.pathname === "/api/billing-access" && get) return send(billingAccess);
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
         if (url.pathname === "/api/targets" && get) return send(targets);

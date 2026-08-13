@@ -1,10 +1,13 @@
+import { useEffect, useState } from "react";
+import { api } from "../api";
 import { NotificationSection } from "../components/notifications";
 import { ControlCapabilities, RuntimeInstallGuide } from "../components/protection";
 import { Icon } from "../components/ui";
 import { money } from "../format";
 import type { ConnectionHealth } from "../lib/health";
+import { billingTokenTemplateUrl } from "../onboarding/BudgetWizard";
 import type { Route } from "../router";
-import type { DashboardData, ReleaseStatus } from "../types";
+import type { BillingAccessStatus, DashboardData, ReleaseStatus } from "../types";
 
 export function SettingsPage({ data, connection, token, onNavigate, onBudgets, onLogout, release, onReleaseRefresh }: {
   data: DashboardData;
@@ -75,6 +78,8 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
           </article>
         </div>
       </section>
+
+      <BillingAccessSection accountId={data.account.id} token={token} />
 
       <NotificationSection token={token} />
 
@@ -150,5 +155,74 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
     </>
   );
 }
-import { useEffect, useState } from "react";
-import { api } from "../api";
+
+function BillingAccessSection({ accountId, token }: { accountId: string; token: string }) {
+  const [status, setStatus] = useState<BillingAccessStatus | null>(null);
+  const [billingToken, setBillingToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const templateUrl = billingTokenTemplateUrl(accountId);
+
+  async function load() {
+    setError("");
+    try {
+      setStatus(await api<BillingAccessStatus>("/api/billing-access", token));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  useEffect(() => { void load(); }, [token]);
+
+  async function save() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await api("/api/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
+      setBillingToken("");
+      setMessage(status?.configured ? "Replacement Billing Read token verified and saved." : "Billing Read access verified and saved.");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const configured = status?.configured === true;
+  const managedAsWorkerSecret = status?.source === "worker_secret";
+  return (
+    <section className="panel" aria-label="Billing API access">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Usage coverage</p>
+          <h2>Daily billing access</h2>
+          <p className="panel-sub">Highly recommended. Billing Read gives Brolly exact account-wide charges and greatly improves protection beyond fast service telemetry.</p>
+        </div>
+        <span className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold ${configured ? "bg-[var(--good-bg)] text-[var(--good)]" : "bg-[var(--warn-bg)] text-[var(--warn)]"}`}>
+          <span className="size-2 rounded-full bg-current" />{status ? configured ? "Connected" : "Setup needed" : "Checking…"}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-4 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div>
+          <strong className="text-sm">{configured ? "Generate a replacement whenever you need one" : "Add Billing Read access"}</strong>
+          <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">Cloudflare opens a prefilled user API-token form with Billing → Read and only this account selected. Create it, copy the token Cloudflare shows once, then verify it below.</p>
+          {configured && <p className="mt-2 text-xs leading-5 text-[var(--muted)]">The current credential is {managedAsWorkerSecret ? "managed as the CLOUDFLARE_BILLING_TOKEN Worker secret. Create a replacement here, then replace that secret in Cloudflare" : `encrypted in this installation's D1${status?.updatedAt ? ` and was saved ${new Date(status.updatedAt).toLocaleString()}` : ""}. Saving another verified token replaces it`}.</p>}
+        </div>
+        <a className="button primary shrink-0" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> {configured ? "Create replacement token" : "Create billing token"}</a>
+      </div>
+
+      <form className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={event => { event.preventDefault(); void save(); }}>
+        <label className="sr-only" htmlFor="settings-billing-token">Paste the new Cloudflare user API token</label>
+        <input id="settings-billing-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={billingToken} onChange={event => setBillingToken(event.target.value)} autoComplete="off" spellCheck={false} disabled={managedAsWorkerSecret} placeholder={managedAsWorkerSecret ? "Replace the Worker secret in Cloudflare" : configured ? "Paste a replacement cfut_ token" : "Paste the cfut_ token Cloudflare shows"} />
+        <button type="submit" className="button primary" disabled={managedAsWorkerSecret || busy || !billingToken.trim()}><Icon name="check" /> {managedAsWorkerSecret ? "Managed in Cloudflare" : busy ? "Verifying…" : configured ? "Verify and replace" : "Verify and save"}</button>
+      </form>
+      <p className="mt-2 text-xs leading-5 text-[var(--faint)]">Brolly verifies the token against Cloudflare before saving it, encrypts it at rest, and never displays it again.</p>
+      {error && <p className="form-error mt-3" role="alert"><strong>Billing access failed.</strong> {error}</p>}
+      {message && <p className="form-success mt-3" role="status">{message}</p>}
+    </section>
+  );
+}

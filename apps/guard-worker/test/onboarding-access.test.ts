@@ -41,6 +41,10 @@ describe("progressive monitoring-access onboarding", () => {
     expect(source).toContain("Continue to summary");
     expect(source).toContain("Verify and save");
     expect(source).toContain("Billing access failed.");
+    expect(source).toContain("Billing API access is highly recommended.");
+    expect(source).toContain("greatly improves protection for your account");
+    expect(source).toContain("Continue without billing access");
+    expect(source).toContain('billingAccessConnected ? "Continue to limits"');
     expect(source).toContain("Add Billing Read below");
     expect(source).toContain('workerSetupNeeded ? "Setup needed"');
     expect(source).not.toContain("Ready for limits");
