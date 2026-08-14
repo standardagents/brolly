@@ -303,10 +303,10 @@ export function ScanInfoTip() {
       <h4>What Brolly scans</h4>
       <p>It inventories Workers, Durable Object namespaces, Queues, D1, R2, KV, Vectorize, Hyperdrive, Pages, AI Gateway, and zones, then asks Cloudflare Analytics for aggregate five-minute Durable Object and Worker usage.</p>
       <h4>Cadence</h4>
-      <p>The same bounded monitor runs automatically every minute. Every 15 minutes it adds one rolling-24-hour Durable Objects query. Once daily it reconciles the Billing API when a Billing Read token is configured.</p>
+      <p>A one-minute scheduler claims bounded work. Active Worker and Durable Object usage refreshes every five minutes, inventory refreshes hourly, and Billing Read reconciliation runs hourly when configured.</p>
       <h4>Cost and safety</h4>
-      <p>A typical one-page account uses about 13 Cloudflare API requests per pass, plus one every 15 minutes and one for the daily billing read. It does <strong>not</strong> wake every Durable Object or read customer-object SQLite rows.</p>
-      <p>Brolly's own Worker invocation, CPU, and D1 operations remain billable under your plan. Each pass hard-stops at 150 Cloudflare API calls, 25,000 Brolly D1 row operations, 20,000 samples, or 45 seconds. These are workload caps, not a guaranteed dollar cap.</p>
+      <p>Durable Objects and Workers use keyset pages of up to 10,000 resources. Collection does not wake Durable Objects or read customer-object SQLite rows.</p>
+      <p>Brolly's own Worker invocation, CPU, and D1 operations remain billable under your plan. Each pass has hard limits of 300 GraphQL dataset queries, 50 REST requests, 100,000 D1 rows read, 50,000 D1 rows written, and 45 seconds. Incomplete work retains its cursor and coverage state.</p>
     </InfoTip>
   );
 }

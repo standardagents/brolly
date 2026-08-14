@@ -1,20 +1,32 @@
 import { useEffect, useState } from "react";
 
-export type Route = "overview" | "incidents" | "assets" | "configuration" | "settings";
+export type Route = "overview" | "usage" | "limits" | "alerts" | "assets" | "incidents" | "configuration" | "notifications" | "monitoring" | "backfill" | "settings";
 
 export const ROUTE_PATHS: Record<Route, string> = {
   overview: "/",
+  usage: "/usage",
+  limits: "/limits",
+  alerts: "/alerts",
   incidents: "/incidents",
   assets: "/assets",
   configuration: "/configuration",
+  notifications: "/notifications",
+  monitoring: "/monitoring",
+  backfill: "/backfill",
   settings: "/settings",
 };
 
 export const ROUTE_TITLES: Record<Route, string> = {
   overview: "Overview",
-  incidents: "Incidents & controls",
-  assets: "Assets",
-  configuration: "Configuration",
+  usage: "Usage",
+  limits: "Limits",
+  alerts: "Alert instances",
+  incidents: "Actions & quarantine",
+  assets: "Resources",
+  configuration: "Configuration & coverage",
+  notifications: "Notifications",
+  monitoring: "Monitoring cost",
+  backfill: "Backfill & retention",
   settings: "Settings",
 };
 

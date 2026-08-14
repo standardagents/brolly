@@ -5,9 +5,9 @@ import { operationalToken } from "./credentials.js";
 
 const FUSE_SETTING_PREFIX = "deployment_fuse:";
 const MAX_FUSE_BYTES = 5_000;
-const AUTOMATIC_WORKER_COOLDOWN_MS = 5 * 60_000;
+const AUTOMATIC_WORKER_COOLDOWN_MS = 15 * 60_000;
 const AUTOMATIC_ACCOUNT_WINDOW_MS = 60 * 60_000;
-const MAX_AUTOMATIC_DEPLOYMENTS_PER_HOUR = 12;
+const MAX_AUTOMATIC_DEPLOYMENTS_PER_HOUR = 3;
 
 export class AutomaticDeploymentLimitError extends Error {}
 
@@ -40,7 +40,11 @@ export async function executeDeploymentFuseBatch(
   if (!await acquireControlLease(env.DB, `fuse:${workerScript}`, holder, 30_000)) {
     throw new AutomaticDeploymentLimitError(`Another fuse update for ${workerScript} is already in progress`);
   }
+  const automaticHolder = automatic ? crypto.randomUUID() : null;
   try {
+    if (automaticHolder && !await acquireControlLease(env.DB, "fuse:automatic-account", automaticHolder, 30_000)) {
+      throw new AutomaticDeploymentLimitError("Another automatic deployment is already in progress for this account");
+    }
     if (automatic) await assertAutomaticDeploymentCapacity(env.DB, workerScript);
 
     const key = `${FUSE_SETTING_PREFIX}${workerScript}`;
@@ -77,6 +81,7 @@ export async function executeDeploymentFuseBatch(
     ).bind(crypto.randomUUID(), workerScript, manifest.generation, actions.length, automatic ? 1 : 0, Date.now()).run();
     return { workerScript, manifest };
   } finally {
+    if (automaticHolder) await releaseControlLease(env.DB, "fuse:automatic-account", automaticHolder);
     await releaseControlLease(env.DB, `fuse:${workerScript}`, holder);
   }
 }
@@ -153,8 +158,17 @@ async function assertAutomaticDeploymentCapacity(db: D1Database, workerScript: s
     db.prepare(`SELECT created_at FROM control_deployments WHERE worker_script=?1 AND automatic=1 ORDER BY created_at DESC LIMIT 1`).bind(workerScript).first<{ created_at: number }>(),
     db.prepare(`SELECT COUNT(*) AS count FROM control_deployments WHERE automatic=1 AND created_at>=?1`).bind(now - AUTOMATIC_ACCOUNT_WINDOW_MS).first<{ count: number }>(),
   ]);
-  if (worker && worker.created_at > now - AUTOMATIC_WORKER_COOLDOWN_MS) throw new AutomaticDeploymentLimitError(`Automatic deployment cooldown is active for ${workerScript}`);
-  if (Number(account?.count ?? 0) >= MAX_AUTOMATIC_DEPLOYMENTS_PER_HOUR) throw new AutomaticDeploymentLimitError("Brolly's automatic deployment circuit breaker is open for one hour");
+  const error = automaticDeploymentCapacityError(worker?.created_at ?? null, Number(account?.count ?? 0), now);
+  if (error) throw new AutomaticDeploymentLimitError(error.replace("{worker}", workerScript));
+}
+
+export function automaticDeploymentCapacityError(lastWorkerDeploymentAt: number | null, accountDeployments: number, now: number): string | null {
+  if (lastWorkerDeploymentAt !== null && lastWorkerDeploymentAt > now - AUTOMATIC_WORKER_COOLDOWN_MS) {
+    return "Automatic deployment cooldown is active for {worker}";
+  }
+  return accountDeployments >= MAX_AUTOMATIC_DEPLOYMENTS_PER_HOUR
+    ? "Brolly's automatic deployment circuit breaker is open for one hour"
+    : null;
 }
 
 async function acquireControlLease(db: D1Database, name: string, holder: string, ttlMs: number): Promise<boolean> {

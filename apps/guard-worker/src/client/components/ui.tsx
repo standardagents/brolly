@@ -81,6 +81,10 @@ export function ProductIcon({ family, tone = "neutral" }: { family: string; tone
 
 /** Official notification-channel brand mark served from local assets (see docs/notification-brand-icons.md). */
 export function ChannelLogo({ kind }: { kind: NotificationKind }) {
+  if (!["discord", "slack", "twilio"].includes(kind)) {
+    const label = kind === "webhook" ? "{}" : kind === "resend" ? "R" : "P";
+    return <span className={`channel-mark ${kind}`} aria-hidden="true"><strong>{label}</strong></span>;
+  }
   return (
     <span className={`channel-mark ${kind}`} aria-hidden="true">
       <img src={`/brand-icons/${kind}.svg`} alt="" />

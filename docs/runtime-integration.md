@@ -183,8 +183,9 @@ is operator-confirmed versus remotely observed.
 At an eligible emergency threshold:
 
 1. Brolly creates or reuses an idempotent control action.
-2. In approval mode it waits for an operator. In automatic mode it proceeds
-   only for `standard` or `disposable` assets marked as fuse-integrated.
+2. Approval mode creates a prepared action for operator review. Automatic mode
+   proceeds only when the rule explicitly opts in and the target is a
+   `standard` or `disposable` fuse-integrated asset.
 3. Brolly adds the exact object ID, or the entire Worker, to its current
    `BROLLY_FUSE` manifest.
 4. Brolly updates the owning Worker's secret through Cloudflare's API, which
@@ -198,11 +199,12 @@ guess a script name or deploy an unverified fuse.
 The manifest is capped below Cloudflare's 5 KB per-binding limit. It contains
 only active emergency quarantines, not Brolly's policy database.
 
-Automatic execution additionally requires two consecutive fresh emergency
-observations from a raw usage meter and a successful configuration refresh in
-the last 24 hours. It never acts from projected dollars or delayed billing
-data. Changes for the same Worker are coalesced and bounded; independent
-per-pass, per-Worker, and per-account circuit breakers stop deployment storms.
+Automatic execution requires a complete, fresh, unsampled raw usage meter, a
+sustained breach through the rule's confirmation window, global automatic mode,
+explicit rule opt-in, and a successful configuration refresh in the last 24
+hours. Projected dollars and delayed billing data can prepare operator evidence.
+Changes for the same Worker are coalesced and bounded; independent per-pass,
+per-Worker, and per-account circuit breakers stop deployment storms.
 
 ## Recovery
 

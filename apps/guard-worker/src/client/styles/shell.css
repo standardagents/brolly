@@ -117,8 +117,7 @@
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; flex-direction: column; border-right: 0; border-bottom: 1px solid var(--line); min-width: 0; }
   .sidebar-brand { border-bottom: 0; padding-bottom: 6px; }
-  /* All five destinations wrap into visible chips — no hidden horizontal scroll,
-     so the active page is always on-screen and every route stays discoverable. */
+  /* Navigation destinations wrap into visible chips so each route remains discoverable. */
   .sidebar-nav { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 10px 10px; min-width: 0; overflow: visible; }
   .nav-group { display: contents; }
   .nav-group-label { display: none; }

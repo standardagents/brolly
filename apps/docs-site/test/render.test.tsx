@@ -16,10 +16,12 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("Review what Brolly found");
     expect(html).toContain("Choose your protection");
     expect(html).not.toContain("256-bit credential key");
-    expect(html).toContain("Your first sign of trouble");
-    expect(html).toContain("Brolly monitors every billable service and takes action at a per-object level.");
-    expect(html).toContain("each exact object ID");
-    expect(html).toContain("Quarantine runaways");
+    expect(html).toContain("See runaway usage while there is time to respond.");
+    expect(html).toContain("A durable Cloudflare usage ledger with granular protection.");
+    expect(html).toContain("exact object IDs");
+    expect(html).toContain("Quarantine exact runaways");
+    expect(html).toContain("Discord, Slack, Resend, Postmark, Twilio SMS");
+    expect(html).toContain("300 GraphQL dataset queries");
     // The dollar amount is wrapped in a highlight element mid-sentence.
     expect(html).toContain("Woke up to a");
     expect(html).toContain("$8,846");

@@ -12,8 +12,8 @@ export class MonitoringBudgetExceededError extends Error {
 
 export const DEFAULT_RUN_LIMITS: RunLimits = {
   apiCalls: 150,
-  databaseRows: 25_000,
-  samples: 20_000,
+  databaseRows: 100_000,
+  samples: 100_000,
   wallMs: 45_000,
 };
 

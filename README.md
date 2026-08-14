@@ -33,13 +33,14 @@ inside your Cloudflare account.
 | | |
 |---|---|
 | **☂ Account-wide coverage** | Workers, Durable Objects, D1, R2, KV, Queues, AI, and other billable assets. |
-| **⚡ Fast detection** | Bounded telemetry every minute, plus daily billing reconciliation. |
-| **🎯 Scoped limits** | Account, product, Worker, Durable Object namespace, and exact-object budgets. |
+| **⚡ Fast detection** | Five-minute active telemetry, optional one-minute hot watch, and hourly billing reconciliation. |
+| **📚 Persistent ledger** | Correction-safe daily history in D1 for up to 730 days with explicit evidence quality. |
+| **🎯 Scoped limits** | Arbitrary Warning, Emergency, and custom lines for daily or Cloudflare billing-cycle periods. |
 | **↩ Reversible controls** | Approval-first quarantine, rollback state, and a complete audit trail. |
 
 > [!IMPORTANT]
 > Brolly never deletes resources or customer data. Automatic controls are
-> opt-in, and missing telemetry is reported as a coverage gap—not zero usage.
+> opt-in, and missing telemetry retains an explicit coverage-gap state.
 
 ## Install
 
@@ -143,25 +144,30 @@ Durable Object storage operation on the hot path.
 ## What you get
 
 - Daily spend charts and per-category budgets
-- Per-Worker, namespace, and exact-object limits
-- Human-readable incidents and coverage gaps
-- Discord, Slack, and Twilio SMS notifications
+- Account, product, namespace, Worker, and exact-object usage history
+- Configurable period limits and discrete alert instances
+- Human-readable collector coverage and ingestion watermarks
+- Discord, Slack, Resend, Postmark, Twilio SMS, and generic webhook notifications
+- Monitoring-cost, backfill, retention, and D1-capacity views
 - Approval and automatic emergency modes
 - Prepare, execute, inspect, and roll back controls
 - Runtime-install verification per Worker and namespace
 
 ## Safety limits
 
-Every monitoring pass stops at **150 Cloudflare API calls**, **25,000 Brolly D1
-row operations**, **20,000 samples**, or **45 seconds**. Brolly does not wake
-every Durable Object or query customer-object SQLite during a scan.
+Every monitoring pass defaults to hard limits of **300 GraphQL dataset
+queries**, **50 REST requests**, **100,000 D1 rows read**, **50,000 D1 rows
+written**, and **45 seconds**. Durable Object and Worker collectors use stable
+10,000-row keyset pages. Brolly does not wake Durable Objects or query customer
+application storage during a scan. Operators can configure lower or higher
+ceilings on the Monitoring page within fixed product maximums.
 
-Automatic quarantine is narrower still: two consecutive fresh emergency
-observations, an exact Worker or object target, a safe asset tier, successful
-runtime verification within 24 hours, and a current Cloudflare-owned Worker
-mapping are all required. Projected-dollar estimates never authorize an
-automatic stop. Brolly caps automatic rollouts at five Workers per monitor pass,
-one rollout per Worker per five minutes, and twelve per account per hour.
+Automatic quarantine requires global automatic mode, explicit rule opt-in, complete fresh unsampled
+usage, an eligible inherited resource policy, current runtime verification, and
+confirmation evidence. Aggregate contributor automation requires the same
+deterministic candidate in two scans, majority contribution, and four-times
+baseline acceleration. Brolly allows one deployment-changing action per Worker
+in 15 minutes and three automatic quarantines per account hour.
 
 ## Documentation
 
@@ -169,6 +175,7 @@ one rollout per Worker per five minutes, and twelve per account per hour.
 - [Operations and emergency response](docs/operations.md)
 - [Runtime integration and exact-object quarantine](docs/runtime-integration.md)
 - [Architecture and safety model](docs/architecture.md)
+- [Usage ledger, alerts, retention, and API](docs/usage-ledger.md)
 - [Cloudflare icon sources](docs/icon-sources.md)
 
 ## Runtime releases

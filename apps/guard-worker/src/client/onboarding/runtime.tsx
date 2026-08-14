@@ -62,7 +62,7 @@ export function RuntimeIntegrationMap({ assets, values, onChange }: {
       )}
       {!assets.length && <p className="empty-small">No Worker scripts or Durable Object namespaces were discovered. Finish setup for alerts, run a scan, then return to Budgets to map the runtime fuse.</p>}
       <div className="runtime-map-note">
-        <strong>Automatic mode is fail-safe:</strong> Brolly only uses Cloudflare&apos;s ownership mapping, a recent successful runtime verification, and two consecutive emergency samples. Missing evidence produces an alert—not a guessed deployment.
+        <strong>Automatic mode requires complete evidence:</strong> Brolly uses Cloudflare&apos;s ownership mapping, a recent successful runtime verification, complete fresh unsampled usage, explicit rule opt-in, and the configured confirmation window. Missing evidence produces an alert and leaves Cloudflare unchanged.
       </div>
     </section>
   );

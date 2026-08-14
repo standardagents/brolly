@@ -2,7 +2,8 @@ import type { AssetRef, Evaluation, MetricSample, Policy, Severity, SpendLimits,
 
 export const DEFAULT_FAMILY_DAILY_SPEND: Record<string, SpendLimits> = Object.fromEntries([
   "workers", "durable_objects", "workers_ai", "queues", "d1", "r2", "kv", "pages", "images", "stream",
-  "vectorize", "hyperdrive", "ai_gateway", "zones",
+  "vectorize", "hyperdrive", "ai_gateway", "containers", "browser_rendering", "workflows", "worker_builds",
+  "analytics_engine", "log_explorer", "zones", "unknown",
 ].map(family => [family, { warning: 1, critical: 5, emergency: 10 }])) as Record<string, SpendLimits>;
 
 export const DEFAULT_POLICY: Policy = {

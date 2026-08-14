@@ -1,125 +1,227 @@
-import { DEFAULT_POLICY, METRIC_CATALOG, MonitoringBudgetExceededError, RunBudget, evaluateProjectedDailySpend, evaluateSample, type AssetRef, type ControlAction, type CoverageResult, type Evaluation, type Incident } from "@standardagents/brolly-core";
+import { LedgerBudgetExceededError, LedgerRunBudget, METRIC_CATALOG, MonitoringBudgetExceededError, RunBudget, localDayAt, type AssetRef, type ControlAction, type CoverageResult, type Evaluation } from "@standardagents/brolly-core";
 import { notify, type NotificationTarget } from "@standardagents/brolly-notifiers";
 import { CloudflareClient } from "./cloudflare.js";
 import type { Env } from "./env.js";
 import { Store } from "./store.js";
 import { openJson } from "./credentials.js";
 import { AutomaticDeploymentLimitError, executeDeploymentFuseBatch } from "./control.js";
+import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
+import { reconcileBilling } from "./billing-ledger.js";
+import { dispatchAlertNotifications, evaluateUsageAlerts } from "./alert-engine.js";
+import { runRetentionMaintenance } from "./retention.js";
+import { runOneBackfillSlice } from "./backfill.js";
+import { migrateLegacyPolicyRules } from "./policy-migration.js";
+import { configuredLedgerRunLimits } from "./ledger-settings.js";
 
-export async function runMonitor(env: Env): Promise<void> {
-  const budget = new RunBudget();
-  const store = new Store(env.DB, amount => budget.charge("databaseRows", amount));
+export interface CollectorWindowCursor<T> {
+  startAt: number;
+  endAt: number;
+  cursor?: T;
+}
+
+export async function runMonitor(env: Env, options: { force?: boolean } = {}): Promise<void> {
+  const ledgerBudget = new LedgerRunBudget(await configuredLedgerRunLimits(env.DB));
+  const budget = new RunBudget({
+    apiCalls: ledgerBudget.limits.graphqlQueries + ledgerBudget.limits.restRequests,
+    databaseRows: ledgerBudget.limits.d1RowsRead + ledgerBudget.limits.d1RowsWritten,
+    samples: 100_000,
+    wallMs: ledgerBudget.limits.wallMs,
+  });
+  const store = new Store(env.DB, (amount, kind) => {
+    budget.charge("databaseRows", amount);
+    ledgerBudget.charge(kind === "read" ? "d1RowsRead" : "d1RowsWritten", amount);
+  });
+  const ledger = new LedgerStore(env.DB, ledgerBudget);
   const holder = crypto.randomUUID();
   if (!await store.acquireLease("minute-monitor", holder, 55_000)) return;
   const automaticQueue = new Map<string, ControlAction[]>();
+  const startedAt = Date.now();
+  const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
+  const collectionEnd = Math.floor((startedAt - 2 * 60_000) / (5 * 60_000)) * 5 * 60_000;
+  let activeDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "active-usage", 5 * 60_000, startedAt, options.force === true);
+  if (!activeDue && !options.force) {
+    const pending = await env.DB.prepare(
+      `SELECT 1 AS present FROM collector_state
+       WHERE account_id=?1 AND collector_key IN ('graphql:durable-objects','graphql:workers')
+         AND partition_key IN ('active','correction') AND last_status='partial' LIMIT 1`,
+    ).bind(env.BROLLY_ACCOUNT_ID).first<{ present: number }>();
+    if (pending) activeDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "active-usage", 5 * 60_000, startedAt, true);
+  }
+  let hotWatch = false;
+  if (!activeDue && !options.force) {
+    const watched = await env.DB.prepare(
+      `SELECT 1 AS present FROM alert_instances i JOIN alert_lines l ON l.id=i.alert_line_id
+       WHERE i.status='open' AND i.historical=0 AND i.period_end_at>?1 AND l.priority>=50 LIMIT 1`,
+    ).bind(startedAt).first<{ present: number }>();
+    const watermark = await env.DB.prepare(
+      `SELECT MIN(high_watermark_at) AS watermark FROM collector_state
+       WHERE account_id=?1 AND collector_key IN ('graphql:durable-objects','graphql:workers')
+         AND partition_key='active'`,
+    ).bind(env.BROLLY_ACCOUNT_ID).first<{ watermark: number | null }>();
+    if (watched && Number(watermark?.watermark ?? 0) < collectionEnd) {
+      hotWatch = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "hot-watch", 60_000, startedAt);
+    }
+  }
+  if (!activeDue && !hotWatch) return;
+  const runId = await ledger.startMonitorRun(
+    env.BROLLY_ACCOUNT_ID,
+    options.force ? "explicit_refresh" : hotWatch ? "hot_watch" : "active_usage",
+    startedAt,
+  );
+  let runFinished = false;
+  let runContinuation: unknown;
+  let normalizedSamples = 0;
 
   try {
     const policy = await store.loadPolicy();
-    const client = new CloudflareClient(env, budget);
-    const now = Date.now();
+    const client = new CloudflareClient(env, budget, ledgerBudget);
+    const now = startedAt;
     const utcMinute = new Date(now).getUTCMinutes();
-    const since = now - 5 * 60_000;
-    const inventory = await client.inventory();
+    const since = collectionEnd - 5 * 60_000;
+    const inventoryDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "resource-inventory", 60 * 60_000, now, options.force === true);
+    const capabilityDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "capability-discovery", 24 * 60 * 60_000, now, options.force === true);
+    const billingDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", 60 * 60_000, now, options.force === true);
+    const retentionDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "retention-maintenance", 60 * 60_000, now, options.force === true);
+    if (capabilityDue) await ledger.syncMetricCatalog();
+    const inventory = inventoryDue ? await client.inventory() : { assets: [], coverage: [] as CoverageResult[] };
     budget.charge("samples", inventory.assets.length);
     await store.saveAssets(inventory.assets);
+    for (const family of new Set(inventory.assets.map(asset => asset.family))) {
+      await store.applyPoliciesToAssets(inventory.assets.filter(asset => asset.family === family), family);
+    }
+    await ledger.saveInventory(inventory.assets);
     await store.saveCoverage(inventory.coverage);
+    if (capabilityDue) {
+      await ledger.saveCapabilities(await client.analyticsCapabilities());
+      await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "capability-discovery", "", {
+        nextEligibleAt: now + 24 * 60 * 60_000, status: "complete", watermarkAt: now,
+      });
+    }
+    if (inventoryDue) await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "resource-inventory", "", {
+      nextEligibleAt: now + 60 * 60_000, status: "complete", watermarkAt: now,
+    });
+    if (capabilityDue) await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, policy);
 
-    const [durableObjects, workers] = await Promise.all([
-      client.durableObjectUsage(since, now),
-      client.workerUsage(since, now),
+    const [durableActiveCursor, durableCorrectionCursor, workerActiveCursor, workerCorrectionCursor] = await Promise.all([
+      ledger.collectorCursor<CollectorWindowCursor<import("./cloudflare.js").DurableObjectUsageCursor>>(env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "active"),
+      ledger.collectorCursor<CollectorWindowCursor<import("./cloudflare.js").DurableObjectUsageCursor>>(env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "correction"),
+      ledger.collectorCursor<CollectorWindowCursor<import("./cloudflare.js").WorkerUsageCursor>>(env.BROLLY_ACCOUNT_ID, "graphql:workers", "active"),
+      ledger.collectorCursor<CollectorWindowCursor<import("./cloudflare.js").WorkerUsageCursor>>(env.BROLLY_ACCOUNT_ID, "graphql:workers", "correction"),
     ]);
+    const durableActiveWindow = collectorWindow(durableActiveCursor, since, collectionEnd);
+    const durableCorrectionWindow = collectorWindow(durableCorrectionCursor, since - 5 * 60_000, since);
+    const workerActiveWindow = collectorWindow(workerActiveCursor, since, collectionEnd);
+    const workerCorrectionWindow = collectorWindow(workerCorrectionCursor, since - 5 * 60_000, since);
+    const [durableObjects, durableCorrections, workers, workerCorrections] = await Promise.all([
+      client.durableObjectUsagePaged(durableActiveWindow.startAt, durableActiveWindow.endAt, { cursor: durableActiveWindow.cursor }),
+      client.durableObjectUsagePaged(durableCorrectionWindow.startAt, durableCorrectionWindow.endAt, { cursor: durableCorrectionWindow.cursor }),
+      client.workerUsage(workerActiveWindow.startAt, workerActiveWindow.endAt, { cursor: workerActiveWindow.cursor }),
+      client.workerUsage(workerCorrectionWindow.startAt, workerCorrectionWindow.endAt, { cursor: workerCorrectionWindow.cursor }),
+    ]);
+    runContinuation = {
+      durableObjects: windowContinuation(durableActiveWindow, durableObjects.continuation, collectionEnd),
+      durableObjectCorrections: windowContinuation(durableCorrectionWindow, durableCorrections.continuation),
+      workers: windowContinuation(workerActiveWindow, workers.continuation, collectionEnd),
+      workerCorrections: windowContinuation(workerCorrectionWindow, workerCorrections.continuation),
+    };
     await store.saveCoverage([...durableObjects.coverage, ...workers.coverage]);
-    await store.saveAssets(Array.from(new Map([...durableObjects.samples, ...workers.samples].map(sample => [`${sample.asset.family}:${sample.asset.scope}:${sample.asset.id}`, sample.asset])).values()));
-    await store.applyAssetPolicies(durableObjects.samples, "durable_objects");
-    await store.applyAssetPolicies(workers.samples, "workers");
-    let baselineQueries = 0;
-    for (const sample of durableObjects.samples) {
-      const threshold = policy.thresholds.find(item => item.metric === sample.metric && item.windowMs === 5 * 60_000);
-      if (!threshold) continue;
-      let evaluation = evaluateSample(sample, threshold, [], policy);
-      if (!evaluation && sample.value > 0 && baselineQueries < 50) {
-        baselineQueries += 1;
-        evaluation = evaluateSample(sample, threshold, await store.baseline(sample), policy);
+    await store.applyPoliciesToAssets(
+      [...durableObjects.samples, ...durableCorrections.samples].map(sample => sample.asset),
+      "durable_objects",
+    );
+    await store.applyPoliciesToAssets(
+      [...workers.samples, ...workerCorrections.samples].map(sample => sample.asset),
+      "workers",
+    );
+    const ledgerObservations = [
+      ...expandUsageObservations(
+        durableCorrections.samples, "graphql:durable-objects", "durable-object-usage",
+        durableCorrections.complete ? "complete" : "partial",
+        { watermarkAt: durableCorrections.watermarkAt },
+      ),
+      ...expandUsageObservations(
+        durableObjects.samples, "graphql:durable-objects", "durable-object-usage",
+        durableObjects.complete ? "complete" : "partial",
+        { watermarkAt: durableObjects.watermarkAt },
+      ),
+      ...expandUsageObservations(
+        workerCorrections.samples, "graphql:workers", "workersInvocationsAdaptive",
+        workerCorrections.complete ? "complete" : "partial",
+        { watermarkAt: workerCorrections.watermarkAt },
+      ),
+      ...expandUsageObservations(
+        workers.samples, "graphql:workers", "workersInvocationsAdaptive",
+        workers.complete ? "complete" : "partial",
+        { watermarkAt: workers.watermarkAt },
+      ),
+    ];
+    normalizedSamples = ledgerObservations.length;
+    const ledgerChanges = await ledger.applyObservations(ledgerObservations, timeZone);
+    const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
+    const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
+      timeZone, billingCycleId: billingCycle.id,
+      billingCycleStart: billingCycle.startsAt, billingCycleEnd: billingCycle.endsAt, now, budget: ledgerBudget,
+    });
+    await dispatchAlertNotifications(env, alertResult.notifications, ledgerBudget);
+    for (const action of alertResult.automaticActions) {
+      const workerScript = String(action.rollback.workerScript ?? "");
+      if (workerScript) automaticQueue.set(workerScript, [...(automaticQueue.get(workerScript) ?? []), action]);
+    }
+    await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "active", durableActiveWindow, durableObjects, now, collectionEnd);
+    await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "correction", durableCorrectionWindow, durableCorrections, now);
+    await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:workers", "active", workerActiveWindow, workers, now, collectionEnd);
+    await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:workers", "correction", workerCorrectionWindow, workerCorrections, now);
+    await ledger.sealCompletedDays(env.BROLLY_ACCOUNT_ID, timeZone, now);
+    if (billingDue) {
+      try {
+        const billing = await reconcileBilling(env, client, ledgerBudget, now);
+        const reconciledCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, now);
+        const billingAlerts = await evaluateUsageAlerts(env, billing.alertChanges, {
+          timeZone,
+          billingCycleId: reconciledCycle.id,
+          billingCycleStart: reconciledCycle.startsAt,
+          billingCycleEnd: reconciledCycle.endsAt,
+          now, budget: ledgerBudget,
+        });
+        await dispatchAlertNotifications(env, billingAlerts.notifications, ledgerBudget);
+        await store.saveCoverage([{
+          family: "billing", metric: "authoritative_usage", finestScope: "account",
+          state: billing.complete ? "healthy" : billing.available ? "delayed" : "permission_denied", checkedAt: now,
+          detail: billing.error ?? (billing.available ? undefined : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries"),
+        }]);
+        await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", "", {
+          watermarkAt: now, nextEligibleAt: now + 60 * 60_000,
+          status: billing.complete ? "complete" : "partial",
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        await store.saveCoverage([{
+          family: "billing", metric: "authoritative_usage", finestScope: "account",
+          state: "unavailable", checkedAt: now, detail,
+        }]);
+        await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", "", {
+          nextEligibleAt: now + 5 * 60_000, status: "failed", error: detail,
+        });
       }
-      if (evaluation) await handleEvaluation(store, evaluation, false, env, automaticQueue);
+    }
+    if (retentionDue) {
+      await runRetentionMaintenance(env.DB, env.BROLLY_ACCOUNT_ID, ledgerBudget, now, timeZone);
+      await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "retention-maintenance", "", {
+        watermarkAt: now, nextEligibleAt: now + 60 * 60_000, status: "complete",
+      });
     }
     const objectCosts = new Map<string, { asset: AssetRef; cost: number }>();
-    const namespaceCosts = new Map<string, { asset: AssetRef; cost: number }>();
     for (const sample of durableObjects.samples) {
       if (sample.asset.scope === "object") {
         const current = objectCosts.get(sample.asset.id) ?? { asset: sample.asset, cost: 0 };
         current.cost += sample.estimatedCostUsd ?? 0;
         objectCosts.set(sample.asset.id, current);
-        if (sample.asset.parentId) {
-          const namespace = namespaceCosts.get(sample.asset.parentId) ?? {
-            asset: { accountId: env.BROLLY_ACCOUNT_ID, family: "durable_objects", id: sample.asset.parentId, scope: "namespace", tier: "unclassified" },
-            cost: 0,
-          };
-          namespace.cost += sample.estimatedCostUsd ?? 0;
-          namespaceCosts.set(sample.asset.parentId, namespace);
-        }
-      } else if (sample.asset.scope === "namespace") {
-        const namespace = namespaceCosts.get(sample.asset.id) ?? { asset: sample.asset, cost: 0 };
-        namespace.cost += sample.estimatedCostUsd ?? 0;
-        namespaceCosts.set(sample.asset.id, namespace);
       }
     }
-    const objectCostThreshold = policy.thresholds.find(item => item.metric === "projected_daily_cost_usd")
-      ?? DEFAULT_POLICY.thresholds.find(item => item.metric === "projected_daily_cost_usd")!;
-    for (const value of objectCosts.values()) {
-      const projected = value.cost * (86_400_000 / (now - since));
-      const evaluation = evaluateSample(
-        { asset: value.asset, metric: "projected_daily_cost_usd", unit: "usd", value: projected, start: since, end: now, source: "graphql", estimatedCostUsd: projected },
-        objectCostThreshold, [], policy,
-      );
-      if (evaluation) await handleEvaluation(store, evaluation, false, env, automaticQueue);
-    }
-    const namespaceProjectedSamples = [...namespaceCosts.values()].map(value => ({
-      asset: value.asset,
-      metric: "projected_daily_cost_usd",
-      unit: "usd" as const,
-      value: value.cost * (86_400_000 / (now - since)),
-      start: since,
-      end: now,
-      source: "graphql" as const,
-      estimatedCostUsd: value.cost * (86_400_000 / (now - since)),
-    }));
-    await store.applyAssetPolicies(namespaceProjectedSamples, "durable_objects");
-    for (const sample of namespaceProjectedSamples) {
-      const evaluation = evaluateProjectedDailySpend(sample.asset, sample.value, policy);
-      if (evaluation) await handleEvaluation(store, evaluation, false, env, automaticQueue);
-    }
 
-    const workerCosts = new Map<string, { asset: AssetRef; cost: number }>();
-    for (const sample of workers.samples) {
-      const current = workerCosts.get(sample.asset.id) ?? { asset: sample.asset, cost: 0 };
-      current.cost += sample.estimatedCostUsd ?? 0;
-      workerCosts.set(sample.asset.id, current);
-    }
-    for (const value of workerCosts.values()) {
-      const projected = value.cost * (86_400_000 / (now - since));
-      const evaluation = evaluateProjectedDailySpend(value.asset, projected, policy);
-      if (evaluation) await handleEvaluation(store, evaluation, false, env, automaticQueue);
-    }
-
-    // Evaluate true 24-hour object totals directly from Cloudflare every 15
-    // minutes. That keeps daily protection independent from (and cheaper than)
-    // scanning Brolly's own retained samples.
     let rolling24hCost: number | null = null;
-    if (utcMinute % 15 === 0) {
-      const dailyObjects = await client.durableObjectUsage(now - 86_400_000, now);
-      await store.saveCoverage(dailyObjects.coverage);
-      await store.applyAssetPolicies(dailyObjects.samples, "durable_objects");
-      rolling24hCost = dailyObjects.samples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0);
-      for (const sample of dailyObjects.samples) {
-        const threshold = policy.thresholds.find(item => item.metric === sample.metric && item.windowMs === 86_400_000);
-        if (!threshold) continue;
-        const evaluation = evaluateSample(sample, threshold, [], policy);
-        if (evaluation) await handleEvaluation(store, evaluation, false, env, automaticQueue);
-      }
-    }
-    const projectedDailyCost = durableObjects.samples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0) * (86_400_000 / (now - since));
-    const projectedWorkersDailyCost = workers.samples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0) * (86_400_000 / (now - since));
+    const projectedDailyCost = durableObjects.samples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0) * (86_400_000 / (collectionEnd - since));
+    const projectedWorkersDailyCost = workers.samples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0) * (86_400_000 / (collectionEnd - since));
     const spendAsset: AssetRef = {
       accountId: env.BROLLY_ACCOUNT_ID, family: "durable_objects", id: env.BROLLY_ACCOUNT_ID,
       name: "all Durable Objects", scope: "account", tier: "control_plane",
@@ -131,7 +233,7 @@ export async function runMonitor(env: Env): Promise<void> {
     await store.saveSamples([
       {
         asset: spendAsset, metric: "projected_daily_cost_usd", unit: "usd", value: projectedDailyCost,
-        start: since, end: now, source: "graphql", estimatedCostUsd: projectedDailyCost,
+        start: since, end: collectionEnd, source: "graphql", estimatedCostUsd: projectedDailyCost,
       },
       ...(rolling24hCost === null ? [] : [{
         asset: spendAsset, metric: "rolling_24h_cost_usd", unit: "usd" as const, value: rolling24hCost,
@@ -139,17 +241,9 @@ export async function runMonitor(env: Env): Promise<void> {
       }]),
       {
         asset: workersSpendAsset, metric: "projected_daily_cost_usd", unit: "usd", value: projectedWorkersDailyCost,
-        start: since, end: now, source: "graphql", estimatedCostUsd: projectedWorkersDailyCost,
+        start: since, end: collectionEnd, source: "graphql", estimatedCostUsd: projectedWorkersDailyCost,
       },
     ]);
-    const accountEvaluation = evaluateProjectedDailySpend(
-      spendAsset,
-      projectedDailyCost,
-      policy,
-    );
-    if (accountEvaluation) await handleEvaluation(store, accountEvaluation, false, env, automaticQueue);
-    const workersAccountEvaluation = evaluateProjectedDailySpend(workersSpendAsset, projectedWorkersDailyCost, policy);
-    if (workersAccountEvaluation) await handleEvaluation(store, workersAccountEvaluation, false, env, automaticQueue);
     if (utcMinute % 15 === 0) {
       // Baseline retention is deliberately capped. Live evaluation still sees
       // every returned object; D1 stores all three metrics only for the 333
@@ -163,27 +257,25 @@ export async function runMonitor(env: Env): Promise<void> {
     }
     await coverageIncidents(store, [...inventory.coverage, ...durableObjects.coverage, ...workers.coverage], env, automaticQueue);
     await flushAutomaticFuses(store, env, automaticQueue);
+    const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
+    if (backfill.worked) normalizedSamples += backfill.samples;
 
     const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: env.BROLLY_TIMEZONE ?? "UTC" }).format(new Date(now));
     if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {
-      let billing: Awaited<ReturnType<CloudflareClient["billingUsage"]>> = null;
-      let authoritativeBilledCost: number | null = null;
-      let billingState: CoverageResult["state"] = "permission_denied";
-      let billingDetail: string | undefined = "Add Billing Read access in Brolly setup or configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
-      try {
-        billing = await client.billingUsage(now - 2 * 86_400_000, now);
-        if (billing) {
-          billingState = "healthy";
-          billingDetail = undefined;
-        }
-      } catch (error) {
-        billingState = "unavailable";
-        billingDetail = error instanceof Error ? error.message : String(error);
-      }
-      await store.saveCoverage([{
-        family: "billing", metric: "authoritative_usage", finestScope: "account",
-        state: billingState, checkedAt: now, detail: billingDetail,
-      }]);
+      const [billingCoverage, billedCost] = await Promise.all([
+        env.DB.prepare(
+          `SELECT state,detail FROM metric_coverage
+           WHERE family='billing' AND metric='authoritative_usage' LIMIT 1`,
+        ).first<{ state: CoverageResult["state"]; detail: string | null }>(),
+        env.DB.prepare(
+          `SELECT SUM(COALESCE(billed_cost,effective_cost,list_cost,0)) AS cost
+           FROM billing_line_items WHERE account_id=?1 AND charge_period_start>=?2`,
+        ).bind(env.BROLLY_ACCOUNT_ID, now - 2 * 86_400_000).first<{ cost: number | null }>(),
+      ]);
+      const billingState = billingCoverage?.state ?? "permission_denied";
+      const billingDetail = billingCoverage?.detail
+        ?? "Add Billing Read access in Brolly setup or configure CLOUDFLARE_BILLING_TOKEN for authoritative reconciliation";
+      const authoritativeBilledCost = billedCost?.cost == null ? null : Number(billedCost.cost);
       if (billingState !== "healthy") {
         const billingCoverageAsset: AssetRef = { accountId: env.BROLLY_ACCOUNT_ID, family: "billing", id: "authoritative_usage", scope: "account", tier: "control_plane" };
         await handleEvaluation(store, {
@@ -191,38 +283,6 @@ export async function runMonitor(env: Env): Promise<void> {
           metric: "telemetry_coverage", severity: "critical", observed: 0,
           reason: `billing/authoritative_usage telemetry is ${billingState}${billingDetail ? `: ${billingDetail}` : ""}`, action: "notify",
         }, false, env, automaticQueue);
-      }
-      if (billing) {
-        const billingSamples = billing.slice(0, 10_000).map(record => {
-          const family = record.x_ProductFamilyId ?? record.x_ProductFamilyName ?? "unknown";
-          const asset: AssetRef = {
-            accountId: env.BROLLY_ACCOUNT_ID, family,
-            id: record.x_ZoneId ?? family, name: record.x_ZoneName ?? record.x_ProductFamilyName,
-            scope: record.x_ZoneId ? "zone" : "account", tier: "control_plane",
-          };
-          return {
-            asset, metric: record.x_BillableMetricId, unit: billingUnit(record.ConsumedUnit), value: record.ConsumedQuantity,
-            start: Date.parse(record.ChargePeriodStart), end: Date.parse(record.ChargePeriodEnd), source: "billing" as const,
-            estimatedCostUsd: record.BilledCost ?? record.EffectiveCost ?? record.ListCost,
-          };
-        });
-        budget.charge("samples", billingSamples.length);
-        await store.saveSamples(billingSamples);
-        const currentBillingSamples = billingSamples.filter(sample => sample.end >= now - 86_400_000);
-        const hasAuthoritativeCost = currentBillingSamples.some(sample => sample.estimatedCostUsd !== undefined);
-        if (hasAuthoritativeCost) {
-          const authoritativeCost = currentBillingSamples.reduce((sum, sample) => sum + (sample.estimatedCostUsd ?? 0), 0);
-          authoritativeBilledCost = authoritativeCost;
-          const billingEvaluation = evaluateSample(
-            {
-              asset: { accountId: env.BROLLY_ACCOUNT_ID, family: "billing", id: env.BROLLY_ACCOUNT_ID, scope: "account", tier: "control_plane" },
-              metric: "account_daily_billed_cost_usd", unit: "usd", value: authoritativeCost,
-              start: now - 86_400_000, end: now, source: "billing", estimatedCostUsd: authoritativeCost,
-            },
-            { metric: "account_daily_billed_cost_usd", windowMs: 86_400_000, ...policy.accountDailySpend }, [], policy,
-          );
-          if (billingEvaluation) await handleEvaluation(store, billingEvaluation, false, env, automaticQueue);
-        }
       }
       const dailyAsset: AssetRef = { accountId: env.BROLLY_ACCOUNT_ID, family: "billing", id: "daily-summary", scope: "account", tier: "control_plane" };
       const dailyKey = `${env.BROLLY_ACCOUNT_ID}:daily-summary:${localDay}`;
@@ -245,15 +305,65 @@ export async function runMonitor(env: Env): Promise<void> {
     budget.charge("databaseRows", (notificationCleanup.meta.rows_read ?? 0) + (notificationCleanup.meta.rows_written ?? notificationCleanup.meta.changes ?? 0));
     if (utcMinute % 15 === 0) await cleanupControlPlaneHistory(env.DB, budget, now);
     await store.resolveIncident(`${env.BROLLY_ACCOUNT_ID}:brolly:monitor_health`);
+    await ledger.finishMonitorRun(runId, env.BROLLY_ACCOUNT_ID, localDayAt(now, timeZone), {
+      startedAt, datasetsQueried: ledgerBudget.usage.graphqlQueries,
+      rowsReturned: durableObjects.samples.length + durableCorrections.samples.length + workers.samples.length + workerCorrections.samples.length,
+      samplesNormalized: normalizedSamples, continuation: runContinuation,
+      complete: durableObjects.complete && durableCorrections.complete && workers.complete && workerCorrections.complete,
+    });
+    runFinished = true;
   } catch (error) {
-    if (error instanceof MonitoringBudgetExceededError) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!runFinished) {
+      try {
+        await ledger.finishMonitorRun(runId, env.BROLLY_ACCOUNT_ID, localDayAt(startedAt, timeZone), {
+          startedAt, datasetsQueried: ledgerBudget.usage.graphqlQueries, rowsReturned: 0,
+          samplesNormalized: normalizedSamples, continuation: runContinuation, errors: [message], complete: false,
+        });
+      } catch (accountingError) {
+        console.error("[Brolly] monitor accounting failed", accountingError);
+      }
+    }
+    if (error instanceof MonitoringBudgetExceededError || error instanceof LedgerBudgetExceededError) {
       console.error(JSON.stringify({ event: "monitoring_budget_exhausted", kind: error.kind, message: error.message, usage: budget.usage }));
       await writeSentinelIncident(env.DB, env.BROLLY_ACCOUNT_ID, error.message);
       return;
     }
     console.error("[Brolly] monitor failed", error);
-    await writeSentinelIncident(env.DB, env.BROLLY_ACCOUNT_ID, error instanceof Error ? error.message : String(error));
+    await writeSentinelIncident(env.DB, env.BROLLY_ACCOUNT_ID, message);
   }
+}
+
+export function collectorWindow<T>(stored: CollectorWindowCursor<T> | null, fallbackStart: number, fallbackEnd: number): CollectorWindowCursor<T> {
+  if (stored && Number.isFinite(stored.startAt) && Number.isFinite(stored.endAt) && stored.startAt < stored.endAt) return stored;
+  return { startAt: fallbackStart, endAt: fallbackEnd };
+}
+
+export function windowContinuation<T>(window: CollectorWindowCursor<T>, continuation: T | null, latestEnd?: number): CollectorWindowCursor<T> | null {
+  if (continuation) return { startAt: window.startAt, endAt: window.endAt, cursor: continuation };
+  if (latestEnd !== undefined && window.endAt < latestEnd) {
+    return { startAt: window.endAt, endAt: Math.min(latestEnd, window.endAt + 5 * 60_000) };
+  }
+  return null;
+}
+
+async function persistWindowState<T extends { continuation: C | null; complete: boolean; watermarkAt: number }, C>(
+  ledger: LedgerStore,
+  accountId: string,
+  collectorKey: string,
+  partitionKey: string,
+  window: CollectorWindowCursor<C>,
+  result: T,
+  now: number,
+  latestEnd?: number,
+): Promise<void> {
+  const continuation = windowContinuation(window, result.continuation, latestEnd);
+  await ledger.persistCollectorState(accountId, collectorKey, partitionKey, {
+    cursor: continuation ?? undefined,
+    watermarkAt: result.watermarkAt,
+    nextEligibleAt: now + (continuation ? 60_000 : 5 * 60_000),
+    status: continuation || !result.complete ? "partial" : "complete",
+  });
 }
 
 async function cleanupControlPlaneHistory(db: D1Database, budget: RunBudget, now: number): Promise<void> {
@@ -271,28 +381,8 @@ async function cleanupControlPlaneHistory(db: D1Database, budget: RunBudget, now
   }
 }
 
-function billingUnit(unit: string): "count" | "bytes" | "milliseconds" | "gb_seconds" | "usd" | "requests" | "rows" {
-  const normalized = unit.toLowerCase();
-  if (normalized.includes("gb-s") || normalized.includes("gb second")) return "gb_seconds";
-  if (normalized.includes("byte") || normalized === "gb") return "bytes";
-  if (normalized.includes("request")) return "requests";
-  if (normalized.includes("row")) return "rows";
-  if (normalized.includes("second") || normalized.includes("millisecond")) return "milliseconds";
-  if (normalized === "usd") return "usd";
-  return "count";
-}
-
 async function handleEvaluation(store: Store, evaluation: Evaluation, dailySummary = false, env?: Env, automaticQueue?: Map<string, ControlAction[]>): Promise<void> {
-  const { previous, incident, notify: shouldSend } = await store.recordEvaluation(evaluation);
-  if (evaluation.action !== "notify") {
-    const action = await store.ensureRuntimeAction(incident);
-    const workerScript = incident.asset.family === "workers" ? incident.asset.id : incident.asset.tags?.cloudflareWorkerScript;
-    const deploymentFuseReady = incident.asset.tags?.brollyFuse === "true" && Boolean(workerScript);
-    if (evaluation.action === "stop" && env && automaticQueue && action.kind === "runtime_quarantine" && deploymentFuseReady && action.state === "prepared"
-      && confirmedAutomaticEmergency(previous, incident)) {
-      automaticQueue.set(workerScript!, [...(automaticQueue.get(workerScript!) ?? []), action]);
-    }
-  }
+  const { incident, notify: shouldSend } = await store.recordEvaluation(evaluation);
   if (!shouldSend) return;
   const targets = await store.listNotificationTargets();
   await Promise.allSettled(targets.slice(0, 10).map(async row => {
@@ -337,16 +427,6 @@ async function coverageIncidents(store: Store, coverage: CoverageResult[], env: 
     }
   }
   await store.saveCoverage(missing);
-}
-
-export function confirmedAutomaticEmergency(previous: Incident | undefined, incident: Incident): boolean {
-  if (!previous || previous.status === "resolved" || previous.severity !== "emergency" || incident.severity !== "emergency") return false;
-  if (["projected_daily_cost_usd", "account_daily_billed_cost_usd", "daily_summary", "telemetry_coverage"].includes(incident.metric)) return false;
-  if (!(incident.asset.family === "workers" && incident.asset.scope === "resource")
-    && !(incident.asset.family === "durable_objects" && incident.asset.scope === "object")) return false;
-  const encodedWindow = Number(incident.key.split(":").at(-1));
-  const maximumGap = Number.isFinite(encodedWindow) && encodedWindow > 5 * 60_000 ? 20 * 60_000 : 7 * 60_000;
-  return incident.lastSeen - previous.lastSeen <= maximumGap;
 }
 
 async function flushAutomaticFuses(store: Store, env: Env, queue: Map<string, ControlAction[]>): Promise<void> {

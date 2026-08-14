@@ -134,7 +134,7 @@ export interface ConfigurationData {
   namespaces: ConfigurationNamespace[];
 }
 
-export type NotificationKind = "discord" | "slack" | "twilio";
+export type NotificationKind = "discord" | "slack" | "webhook" | "resend" | "postmark" | "twilio";
 export interface NotificationTarget {
   id: string;
   kind: NotificationKind;
@@ -160,4 +160,241 @@ export interface ReleaseStatus {
   repository: string | null;
   updateUrl: string | null;
   error?: string;
+}
+
+export type DataQuality = "complete" | "partial" | "sampled" | "stale" | "missing";
+
+export interface LedgerResource {
+  id: string;
+  accountId: string;
+  parentResourceId: string | null;
+  productFamily: string;
+  resourceType: string;
+  cloudflareId: string;
+  displayName: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  lastActiveAt: number | null;
+  coverageStatus: DataQuality;
+  controlCapability: "none" | "runtime_fuse" | "queue_pause";
+  runtimeFuseStatus: "unknown" | "missing" | "declared" | "verified" | "unhealthy";
+  autoQuarantinePolicy: "inherit" | "allow" | "deny";
+  tier: AssetTier;
+  excluded: boolean;
+  metadata: Record<string, unknown>;
+  childCount: number;
+  usageUpdatedAt: number | null;
+  oldestDay: string | null;
+  openAlerts: number;
+}
+
+export interface LedgerMetricDefinition {
+  id: string;
+  productFamily: string;
+  metricKey: string;
+  displayName: string;
+  unit: string;
+  aggregationKind: "sum" | "maximum" | "latest";
+  billingMapping: string | null;
+  collectorKey: string;
+  finestScope: string;
+  active: boolean;
+}
+
+export interface UsagePoint {
+  localDay: string;
+  periodStartAt?: number;
+  periodEndAt?: number;
+  metrics: Record<string, number>;
+  estimatedCostUsd: number | null;
+  authoritativeCostUsd: number | null;
+  quality: DataQuality;
+  sampling: Record<string, unknown>;
+  sealed: boolean;
+  revision: number;
+  revisedAt: number;
+}
+
+export interface UsageResponse {
+  resource: LedgerResource;
+  metricDefinitions: LedgerMetricDefinition[];
+  metricId: string | null;
+  period: "day";
+  points: UsagePoint[];
+  oldestRetainedAt: string | null;
+  freshnessAt: number | null;
+}
+
+export interface AlertLineView {
+  id: string;
+  alertRuleId: string;
+  label: string;
+  color: string;
+  priority: number;
+  thresholdValue: number;
+  action: "notify" | "quarantine" | null;
+  repeatIntervalMs: number | null;
+  enabled: boolean;
+}
+
+export interface AlertRuleView {
+  id: string;
+  accountId: string;
+  targetResourceId: string | null;
+  targetDisplayName: string | null;
+  targetResourceType: string | null;
+  targetSelector: Record<string, string> | null;
+  metricDefinitionId: string;
+  measurement: "usage" | "estimated_cost" | "billed_cost";
+  period: "day" | "billing_cycle";
+  notificationTargetIds: string[];
+  autoQuarantine: boolean;
+  autoQuarantineContributors: boolean;
+  confirmationWindowMs: number;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lines: AlertLineView[];
+}
+
+export interface AlertInstanceView {
+  id: string;
+  alertRuleId: string;
+  alertLineId: string;
+  targetResourceId: string;
+  periodStartAt: number;
+  periodEndAt: number;
+  observedValue: number;
+  thresholdValue: number;
+  evidence: Record<string, unknown>;
+  dataQuality: DataQuality;
+  status: "open" | "silenced" | "expired" | "resolved";
+  firstBreachedAt: number;
+  lastBreachedAt: number;
+  nextNotificationAt: number | null;
+  notificationCount: number;
+  silencedAt: number | null;
+  silencedBy: string | null;
+  linkedActionId: string | null;
+  historical: number;
+  metricDefinitionId: string;
+  label: string;
+  color: string;
+  priority: number;
+  displayName: string;
+  productFamily: string;
+  cloudflareId: string;
+}
+
+export interface CollectorCapabilityView {
+  accountId: string;
+  collectorKey: string;
+  dataset: string;
+  available: boolean;
+  retentionDays: number | null;
+  samplingBehavior: string | null;
+  finestScope: string;
+  lastVerifiedAt: number;
+  errorCode: string | null;
+  humanExplanation: string;
+  state: string;
+  watermarkAt: number | null;
+}
+
+export interface CollectorStateView {
+  accountId: string;
+  collectorKey: string;
+  partitionKey: string;
+  cursor: Record<string, unknown> | null;
+  highWatermarkAt: number | null;
+  retryCount: number;
+  nextEligibleAt: number;
+  lastStartedAt: number | null;
+  lastCompletedAt: number | null;
+  lastError: string | null;
+  status: string;
+}
+
+export interface MonitoringDailyView {
+  accountId: string;
+  localDay: string;
+  graphqlQueries: number;
+  graphqlQueryBudget: number;
+  restRequests: number;
+  restRequestBudget: number;
+  d1RowsRead: number;
+  d1RowsWritten: number;
+  workerRequests: number;
+  workerCpuMs: number;
+  estimatedCostUsd: number;
+  storageBytes: number | null;
+  storageCapacityBytes: number | null;
+  deferredCollectors: string[];
+  oldestResourceDay: string | null;
+  updatedAt: number;
+}
+
+export interface MonitorRunView {
+  id: string;
+  kind: string;
+  startedAt: number;
+  completedAt: number | null;
+  durationMs: number | null;
+  graphqlQueries: number;
+  restRequests: number;
+  d1RowsRead: number;
+  d1RowsWritten: number;
+  rowsReturned: number;
+  samplesNormalized: number;
+  coverageStatus: string;
+  status: string;
+  errors: string[];
+  deferredCollectors: string[];
+}
+
+export interface LedgerRunLimitsView {
+  graphqlQueries: number;
+  restRequests: number;
+  d1RowsRead: number;
+  d1RowsWritten: number;
+  pagesPerDataset: number;
+  resourcesPerTransaction: number;
+  retries: number;
+  backfillSlices: number;
+  wallMs: number;
+}
+
+export interface RetentionView {
+  generatedAt: number;
+  oldestResourceDay: string | null;
+  oldestAggregateDay: string | null;
+  dailyRows: number;
+  projectedBytes: number;
+  capacityBytes: number;
+  pressure: number | null;
+  backfillPending: number;
+  targetRetentionDays: number;
+}
+
+export interface BackfillJobView {
+  id: string;
+  requestedStartAt: number;
+  requestedEndAt: number;
+  status: string;
+  pausedReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BackfillSliceView {
+  id: string;
+  backfillJobId: string;
+  collectorKey: string;
+  startsAt: number;
+  endsAt: number;
+  status: string;
+  retryCount: number;
+  coverageStatus: DataQuality;
+  error: string | null;
+  updatedAt: number;
 }

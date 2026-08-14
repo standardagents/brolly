@@ -238,10 +238,32 @@ async function api<T>(token: string, path: string): Promise<T> {
 }
 
 async function saveVerification(env: Env, verification: WorkerVerification): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
-     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
-  ).bind(`${VERIFICATION_PREFIX}${verification.workerScript}`, JSON.stringify(verification), verification.checkedAt).run();
+  const verified = verification.checks.apiAccess.state === "pass"
+    && verification.checks.fuseSecret.state === "pass"
+    && verification.checks.runtimeBundle.state === "pass"
+    && verification.checks.activeDeployment.state === "pass";
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+    ).bind(`${VERIFICATION_PREFIX}${verification.workerScript}`, JSON.stringify(verification), verification.checkedAt),
+    env.DB.prepare(
+      `UPDATE resources SET
+         runtime_fuse_status=?3,
+         control_capability=CASE WHEN ?3='verified' THEN 'runtime_fuse' ELSE control_capability END,
+         last_seen_at=MAX(last_seen_at,?4)
+       WHERE account_id=?1 AND product_family='workers' AND cloudflare_id=?2`,
+    ).bind(env.BROLLY_ACCOUNT_ID, verification.workerScript, verified ? "verified" : "unhealthy", verification.checkedAt),
+    env.DB.prepare(
+      `UPDATE resources SET
+         runtime_fuse_status=?3,
+         control_capability=CASE WHEN ?3='verified' THEN 'runtime_fuse' ELSE control_capability END,
+         last_seen_at=MAX(last_seen_at,?4)
+       WHERE account_id=?1 AND product_family='durable_objects'
+         AND json_extract(metadata_json,'$.cloudflareWorkerScript')=?2
+         AND json_extract(metadata_json,'$.brollyFuse')='true'`,
+    ).bind(env.BROLLY_ACCOUNT_ID, verification.workerScript, verified ? "verified" : "unhealthy", verification.checkedAt),
+  ]);
 }
 
 function unavailableVerification(workerScript: string, detail: string): WorkerVerification {

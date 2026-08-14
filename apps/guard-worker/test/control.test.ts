@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlAction } from "@standardagents/brolly-core";
-import { executeCloudflareControl, executeDeploymentFuseBatch, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl } from "../src/control.js";
+import { automaticDeploymentCapacityError, executeCloudflareControl, executeDeploymentFuseBatch, executeDeploymentFuseControl, executeRuntimeControl, prepareCloudflareControl } from "../src/control.js";
 import type { Env } from "../src/env.js";
 
 const env = {
@@ -37,6 +37,13 @@ function response(result: unknown): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("reversible Cloudflare controls", () => {
+  it("enforces per-Worker and account automatic deployment limits", () => {
+    const now = 2_000_000;
+    expect(automaticDeploymentCapacityError(now - 14 * 60_000, 0, now)).toContain("cooldown");
+    expect(automaticDeploymentCapacityError(now - 16 * 60_000, 3, now)).toContain("circuit breaker");
+    expect(automaticDeploymentCapacityError(now - 16 * 60_000, 2, now)).toBeNull();
+  });
+
   it("coalesces exact-object quarantines into one Worker deployment and clears only the owning action", async () => {
     const statements: Array<{ sql: string; values: unknown[] }> = [];
     let storedFuse: string | undefined;

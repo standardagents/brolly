@@ -12,6 +12,9 @@ describe("configuration verification", () => {
       { family: "durable_objects", asset_id: "namespace-1", name: "Rooms", scope: "namespace", tier: "standard", metadata_json: JSON.stringify({ brollyFuse: "true", workerScript: "chat-worker", cloudflareWorkerScript: "chat-worker", durableObjectClass: "Room", durableObjectStorage: "SQLite" }), seen_at: 100 },
     ];
     const db = {
+      async batch(statements: Array<{ run(): Promise<unknown> }>) {
+        return Promise.all(statements.map(statement => statement.run()));
+      },
       prepare(sql: string) {
         const statement = {
           values: [] as unknown[],

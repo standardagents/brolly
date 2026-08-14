@@ -93,7 +93,8 @@ const freshInstall = firstRun === "1" || firstRun === "empty";
 
 const defaultFamilyDailySpend = Object.fromEntries([
   "workers", "durable_objects", "workers_ai", "queues", "d1", "r2", "kv", "pages", "images", "stream",
-  "vectorize", "hyperdrive", "ai_gateway", "zones",
+  "vectorize", "hyperdrive", "ai_gateway", "containers", "browser_rendering", "workflows", "worker_builds",
+  "analytics_engine", "log_explorer", "zones", "unknown",
 ].map(family => [family, spendLimits(1, 5, 10)]));
 
 const defaultPolicy = {
@@ -473,6 +474,88 @@ const assets = [
   { accountId: "placeholder-demo-account", family: "queues", id: "ingest-queue", parentId: null, name: "ingest-queue", scope: "resource", tier: "disposable", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: null },
 ];
 
+const ledgerResources = [
+  {
+    id: "placeholder-demo-account:account:account:placeholder-demo-account",
+    accountId: "placeholder-demo-account", parentResourceId: null, productFamily: "account",
+    resourceType: "account", cloudflareId: "placeholder-demo-account", displayName: "Demo Cloudflare account",
+    firstSeenAt: now - 20 * 24 * HOUR, lastSeenAt: now - 6 * 60_000, lastActiveAt: now - 6 * 60_000,
+    coverageStatus: "complete", controlCapability: "none", runtimeFuseStatus: "unknown",
+    autoQuarantinePolicy: "deny", tier: "unclassified", excluded: false, metadata: {},
+    childCount: 4, usageUpdatedAt: now - 6 * 60_000, oldestDay: "2026-07-24", openAlerts: 1,
+  },
+  ...assets.map(asset => ({
+    id: `placeholder-demo-account:${asset.family}:${asset.family}%3A${asset.scope}:${asset.id}`,
+    accountId: asset.accountId,
+    parentResourceId: `placeholder-demo-account:${asset.family}:product:${asset.family}`,
+    productFamily: asset.family,
+    resourceType: `${asset.family}:${asset.scope}`,
+    cloudflareId: asset.id,
+    displayName: asset.name ?? asset.id,
+    firstSeenAt: asset.discoveredAt,
+    lastSeenAt: asset.seenAt,
+    lastActiveAt: asset.lastSignalAt,
+    coverageStatus: asset.lastSignalAt ? "complete" : "missing",
+    controlCapability: asset.family === "queues" ? "queue_pause" : asset.family === "workers" || asset.family === "durable_objects" ? "runtime_fuse" : "none",
+    runtimeFuseStatus: asset.id === "api-gateway" || asset.id === "agent-thread" ? "verified" : "unknown",
+    autoQuarantinePolicy: "inherit",
+    tier: asset.tier,
+    excluded: asset.tier === "control_plane",
+    metadata: asset.tags,
+    childCount: 0,
+    usageUpdatedAt: asset.lastSignalAt,
+    oldestDay: "2026-07-24",
+    openAlerts: asset.incidentCount,
+  })),
+];
+
+const metricDefinitions = [
+  { id: "account:estimated_cost_usd", productFamily: "account", metricKey: "estimated_cost_usd", displayName: "Estimated cost", unit: "usd", aggregationKind: "sum", billingMapping: null, collectorKey: "ledger:cost", finestScope: "account", active: true },
+  { id: "workers:requests", productFamily: "workers", metricKey: "requests", displayName: "Requests", unit: "requests", aggregationKind: "sum", billingMapping: "requests", collectorKey: "graphql:workers", finestScope: "resource", active: true },
+  { id: "workers:estimated_cost_usd", productFamily: "workers", metricKey: "estimated_cost_usd", displayName: "Estimated cost", unit: "usd", aggregationKind: "sum", billingMapping: null, collectorKey: "ledger:cost", finestScope: "resource", active: true },
+  { id: "durable_objects:rows_read", productFamily: "durable_objects", metricKey: "rows_read", displayName: "Rows read", unit: "rows", aggregationKind: "sum", billingMapping: "rows_read", collectorKey: "graphql:durable-objects", finestScope: "object", active: true },
+];
+
+const demoUsagePoints = Array.from({ length: 20 }, (_, index) => {
+  const at = now - (19 - index) * 24 * HOUR;
+  return {
+    localDay: new Date(at).toISOString().slice(0, 10),
+    periodStartAt: at,
+    periodEndAt: at + 24 * HOUR,
+    metrics: { "account:estimated_cost_usd": 8 + index * .4, "workers:requests": 120_000 + index * 8_000 },
+    estimatedCostUsd: 8 + index * .4,
+    authoritativeCostUsd: index < 18 ? 7.8 + index * .38 : null,
+    quality: index === 13 ? "partial" : "complete",
+    sampling: {},
+    sealed: index < 19,
+    revision: 1,
+    revisedAt: at + 24 * HOUR,
+  };
+});
+
+const demoRules = [{
+  id: "demo-account-cost", accountId: "placeholder-demo-account",
+  targetResourceId: ledgerResources[0]!.id, targetSelector: null,
+  metricDefinitionId: "account:estimated_cost_usd", measurement: "estimated_cost", period: "day",
+  notificationTargetIds: ["target-1"], autoQuarantine: false, autoQuarantineContributors: false,
+  confirmationWindowMs: 300_000, enabled: true, createdAt: now - 10 * 24 * HOUR, updatedAt: now - HOUR,
+  lines: [
+    { id: "demo-warning", alertRuleId: "demo-account-cost", label: "Warning", color: "#f59e0b", priority: 50, thresholdValue: 15, action: "notify", repeatIntervalMs: null, enabled: true },
+    { id: "demo-emergency", alertRuleId: "demo-account-cost", label: "Emergency", color: "#ef4444", priority: 100, thresholdValue: 25, action: "notify", repeatIntervalMs: 6 * HOUR, enabled: true },
+  ],
+}];
+
+const demoAlertInstances = [{
+  id: "demo-instance", alertRuleId: "demo-account-cost", alertLineId: "demo-warning",
+  targetResourceId: ledgerResources[0]!.id, periodStartAt: now - HOUR * 16, periodEndAt: now + HOUR * 8,
+  observedValue: 18.42, thresholdValue: 15, evidence: { measurement: "estimated_cost" },
+  dataQuality: "complete", status: "open", firstBreachedAt: now - 2 * HOUR, lastBreachedAt: now - 6 * 60_000,
+  nextNotificationAt: null, notificationCount: 1, silencedAt: null, silencedBy: null,
+  linkedActionId: null, historical: 0, metricDefinitionId: "account:estimated_cost_usd",
+  label: "Warning", color: "#f59e0b", priority: 50, displayName: "Demo Cloudflare account",
+  productFamily: "account", cloudflareId: "placeholder-demo-account",
+}];
+
 function demoApi(): Plugin {
   return {
     name: "brolly-demo-api",
@@ -493,9 +576,48 @@ function demoApi(): Plugin {
         if (billingRoute && get) return send(billingAccess);
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
-        if (url.pathname === "/api/targets" && get) return send(targets);
+        if (url.pathname === "/api/targets" && get) return send({ targets, credentialStorageReady: true });
         if (url.pathname === "/api/assets" && get) return send({ assets });
+        if (url.pathname === "/api/ledger/resources" && get) {
+          const query = url.searchParams.get("q")?.toLowerCase();
+          const family = url.searchParams.get("family");
+          const resources = ledgerResources.filter(item =>
+            (!family || item.productFamily === family)
+            && (!query || item.displayName.toLowerCase().includes(query) || item.cloudflareId.toLowerCase().includes(query)));
+          return send({ resources, families: [...new Set(ledgerResources.map(item => item.productFamily).filter(item => item !== "account"))].sort(), nextCursor: null, generatedAt: Date.now() });
+        }
+        if (url.pathname === "/api/metric-definitions" && get) return send({ metricDefinitions });
+        if (url.pathname === "/api/usage" && get) {
+          const resource = ledgerResources.find(item => item.id === url.searchParams.get("resourceId")) ?? ledgerResources[0];
+          return send({ resource, metricDefinitions, metricId: url.searchParams.get("metricId"), period: "day", points: demoUsagePoints, oldestRetainedAt: "2026-07-24", freshnessAt: now - 6 * 60_000 });
+        }
+        if (url.pathname === "/api/alert-rules" && get) return send({ rules: demoRules });
+        if (url.pathname === "/api/alert-instances" && get) return send({ instances: demoAlertInstances });
+        if (url.pathname === "/api/coverage" && get) return send({
+          capabilities: [
+            { accountId: "placeholder-demo-account", collectorKey: "graphql:workers", dataset: "workersInvocationsAdaptive", available: true, retentionDays: 90, samplingBehavior: "Adaptive", finestScope: "resource", lastVerifiedAt: now - HOUR, errorCode: null, humanExplanation: "Available with 10,000-row keyset pages.", state: "healthy", watermarkAt: now - 6 * 60_000 },
+            { accountId: "placeholder-demo-account", collectorKey: "graphql:queues", dataset: "queues", available: false, retentionDays: null, samplingBehavior: null, finestScope: "resource", lastVerifiedAt: now - HOUR, errorCode: "detailed_collector_unavailable", humanExplanation: "Authoritative billing remains visible while detailed attribution is unavailable.", state: "unavailable", watermarkAt: null },
+          ],
+          collectors: [{ accountId: "placeholder-demo-account", collectorKey: "active-usage", partitionKey: "", cursor: null, highWatermarkAt: now - 6 * 60_000, retryCount: 0, nextEligibleAt: now + 60_000, lastStartedAt: now - 6 * 60_000, lastCompletedAt: now - 6 * 60_000, lastError: null, status: "complete" }],
+        });
+        if (url.pathname === "/api/monitoring-cost" && get) return send({
+          daily: [{ accountId: "placeholder-demo-account", localDay: new Date(now).toISOString().slice(0, 10), graphqlQueries: 24, graphqlQueryBudget: 1200, restRequests: 12, restRequestBudget: 200, d1RowsRead: 18_200, d1RowsWritten: 4_100, workerRequests: 96, workerCpuMs: 83, estimatedCostUsd: .0021, storageBytes: 28_000_000, storageCapacityBytes: 500_000_000, deferredCollectors: [], oldestResourceDay: "2026-07-24", updatedAt: now - 6 * 60_000 }],
+          runs: [{ id: "run-1", kind: "active_usage", startedAt: now - 6 * 60_000, completedAt: now - 5.8 * 60_000, durationMs: 8_500, graphqlQueries: 10, restRequests: 0, d1RowsRead: 4_200, d1RowsWritten: 900, rowsReturned: 2_200, samplesNormalized: 6_600, coverageStatus: "complete", status: "complete", errors: [], deferredCollectors: [] }],
+          limits: { graphqlQueries: 300, restRequests: 50, d1RowsRead: 100_000, d1RowsWritten: 50_000, pagesPerDataset: 30, resourcesPerTransaction: 500, retries: 3, backfillSlices: 4, wallMs: 45_000 },
+          hardMaximums: { graphqlQueries: 500, restRequests: 100, d1RowsRead: 250_000, d1RowsWritten: 100_000, pagesPerDataset: 50, resourcesPerTransaction: 1_000, retries: 5, backfillSlices: 12, wallMs: 55_000 },
+        });
+        if (url.pathname === "/api/retention" && get) return send({ generatedAt: now, oldestResourceDay: "2026-07-24", oldestAggregateDay: "2026-07-24", dailyRows: 140, projectedBytes: 28_000_000, capacityBytes: 500_000_000, pressure: .056, backfillPending: 4, targetRetentionDays: 730 });
+        if (url.pathname === "/api/backfill" && get) return send({
+          jobs: [{ id: "backfill-1", requestedStartAt: now - 30 * 24 * HOUR, requestedEndAt: now, status: "running", pausedReason: null, createdAt: now - HOUR, updatedAt: now - 6 * 60_000 }],
+          slices: [{ id: "slice-1", backfillJobId: "backfill-1", collectorKey: "graphql:workers", startsAt: now - 24 * HOUR, endsAt: now, status: "complete", retryCount: 0, coverageStatus: "complete", error: null, updatedAt: now - 6 * 60_000 }],
+        });
         if (url.pathname === "/api/onboarding/estimates") return send({ ...estimates, generatedAt: Date.now() });
+        if (url.pathname === "/api/run" && req.method === "POST") return send({
+          ok: true,
+          budget: { graphqlQueries: 300, restRequests: 50 },
+          datasets: [{ dataset: "workersInvocationsAdaptive", watermarkAt: now - 6 * 60_000, state: "healthy" }],
+          run: { status: "complete", coverage: "complete", graphqlQueries: 10, restRequests: 0 },
+        });
         if (billingRoute && req.method === "PUT") {
           billingAccess.configured = true;
           billingAccess.source = "encrypted_database";

@@ -7,7 +7,10 @@ import { ChannelLogo, Icon, InfoTip } from "./ui";
 export const NOTIFICATION_CHANNELS: Array<{ kind: NotificationKind; label: string; description: string }> = [
   { kind: "discord", label: "Discord", description: "Post structured incident messages to a Discord channel webhook." },
   { kind: "slack", label: "Slack", description: "Send incident summaries to a Slack incoming webhook." },
+  { kind: "resend", label: "Resend email", description: "Send incident email through a Resend account." },
+  { kind: "postmark", label: "Postmark email", description: "Send incident email through a Postmark server." },
   { kind: "twilio", label: "Twilio SMS", description: "Text a phone number for high-urgency incidents through Twilio." },
+  { kind: "webhook", label: "Generic webhook", description: "POST an incident payload to an HTTPS endpoint with an optional bearer token." },
 ];
 
 export interface TargetsResponse {
@@ -177,7 +180,11 @@ function NotificationForm({ channel, token, existing, disabled, onSaved }: {
     try {
       const config = channel.kind === "twilio"
         ? { accountSid: fields.accountSid, token: fields.token, from: fields.from, to: fields.to }
-        : { url: fields.url };
+        : channel.kind === "resend" || channel.kind === "postmark"
+          ? { token: fields.token, from: fields.from, to: fields.to }
+          : channel.kind === "webhook"
+            ? { url: fields.url, token: fields.token || undefined }
+            : { url: fields.url };
       await api("/api/targets", token, { method: "POST", body: JSON.stringify({ id: existing?.id, kind: channel.kind, config, enabled: true, minimumSeverity }) });
       setFields({});
       setOpen(false);
@@ -205,7 +212,14 @@ function NotificationForm({ channel, token, existing, disabled, onSaved }: {
                 <label>Destination number<input required value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="+15557654321" /></label>
               </div>
             </>
+          ) : channel.kind === "resend" || channel.kind === "postmark" ? (
+            <>
+              <label>API token<input required type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} /></label>
+              <label>From address<input required type="email" value={fields.from ?? ""} onChange={event => set("from", event.target.value)} placeholder="alerts@example.com" /></label>
+              <label>Destination address<input required type="email" value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="operator@example.com" /></label>
+            </>
           ) : (
+            <>
             <label>
               {channel.label} webhook URL
               <input
@@ -214,9 +228,13 @@ function NotificationForm({ channel, token, existing, disabled, onSaved }: {
                 autoComplete="off"
                 value={fields.url ?? ""}
                 onChange={event => set("url", event.target.value)}
-                placeholder={channel.kind === "discord" ? "https://discord.com/api/webhooks/…" : "https://hooks.slack.com/services/…"}
+                placeholder={channel.kind === "discord" ? "https://discord.com/api/webhooks/…" : channel.kind === "slack" ? "https://hooks.slack.com/services/…" : "https://alerts.example.com/brolly"}
               />
             </label>
+            {channel.kind === "webhook" && (
+              <label>Bearer token (optional)<input type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} /></label>
+            )}
+            </>
           )}
           <label>
             Minimum severity

@@ -7,9 +7,9 @@ import { ScanInfoTip } from "./protection";
 import { Brand, Icon, InfoTip, type IconName } from "./ui";
 
 const NAV_GROUPS: Array<{ label: string; items: Array<{ route: Route; icon: IconName }> }> = [
-  { label: "Monitor", items: [{ route: "overview", icon: "gauge" }, { route: "assets", icon: "layers" }] },
-  { label: "Respond", items: [{ route: "incidents", icon: "alert" }] },
-  { label: "Protect", items: [{ route: "configuration", icon: "shield" }, { route: "settings", icon: "sliders" }] },
+  { label: "Monitor", items: [{ route: "overview", icon: "gauge" }, { route: "usage", icon: "trend" }, { route: "assets", icon: "layers" }, { route: "monitoring", icon: "pulse" }] },
+  { label: "Protect", items: [{ route: "limits", icon: "wallet" }, { route: "alerts", icon: "bell" }, { route: "incidents", icon: "shield" }] },
+  { label: "Operate", items: [{ route: "configuration", icon: "radar" }, { route: "notifications", icon: "bell" }, { route: "backfill", icon: "clock" }, { route: "settings", icon: "sliders" }] },
 ];
 
 export function AppShell({ route, onNavigate, data, connection, scanning, onScan, onBudgets, onLogout, release, children }: {
@@ -99,7 +99,7 @@ export function AppShell({ route, onNavigate, data, connection, scanning, onScan
               <strong>{emergencies} emergency incident{emergencies === 1 ? "" : "s"} — spend may be escalating right now.</strong>
               <span>Review the measurement and use a prepared, reversible stop where one exists.</span>
             </div>
-            <button type="button" className="button danger" onClick={() => onNavigate("incidents")}>Respond</button>
+            <button type="button" className="button danger" onClick={() => onNavigate("alerts")}>Review alerts</button>
           </div>
         )}
 

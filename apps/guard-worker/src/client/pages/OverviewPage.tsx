@@ -9,11 +9,12 @@ import { categoryColor } from "../lib/meta";
 import type { Route } from "../router";
 import type { ConfigurationData, DashboardData, Incident } from "../types";
 
-export function OverviewPage({ data, connection, token, scanError, onNavigate, onOpenIncident, onBudgets }: {
+export function OverviewPage({ data, connection, token, scanError, scanSummary, onNavigate, onOpenIncident, onBudgets }: {
   data: DashboardData;
   connection: ConnectionHealth;
   token: string;
   scanError: string;
+  scanSummary: string;
   onNavigate: (route: Route) => void;
   onOpenIncident: (incident: Incident) => void;
   onBudgets: () => void;
@@ -36,6 +37,7 @@ export function OverviewPage({ data, connection, token, scanError, onNavigate, o
       {scanError && connection.kind !== "local" && (
         <p className="form-error page-error" role="alert">Account scan failed: {scanError}</p>
       )}
+      {scanSummary && <p className="inline-note" role="status"><Icon name="check" /><span>{scanSummary}</span></p>}
 
       <section className="stat-row" aria-label="Account status">
         <SpendStat data={data} preview={preview} />
@@ -72,8 +74,8 @@ export function OverviewPage({ data, connection, token, scanError, onNavigate, o
               {preview ? "Example daily spend — not live" : "Estimated daily spend"}
               <InfoTip label="How the spend estimate is calculated">
                 <h4>Operational estimate</h4>
-                <p>Brolly prices the latest five-minute Cloudflare analytics window and projects that rate across a day. Every 15 minutes it also requests a direct rolling 24-hour Durable Objects total.</p>
-                <p>It is intentionally conservative and does not subtract included usage, credits, discounts, or contract pricing. The once-daily Billing API reconciliation is the authoritative comparison when a Billing Read token is installed.</p>
+                <p>Brolly stores overlapping five-minute Cloudflare analytics windows in correction-safe daily accumulators. Sealed daily history stays available for charts while live totals continue to update.</p>
+                <p>Hourly Billing Read reconciliation supplies authoritative aggregate charges and billing-cycle boundaries. Granular values remain labeled as modeled estimates or proportional allocations.</p>
                 {preview && <p><strong>This screen is not connected.</strong> Values shown here must not be used as a live account total.</p>}
               </InfoTip>
             </h2>
@@ -123,7 +125,7 @@ export function OverviewPage({ data, connection, token, scanError, onNavigate, o
             </table>
             <div className="spend-side-links">
               <button type="button" className="link-button" onClick={onBudgets}>Adjust daily limits</button>
-              <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>See what is and isn't measured</button>
+              <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>Review collection coverage</button>
             </div>
           </div>
         </div>

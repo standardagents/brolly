@@ -1,6 +1,6 @@
 # Architecture
 
-Brolly runs inside the protected Cloudflare account so it remains available during an incident. A scheduled Worker acquires a short D1 lease, refreshes inventory, polls bounded telemetry adapters, persists compact samples, evaluates policy, and fans out deduplicated incidents. The dashboard and CLI use the same audited action API.
+Brolly runs inside the protected Cloudflare account so it remains available during an incident. A scheduled Worker acquires a short D1 lease, claims bounded collector jobs, updates a persistent usage ledger, evaluates affected alert rules, and fans out period-specific notifications. The dashboard and CLI use the same audited action API.
 
 The control plane consists of `brolly-guard`, its D1 database, OAuth credentials, and at least one notification channel. Those assets are always allowlisted. Browser sessions use a hashed, 12-hour, HttpOnly cookie; OAuth grants and notifier credentials are AES-GCM encrypted before entering D1. A local CLI bearer token remains an optional break-glass path if the dashboard is unavailable.
 
@@ -79,40 +79,66 @@ an intentional D1 reset or a replacement deployment. The CLI installer avoids
 the first-browser claim window by persisting the selected account before it
 deploys the guard Worker.
 
-Fast telemetry is operational evidence, not invoice truth. The Durable Object
-collector covers the complete current pricing surface: per-object requests,
-compute GB-seconds, incoming WebSocket messages, SQLite rows read/written, and
-legacy key-value read/write units and deletes. Each operation is queried as an
-independent bounded top-1,000 list so one kind of high consumer cannot hide
-behind another metric's ordering. Retained SQLite bytes are collected at
-namespace scope and retained legacy key-value bytes at account scope, matching
-the finest dimensions Cloudflare exposes. Invocation types are separated so
-hibernated WebSocket messages and periodic non-hibernated WebSocket messages
-both receive Cloudflare's 20:1 billing conversion exactly once. Five-minute telemetry runs every
-minute; a direct 24-hour query runs every 15 minutes. Brolly separately imports Cloudflare billing usage when
-a Billing Read token is configured. Billing usage can be delayed and is
-reconciled rather than used for sub-minute shutdown decisions. Every cataloged
-family without a fast usage source is persisted as unavailable and opens a
-coverage incident.
+Brolly's D1 ledger is the operational read model. One account root owns product
+nodes, service scopes, and stable individual resources. Versioned metric
+definitions normalize detailed usage, modeled cost, authoritative billed cost,
+and newly encountered billing lines. Collector capability rows describe
+availability, sampling, retention, finest scope, and ingestion watermark.
+Dashboard routes query this stored state. Direct Cloudflare usage queries stay
+inside scheduled collectors, setup checks, configuration verification, and
+explicit refresh jobs.
 
-For charting, the minute pass writes one account-level projected-spend sample,
-and the 15-minute pass writes one rolling-24-hour cost sample per active usage
-family. This avoids reconstructing charts by repeatedly scanning
-per-object samples. The dashboard reads bounded aggregates, at most 2,500 spend
-points and 250 incidents per request.
+The one-minute cron is a scheduler. Active Worker and Durable Object telemetry
+is due every five minutes. Hot watch can run each minute while a current alert
+instance is open and the aligned Cloudflare watermark has advanced. Inventory,
+billing reconciliation, and retention maintenance are hourly. Analytics
+capability discovery is daily. Historical backfill runs newest-first from
+budget left after active safeguards.
+
+Active telemetry uses one fixed completed five-minute window and a fixed pass
+over the preceding window for correction. Continuations retain those original
+interval bounds across restarts. Durable
+Object billable datasets are grouped by namespace and object identifier.
+Workers are grouped by script name. Both collectors use stable identifier
+ordering, 10,000-row keyset pages, independent continuation cursors, and
+explicit partial coverage. A collection pass never wakes a Durable Object or
+reads customer application storage.
+
+Current local-day and billing-cycle totals live in deterministic 8-bit
+accumulator shards. Rows approaching 1.5 MB split into deterministic secondary
+segments. Each metric keeps bounded correction state and a 12-scan
+rolling baseline. Repeated windows are idempotent; delayed corrections replace
+the previous contribution through a delta. Completed days seal into compact
+usage_daily rows, with account, product, namespace, and individual history
+retained for up to 730 days under D1 capacity safeguards.
+
+Billing Read reconciliation runs hourly. Cloudflare billing data defines
+authoritative aggregate charges and actual cycle boundaries. Detailed resource
+cost remains modeled; a product/day charge is proportionally allocated only
+where granular usage provides a defensible weighting. Unmapped billing products
+remain visible through account/product catchalls and explicit coverage gaps.
+
+The implementation details, API surface, cost labels, and retention policy are
+maintained in [usage-ledger.md](usage-ledger.md).
 
 ## Policy model
 
-`Policy` contains ordered warning, critical, and emergency limits at three
-levels:
+Legacy Policy values remain accepted by setup and the CLI. They migrate into
+ledger alert rules at these levels:
 
 - `accountDailySpend` for the protected account;
 - `familyDailySpend` for every cataloged billable product family;
 - `assetDailySpend` for every discovered Worker script and Durable Object
   namespace, keyed by family, scope, and resource ID;
 - metric/window thresholds for individual assets, including Durable Object
-  five-minute rows, 24-hour rows, and projected daily cost across every
+  local-day or billing-cycle usage and cost across every
   billable fast-telemetry meter.
+
+Each rule selects a target, metric, measurement, and period. It owns arbitrary
+threshold lines. New rules begin with Warning and Emergency. A migrated
+Critical threshold remains available as a disabled custom line. Alert
+instances are unique to one line, target, and period. Silencing an instance
+leaves future periods and the underlying rule active.
 
 First-run completion is stored in D1 as `onboarding_complete`. A new browser
 does not bypass setup, and the browser never receives or stores the break-glass
@@ -183,14 +209,19 @@ only the selected object is denied after rollout, but unrelated active objects
 in that script may restart as the version changes. Brolly exposes that
 collateral lifecycle risk in confirmation UI and audit records.
 
-Automatic execution requires two consecutive emergency observations from a
-raw usage meter. Billing reconciliation and projected-dollar estimates can
-alert and prepare evidence, but cannot authorize an automatic mutation. The
-actuator coalesces up to 15 exact-object changes into one Worker deployment and
-has three independent circuit breakers: five Workers per monitor pass, one
-automatic deployment per Worker per five minutes, and twelve automatic
-deployments per account per hour. A current successful configuration check
-(less than 24 hours old) is mandatory.
+Automatic execution requires global automatic mode, explicit opt-in on an applicable rule, complete
+fresh unsampled usage, an eligible inherited resource policy, and current fuse
+verification. Exact targets must stay breached through their confirmation
+window. Aggregate rules prioritize a child that crossed its own Emergency line,
+then require the same deterministic contributor in two consecutive scans, at
+least half of interval usage or aggregate excess, and a
+latest rate at least four times its rolling baseline. Billing and modeled cost
+can alert and prepare an operator-reviewed action. They cannot authorize an automatic mutation.
+
+The actuator coalesces up to 15 exact-object changes into one Worker
+deployment. Deployment-changing automation allows one action per Worker in 15
+minutes and three account-wide automatic quarantines per hour. Audit and
+rollback state are written before execution.
 
 ## Configuration evidence
 

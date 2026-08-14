@@ -8,6 +8,30 @@ const env = { BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Cloudflare durable object telemetry", () => {
+  it("collects 20,000 active objects in two stable 10,000-row pages", async () => {
+    let calls = 0;
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      calls += 1;
+      bodies.push(String(init?.body));
+      const offset = (calls - 1) * 10_000;
+      const rowsRead = Array.from({ length: 10_000 }, (_, index) => ({
+        dimensions: { namespaceId: "namespace-1", objectId: String(offset + index).padStart(64, "0") },
+        sum: { rowsRead: 1 },
+      }));
+      return Response.json({ data: { viewer: { accounts: [{ rowsRead }] } } });
+    }));
+
+    const result = await new CloudflareClient(env, new RunBudget()).durableObjectUsagePaged(0, 300_000, { expectedActiveObjects: 20_000 });
+
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ complete: true, pages: 2, continuation: null });
+    expect(result.samples).toHaveLength(20_000);
+    expect(bodies[0]).toContain("limit: 10000");
+    expect(bodies[0]).toContain("dimensions_objectId_ASC");
+    expect(bodies[1]).toContain('"rowsReadCursor":"0000000000000000000000000000000000000000000000000000000000009999"');
+  });
+
   it("unions the top objects for reads, writes, and requests", async () => {
     const group = (id: string, rowsRead: number, rowsWritten: number, requests: number) => ({
       dimensions: { namespaceId: "namespace-1", objectId: id }, sum: { rowsRead, rowsWritten, requests },
@@ -142,12 +166,13 @@ describe("Cloudflare Worker telemetry", () => {
       detail: expect.stringContaining("complete per-Worker data Cloudflare provides"),
     });
     expect(requestBody).toContain("workersInvocationsAdaptive");
-    expect(requestBody).toContain("sum_cpuTimeUs_DESC");
+    expect(requestBody).toContain("dimensions_scriptName_ASC");
+    expect(requestBody).toContain("scriptName_gt");
   });
 });
 
 describe("Cloudflare billing telemetry", () => {
-  it("uses the Billing Read-compatible PayGo endpoint and normalizes its service fields", async () => {
+  it("uses the authoritative daily usage endpoint with explicit date bounds", async () => {
     const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
     let requestedUrl = "";
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -160,17 +185,20 @@ describe("Cloudflare billing telemetry", () => {
         ConsumedUnit: "Count",
         EffectiveCost: 0.75,
         ListCost: 0.75,
-        ServiceName: "Workers Standard Requests",
-        ServiceFamilyName: "Workers",
-        ZoneId: "zone-1",
-        ZoneName: "example.com",
+        x_BillableMetricId: "workers_standard_requests",
+        x_BillableMetricName: "Workers Standard Requests",
+        x_ProductFamilyId: "workers",
+        x_ProductFamilyName: "Workers",
+        x_ZoneId: "zone-1",
+        x_ZoneName: "example.com",
       }] });
     }));
 
     const result = await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(Date.now() - 86_400_000, Date.now());
 
-    expect(new URL(requestedUrl).pathname).toBe("/client/v4/accounts/account-1/billable-usage");
-    expect(new URL(requestedUrl).search).toBe("");
+    expect(new URL(requestedUrl).pathname).toBe("/client/v4/accounts/account-1/billable/usage");
+    expect(new URL(requestedUrl).searchParams.get("from")).toBeTruthy();
+    expect(new URL(requestedUrl).searchParams.get("to")).toBeTruthy();
     expect(result?.[0]).toMatchObject({
       x_BillableMetricId: "workers_standard_requests",
       x_BillableMetricName: "Workers Standard Requests",
@@ -179,5 +207,26 @@ describe("Cloudflare billing telemetry", () => {
       x_ZoneId: "zone-1",
       BilledCost: 0.75,
     });
+  });
+
+  it("falls back to the Billing Read-compatible PayGo endpoint when v2 is restricted", async () => {
+    const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      paths.push(new URL(url).pathname);
+      if (paths.length === 1) return Response.json({ success: false, errors: [{ code: 10000, message: "restricted" }] }, { status: 403 });
+      return Response.json({ success: true, result: [{
+        BilledCost: 0.75, ChargePeriodStart: "2026-08-12T00:00:00Z", ChargePeriodEnd: "2026-08-13T00:00:00Z",
+        ConsumedQuantity: 150_000, ConsumedUnit: "Count", ServiceName: "Workers Standard Requests", ServiceFamilyName: "Workers",
+      }] });
+    }));
+
+    const result = await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(Date.now() - 86_400_000, Date.now());
+
+    expect(paths).toEqual([
+      "/client/v4/accounts/account-1/billable/usage",
+      "/client/v4/accounts/account-1/billable-usage",
+    ]);
+    expect(result?.[0]).toMatchObject({ x_BillableMetricId: "workers_standard_requests", x_ProductFamilyId: "workers" });
   });
 });

@@ -5,7 +5,7 @@ type Row = Record<string, unknown>;
 
 export async function dashboardData(env: Env): Promise<Record<string, unknown>> {
   const now = Date.now();
-  const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, actionResult] = await Promise.all([
+  const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, currentSpendResult, actionResult] = await Promise.all([
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(
       `SELECT i.*,a.name AS asset_name,a.parent_id,a.scope,a.tier,a.metadata_json,
@@ -21,13 +21,24 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
        ORDER BY CASE i.severity WHEN 'emergency' THEN 0 WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,i.last_seen DESC LIMIT 250`,
     ).all<Row>(),
     env.DB.prepare(`SELECT family,metric,finest_scope,state,detail,checked_at FROM metric_coverage ORDER BY CASE state WHEN 'permission_denied' THEN 0 WHEN 'unavailable' THEN 1 WHEN 'delayed' THEN 2 ELSE 3 END,family,metric`).all<Row>(),
-    env.DB.prepare(`SELECT family,COUNT(*) AS asset_count,MAX(seen_at) AS last_seen FROM assets GROUP BY family ORDER BY asset_count DESC,family`).all<Row>(),
-    env.DB.prepare(`SELECT tier,COUNT(*) AS asset_count FROM assets GROUP BY tier`).all<Row>(),
     env.DB.prepare(
-      `SELECT family,metric,value,estimated_cost_usd,source,start_at,end_at FROM metric_samples
-       WHERE metric IN ('rolling_24h_cost_usd','projected_daily_cost_usd','account_daily_billed_cost_usd')
-         AND end_at>=?1 ORDER BY end_at ASC LIMIT 2500`,
-    ).bind(now - 86_400_000).all<Row>(),
+      `SELECT product_family AS family,COUNT(*) AS asset_count,MAX(last_seen_at) AS last_seen
+       FROM resources WHERE resource_type NOT IN ('account','product')
+       GROUP BY product_family ORDER BY asset_count DESC,product_family`,
+    ).all<Row>(),
+    env.DB.prepare(`SELECT tier,COUNT(*) AS asset_count FROM resources WHERE resource_type NOT IN ('account','product') GROUP BY tier`).all<Row>(),
+    env.DB.prepare(
+      `SELECT r.product_family AS family,u.local_day,u.period_start_at,u.period_end_at,
+         u.estimated_cost_usd,u.authoritative_allocated_cost_usd,u.completeness,u.revised_at
+       FROM usage_daily u JOIN resources r ON r.id=u.resource_id
+       WHERE r.resource_type='product' AND u.period_end_at>=?1
+       ORDER BY u.period_start_at ASC LIMIT 2500`,
+    ).bind(now - 31 * 86_400_000).all<Row>(),
+    env.DB.prepare(
+      `SELECT product_family AS family,local_day,payload_json,updated_at
+       FROM usage_accumulator_shards WHERE scope_type='product'
+       ORDER BY local_day ASC,updated_at ASC LIMIT 1000`,
+    ).all<Row>(),
     env.DB.prepare(`SELECT id,incident_id,family,asset_id,kind,state,reason,error,created_at,updated_at FROM actions ORDER BY updated_at DESC LIMIT 20`).all<Row>(),
   ]);
   const policy = readPolicy(policyRow?.value);
@@ -37,7 +48,7 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
     detail: row.detail == null ? null : String(row.detail), checkedAt: Number(row.checked_at),
   }));
   const coverageGaps = coverage.filter(item => item.state !== "healthy");
-  const spend = spendView(spendResult.results, coverage, now);
+  const spend = spendView(spendResult.results, currentSpendResult.results, coverage, now);
   const familyDefinitions = new Map(METRIC_CATALOG.map(item => [item.family, item]));
   const assetFamilies = assetFamilyResult.results.map(row => {
     const family = String(row.family);
@@ -167,37 +178,68 @@ function incidentView(row: Row): Record<string, unknown> {
   };
 }
 
-function spendView(rows: Row[], coverage: Array<{ family: string; metric: string; state: string; checkedAt: number }>, now: number): Record<string, unknown> {
-  const rolling = rows.filter(row => row.metric === "rolling_24h_cost_usd");
-  const projected = rows.filter(row => row.metric === "projected_daily_cost_usd");
-  const preferred = rolling.length > 0 ? rolling : projected;
+function spendView(rows: Row[], currentRows: Row[], coverage: Array<{ family: string; metric: string; state: string; checkedAt: number }>, now: number): Record<string, unknown> {
+  const preferred = rows.map(row => ({
+    family: row.family, value: row.authoritative_allocated_cost_usd ?? row.estimated_cost_usd ?? 0,
+    estimated: row.estimated_cost_usd ?? 0, authoritative: row.authoritative_allocated_cost_usd != null,
+    start_at: row.period_start_at, end_at: row.period_end_at, updated_at: row.revised_at,
+    quality: row.completeness,
+  }));
+  for (const row of currentRows) {
+    const productCost = accumulatorProductCost(String(row.payload_json ?? "{}"));
+    if (!productCost) continue;
+    preferred.push({
+      family: row.family, value: productCost.estimatedUsd, estimated: productCost.estimatedUsd,
+      authoritative: false, start_at: Number(row.updated_at) - 5 * 60_000, end_at: row.updated_at,
+      updated_at: row.updated_at, quality: productCost.quality,
+    });
+  }
   const latestByFamily = new Map<string, Row>();
   for (const row of preferred) {
     const current = latestByFamily.get(String(row.family));
     if (!current || Number(row.end_at) > Number(current.end_at)) latestByFamily.set(String(row.family), row);
   }
   const categories = [...latestByFamily.entries()].map(([family, row]) => ({
-    family, label: familyLabel(family), estimatedUsd: Number(row.value), updatedAt: Number(row.end_at),
-    coverage: coverage.some(item => item.family === family && item.state === "healthy") ? "healthy" : "partial",
+    family, label: familyLabel(family), estimatedUsd: Number(row.value), updatedAt: Number(row.updated_at ?? row.end_at),
+    coverage: row.quality === "complete" && coverage.some(item => item.family === family && item.state === "healthy") ? "healthy" : String(row.quality ?? "partial"),
+    authoritative: Boolean(row.authoritative),
   })).sort((a, b) => b.estimatedUsd - a.estimatedUsd);
   const bucketMap = new Map<number, Map<string, number>>();
   for (const row of preferred) {
-    const bucket = Math.floor(Number(row.end_at) / 900_000) * 900_000;
+    const bucket = Number(row.end_at);
     const family = String(row.family);
     const values = bucketMap.get(bucket) ?? new Map<string, number>();
     values.set(family, Number(row.value));
     bucketMap.set(bucket, values);
   }
-  const history = [...bucketMap.entries()].sort((a, b) => a[0] - b[0]).slice(-96).map(([at, values]) => ({
+  const history = [...bucketMap.entries()].sort((a, b) => a[0] - b[0]).slice(-31).map(([at, values]) => ({
     at, totalUsd: [...values.values()].reduce((sum, value) => sum + value, 0), categories: Object.fromEntries(values),
   }));
   const latestAt = categories.reduce((latest, item) => Math.max(latest, item.updatedAt), 0) || null;
   return {
-    label: rolling.length > 0 ? "Estimated usage · rolling 24 hours" : "Projected daily usage at current rate",
+    label: "Stored daily usage",
     estimatedTotalUsd: categories.reduce((sum, item) => sum + item.estimatedUsd, 0), categories, history,
-    updatedAt: latestAt, authoritative: false, stale: latestAt === null || now - latestAt > 20 * 60_000,
-    note: "Gross estimate from fast telemetry. Included usage, discounts, and invoice adjustments are not applied.",
+    updatedAt: latestAt, authoritative: categories.length > 0 && categories.every(item => item.authoritative), stale: latestAt === null || now - latestAt > 20 * 60_000,
+    note: "Daily ledger values include data-quality state. Product totals use authoritative billing cost when reconciliation is available.",
   };
+}
+
+function accumulatorProductCost(value: string): { estimatedUsd: number; quality: string } | null {
+  try {
+    const payload = JSON.parse(value) as { resources?: Record<string, { metrics?: Record<string, { estimatedDayUsd?: number; quality?: string }> }> };
+    const resources = Object.values(payload.resources ?? {});
+    if (!resources.length) return null;
+    let estimatedUsd = 0;
+    let quality = "complete";
+    const rank: Record<string, number> = { complete: 0, sampled: 1, partial: 2, stale: 3, missing: 4 };
+    for (const resource of resources) {
+      for (const metric of Object.values(resource.metrics ?? {})) {
+        estimatedUsd += Number(metric.estimatedDayUsd ?? 0);
+        if ((rank[metric.quality ?? "missing"] ?? 4) > (rank[quality] ?? 0)) quality = metric.quality ?? "missing";
+      }
+    }
+    return { estimatedUsd, quality };
+  } catch { return null; }
 }
 
 function readPolicy(value?: string): Policy {

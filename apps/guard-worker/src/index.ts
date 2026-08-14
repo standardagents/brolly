@@ -8,6 +8,12 @@ import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
 import { BudgetEstimateInProgressError, billingAccessConfiguration, configureOnboardingBillingAccess, onboardingBudgetEstimates, removeOnboardingBillingAccess } from "./budget-estimates.js";
 import { releaseStatus, saveUpdateRepository } from "./updates.js";
+import { ledgerApiRoute } from "./ledger-api.js";
+import { LedgerStore } from "./ledger-store.js";
+import { migrateLegacyPolicyRules } from "./policy-migration.js";
+import { ensureOnboardingBackfill } from "./backfill.js";
+import { notificationWebhookUrl } from "@standardagents/brolly-notifiers";
+import { configuredLedgerRunLimits } from "./ledger-settings.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -27,6 +33,9 @@ export default {
     const activeEnv = await configuredEnv(env, actor);
     if (!activeEnv) return Response.json({ error: "Choose one Cloudflare account during sign-in before using Brolly" }, { status: 409 });
     env = activeEnv;
+
+    const ledgerResponse = await ledgerApiRoute(request, env, actor.actor);
+    if (ledgerResponse) return ledgerResponse;
 
     if (url.pathname === "/api/dashboard" && request.method === "GET") {
       return Response.json(await dashboardData(env));
@@ -136,8 +145,12 @@ export default {
         env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('onboarding_complete','true',?1) ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at`).bind(now),
       ]);
       for (let index = 0; index < integrationStatements.length; index += 100) await env.DB.batch(integrationStatements.slice(index, index + 100));
+      const ledger = new LedgerStore(env.DB);
+      await ledger.syncMetricCatalog();
+      await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, body.policy, true);
+      const backfill = await ensureOnboardingBackfill(env.DB, env.BROLLY_ACCOUNT_ID, now);
       await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { mode: body.policy.mode, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, runtimeIntegrations: body.integrations?.filter(item => item.installed).length ?? 0, thresholds: body.policy.thresholds.length });
-      return Response.json({ ok: true, policy: body.policy });
+      return Response.json({ ok: true, policy: body.policy, backfill });
     }
 
     if (url.pathname === "/api/status" && request.method === "GET") {
@@ -156,8 +169,41 @@ export default {
     }
 
     if (url.pathname === "/api/run" && request.method === "POST") {
-      await runMonitor(env);
-      return Response.json({ ok: true });
+      await runMonitor(env, { force: true });
+      const [lastRun, collectors, runLimits] = await Promise.all([
+        env.DB.prepare(
+          `SELECT id,started_at,completed_at,status,coverage_status,graphql_queries,rest_requests,
+             d1_rows_read,d1_rows_written,continuation_json
+           FROM monitor_runs WHERE account_id=?1 ORDER BY started_at DESC LIMIT 1`,
+        ).bind(env.BROLLY_ACCOUNT_ID).first<Record<string, unknown>>(),
+        env.DB.prepare(
+          `SELECT collector_key,dataset,watermark_at,state FROM collector_capabilities
+           WHERE account_id=?1 ORDER BY collector_key,dataset`,
+        ).bind(env.BROLLY_ACCOUNT_ID).all<Record<string, unknown>>(),
+        configuredLedgerRunLimits(env.DB),
+      ]);
+      return Response.json({
+        ok: true,
+        budget: runLimits,
+        datasets: collectors.results.map(row => ({
+          collectorKey: row.collector_key,
+          dataset: row.dataset,
+          watermarkAt: row.watermark_at,
+          state: row.state,
+        })),
+        run: lastRun ? {
+          id: lastRun.id,
+          startedAt: lastRun.started_at,
+          completedAt: lastRun.completed_at,
+          status: lastRun.status,
+          coverage: lastRun.coverage_status,
+          graphqlQueries: lastRun.graphql_queries,
+          restRequests: lastRun.rest_requests,
+          d1RowsRead: lastRun.d1_rows_read,
+          d1RowsWritten: lastRun.d1_rows_written,
+          continuation: lastRun.continuation_json ? JSON.parse(String(lastRun.continuation_json)) : null,
+        } : null,
+      });
     }
 
     if (url.pathname === "/api/policy" && request.method === "GET") {
@@ -171,6 +217,8 @@ export default {
         return Response.json({ error: "Invalid policy" }, { status: 400 });
       }
       await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(policy), Date.now()).run();
+      await new LedgerStore(env.DB).syncMetricCatalog();
+      await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, policy, true);
       await audit(env.DB, "admin", "policy.update", policy.version, { mode: policy.mode, thresholds: policy.thresholds.length });
       return Response.json({ ok: true, policy });
     }
@@ -255,7 +303,7 @@ export default {
 
     if (url.pathname === "/api/targets" && request.method === "POST") {
       const body = await request.json<{ id?: string; kind: string; config: Record<string, unknown>; enabled?: boolean; minimumSeverity?: string }>();
-      if (!["discord", "slack", "resend", "postmark", "twilio"].includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
+      if (!["discord", "slack", "webhook", "resend", "postmark", "twilio"].includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
       if (!["info", "warning", "critical", "emergency"].includes(body.minimumSeverity ?? "warning")) return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
       const configError = validateNotificationConfig(body.kind, body.config);
       if (configError) return Response.json({ error: configError }, { status: 400 });
@@ -299,8 +347,21 @@ export default {
       if (current.tier === "control_plane" && body.tier !== "control_plane") return Response.json({ error: "Control-plane protection is immutable" }, { status: 409 });
       if (isBrollyWorker(env, family, id) && body.tier !== "control_plane") return Response.json({ error: "Brolly cannot remove protection from its own Worker" }, { status: 409 });
       if (body.tags && (Object.hasOwn(body.tags, "workerScript") || Object.hasOwn(body.tags, "cloudflareWorkerScript"))) return Response.json({ error: "Worker ownership is discovered from Cloudflare and cannot be overridden" }, { status: 400 });
-      const result = await env.DB.prepare(`UPDATE assets SET tier=?4,metadata_json=json_patch(metadata_json,?5),name=COALESCE(?6,name),seen_at=?7 WHERE account_id=?1 AND family=?2 AND asset_id=?3`).bind(env.BROLLY_ACCOUNT_ID, family, id, body.tier, JSON.stringify(body.tags ?? {}), body.name ?? null, Date.now()).run();
-      if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "Asset not found" }, { status: 404 });
+      const now = Date.now();
+      const results = await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE assets SET tier=?4,metadata_json=json_patch(metadata_json,?5),
+             name=COALESCE(?6,name),seen_at=?7
+           WHERE account_id=?1 AND family=?2 AND asset_id=?3`,
+        ).bind(env.BROLLY_ACCOUNT_ID, family, id, body.tier, JSON.stringify(body.tags ?? {}), body.name ?? null, now),
+        env.DB.prepare(
+          `UPDATE resources SET tier=?4,metadata_json=json_patch(metadata_json,?5),
+             display_name=COALESCE(?6,display_name),last_seen_at=MAX(last_seen_at,?7)
+           WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+             AND resource_type NOT IN ('account','product')`,
+        ).bind(env.BROLLY_ACCOUNT_ID, family, id, body.tier, JSON.stringify(body.tags ?? {}), body.name ?? null, now),
+      ]);
+      if ((results[0]?.meta.changes ?? 0) === 0) return Response.json({ error: "Asset not found" }, { status: 404 });
       await audit(env.DB, "admin", "asset.classify", `${family}/${id}`, body);
       return Response.json({ ok: true });
     }
@@ -320,8 +381,17 @@ async function runAction(env: Env, action: ControlAction, control: { workerScrip
   if (requested === "quarantine") {
     const incident = await env.DB.prepare(`SELECT severity,status,last_seen FROM incidents WHERE id=?1 LIMIT 1`)
       .bind(action.incidentId).first<Record<string, unknown>>();
-    const incidentError = executableIncidentError(incident);
-    if (incidentError) return Response.json({ error: incidentError }, { status: 409 });
+    if (incident) {
+      const incidentError = executableIncidentError(incident);
+      if (incidentError) return Response.json({ error: incidentError }, { status: 409 });
+    } else {
+      const alertInstance = await env.DB.prepare(
+        `SELECT status,historical,period_end_at,last_breached_at,data_quality
+         FROM alert_instances WHERE id=?1 LIMIT 1`,
+      ).bind(action.incidentId).first<Record<string, unknown>>();
+      const alertError = executableAlertInstanceError(alertInstance);
+      if (alertError) return Response.json({ error: alertError }, { status: 409 });
+    }
     if (["control_plane", "critical", "unclassified"].includes(action.asset.tier)) {
       return Response.json({ error: `Asset is now protected as ${action.asset.tier}; prepare a new action after reviewing its classification` }, { status: 409 });
     }
@@ -373,7 +443,31 @@ export function executableIncidentError(incident: Record<string, unknown> | null
   return null;
 }
 
+export function executableAlertInstanceError(instance: Record<string, unknown> | null, now = Date.now()): string | null {
+  if (!instance) return "The source alert instance no longer exists; no control was applied";
+  if (String(instance.status) !== "open" || Number(instance.historical) === 1 || Number(instance.period_end_at) <= now) {
+    return "The source alert instance is inactive; no control was applied";
+  }
+  if (["missing", "stale"].includes(String(instance.data_quality))) {
+    return "The source alert evidence is unavailable or stale; run a fresh scan before applying control";
+  }
+  const lastBreachedAt = Number(instance.last_breached_at);
+  if (!Number.isFinite(lastBreachedAt) || lastBreachedAt < now - ACTION_INCIDENT_MAX_AGE_MS) {
+    return "The source alert evidence is stale; run a fresh scan before applying control";
+  }
+  return null;
+}
+
 async function assetFromRows(env: Env, primary: Record<string, unknown>, asset: Record<string, unknown> | null): Promise<AssetRef> {
+  const current = await env.DB.prepare(
+    `SELECT r.*,p.cloudflare_id AS parent_cloudflare_id,p.tier AS parent_tier,
+       p.metadata_json AS parent_metadata_json
+     FROM resources r LEFT JOIN resources p ON p.id=r.parent_resource_id
+     WHERE r.account_id=?1 AND r.product_family=?2 AND r.cloudflare_id=?3
+       AND (r.resource_type LIKE '%:resource' OR r.resource_type LIKE '%:object')
+     ORDER BY CASE WHEN r.resource_type LIKE '%:object' THEN 0 ELSE 1 END LIMIT 1`,
+  ).bind(String(primary.account_id), String(primary.family), String(primary.asset_id)).first<Record<string, unknown>>();
+  if (current) return assetFromResourceRow(current);
   let tags: Record<string, string> = {};
   try { tags = JSON.parse(String(asset?.metadata_json ?? "{}")) as Record<string, string>; } catch { /* optional metadata */ }
   let parentTier: AssetRef["tier"] | undefined;
@@ -396,6 +490,30 @@ async function assetFromRows(env: Env, primary: Record<string, unknown>, asset: 
   };
 }
 
+function assetFromResourceRow(row: Record<string, unknown>): AssetRef {
+  const directTags = parseStringRecord(row.metadata_json);
+  const parentTags = parseStringRecord(row.parent_metadata_json);
+  const directTier = String(row.tier) as AssetRef["tier"];
+  const parentTier = row.parent_tier == null ? undefined : String(row.parent_tier) as AssetRef["tier"];
+  const suffix = String(row.resource_type).split(":").at(-1);
+  return {
+    accountId: String(row.account_id), family: String(row.product_family), id: String(row.cloudflare_id),
+    parentId: row.parent_cloudflare_id == null ? undefined : String(row.parent_cloudflare_id),
+    name: row.display_name == null ? undefined : String(row.display_name),
+    scope: suffix === "object" || suffix === "namespace" || suffix === "resource" || suffix === "zone" || suffix === "account"
+      ? suffix : "resource",
+    tier: directTier !== "unclassified" ? directTier : parentTier ?? directTier,
+    tags: { ...parentTags, ...directTags },
+  };
+}
+
+function parseStringRecord(value: unknown): Record<string, string> {
+  try {
+    const parsed = JSON.parse(String(value ?? "{}")) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch { return {}; }
+}
+
 function authoritativeWorkerScript(asset: AssetRef): string | undefined {
   if (asset.family === "workers" && asset.scope === "resource") return asset.id;
   if (asset.family === "durable_objects" && asset.scope === "object") return asset.tags?.cloudflareWorkerScript;
@@ -410,18 +528,14 @@ function isBrollyWorker(env: Env, family: string, id: string): boolean {
 export function validateNotificationConfig(kind: string, config: Record<string, unknown> | null | undefined): string | null {
   if (!config || typeof config !== "object") return "Notification configuration is required";
   const present = (key: string) => typeof config[key] === "string" && String(config[key]).trim().length > 0;
-  if ((kind === "discord" || kind === "slack") && !present("url")) return `${kind} webhook URL is required`;
-  if (kind === "discord" || kind === "slack") {
-    let url: URL;
-    try { url = new URL(String(config.url)); } catch { return `${kind} webhook URL is invalid`; }
-    if (url.protocol !== "https:" || url.username || url.password || url.port) return `${kind} webhook must use a standard HTTPS URL`;
-    if (kind === "discord" && !["discord.com", "discordapp.com"].includes(url.hostname)) return "Discord webhooks must use discord.com";
-    if (kind === "discord" && !url.pathname.startsWith("/api/webhooks/")) return "Discord webhook path is invalid";
-    if (kind === "slack" && url.hostname !== "hooks.slack.com") return "Slack webhooks must use hooks.slack.com";
-    if (kind === "slack" && !url.pathname.startsWith("/services/")) return "Slack webhook path is invalid";
+  if ((kind === "discord" || kind === "slack" || kind === "webhook") && !present("url")) return `${kind} webhook URL is required`;
+  if (kind === "discord" || kind === "slack" || kind === "webhook") {
+    try { notificationWebhookUrl(kind, String(config.url)); } catch (error) {
+      return error instanceof Error ? error.message : `${kind} webhook URL is invalid`;
+    }
   }
   if (kind === "twilio" && !["accountSid", "token", "from", "to"].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
-  if (kind === "resend" && !["apiKey", "from", "to"].every(present)) return "Resend API key, from address, and destination address are required";
+  if (kind === "resend" && !["token", "from", "to"].every(present)) return "Resend API key, from address, and destination address are required";
   if (kind === "postmark" && !["token", "from", "to"].every(present)) return "Postmark token, from address, and destination address are required";
   return null;
 }

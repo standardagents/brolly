@@ -3,12 +3,18 @@ import { api, authSession, logoutSession } from "./api";
 import { AppShell } from "./components/layout";
 import { connectionHealth } from "./lib/health";
 import { BudgetWizard } from "./onboarding/BudgetWizard";
-import { AssetsPage } from "./pages/AssetsPage";
+import { ResourcesPage } from "./pages/ResourcesPage";
 import { ConfigurationPage } from "./pages/ConfigurationPage";
 import { IncidentsPage } from "./pages/IncidentsPage";
 import { LoadingScreen, LoginPage } from "./pages/LoginPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UsagePage } from "./pages/UsagePage";
+import { LimitsPage } from "./pages/LimitsPage";
+import { AlertInstancesPage } from "./pages/AlertInstancesPage";
+import { MonitoringPage } from "./pages/MonitoringPage";
+import { BackfillPage } from "./pages/BackfillPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { useRoute } from "./router";
 import type { DashboardData, Incident, OnboardingData, ReleaseStatus } from "./types";
 
@@ -28,6 +34,7 @@ export default function App() {
   const [focusIncidentId, setFocusIncidentId] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
+  const [scanSummary, setScanSummary] = useState("");
   const [release, setRelease] = useState<ReleaseStatus | null>(null);
   const releaseCheckedAt = useRef(0);
 
@@ -123,8 +130,19 @@ export default function App() {
   async function scan() {
     setScanning(true);
     setScanError("");
+    setScanSummary("");
     try {
-      await api("/api/run", token, { method: "POST" });
+      const result = await api<{
+        budget: { graphqlQueries: number; restRequests: number };
+        datasets: Array<{ dataset: string; watermarkAt: number | null; state: string }>;
+        run: null | { status: string; coverage: string; graphqlQueries: number; restRequests: number };
+      }>("/api/run", token, { method: "POST" });
+      const latestWatermark = result.datasets.reduce((latest, item) => Math.max(latest, item.watermarkAt ?? 0), 0);
+      setScanSummary(
+        `Collector ${result.run?.status ?? "completed"} with ${result.run?.coverage ?? "stored"} coverage. `
+        + `${result.run?.graphqlQueries ?? 0}/${result.budget.graphqlQueries} GraphQL queries and ${result.run?.restRequests ?? 0}/${result.budget.restRequests} REST requests were used.`
+        + (latestWatermark ? ` Latest ingestion watermark: ${new Date(latestWatermark).toLocaleString()}.` : " Ingestion watermarks remain pending."),
+      );
       await loadDashboard();
     } catch (cause) {
       setScanError(cause instanceof Error ? cause.message : String(cause));
@@ -181,11 +199,15 @@ export default function App() {
           connection={connection}
           token={token}
           scanError={scanError}
+          scanSummary={scanSummary}
           onNavigate={navigate}
           onOpenIncident={openIncident}
           onBudgets={() => void openWizard(1)}
         />
       )}
+      {route === "usage" && <UsagePage token={token} />}
+      {route === "limits" && <LimitsPage token={token} />}
+      {route === "alerts" && <AlertInstancesPage token={token} />}
       {route === "incidents" && (
         <IncidentsPage
           data={dashboard}
@@ -196,7 +218,7 @@ export default function App() {
         />
       )}
       {route === "assets" && (
-        <AssetsPage data={dashboard} token={token} onNavigate={navigate} onBudgets={() => void openWizard(3)} />
+        <ResourcesPage token={token} onNavigate={navigate} />
       )}
       {route === "configuration" && (
         <ConfigurationPage
@@ -207,6 +229,9 @@ export default function App() {
           onEditInstall={() => void openWizard(5)}
         />
       )}
+      {route === "notifications" && <NotificationsPage token={token} />}
+      {route === "monitoring" && <MonitoringPage token={token} />}
+      {route === "backfill" && <BackfillPage token={token} />}
       {route === "settings" && (
         <SettingsPage
           data={dashboard}

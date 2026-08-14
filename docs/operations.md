@@ -1,22 +1,24 @@
 # Operations
 
-The minute cron is intentionally bounded. If it reaches a request, row, sample, or wall-time budget, it stops collecting, commits a `monitoring_budget_exhausted` incident, and sends one deduplicated notification. It does not retry in a tight loop.
+The minute cron claims bounded work. Active telemetry is due every five
+minutes. Inventory, Billing Read reconciliation, and retention maintenance run
+hourly. Capability discovery runs daily. Hot watch may claim a one-minute pass
+while a current alert is open and Cloudflare's completed ingestion watermark
+has advanced. Newest-first backfill consumes only budget left after active
+protection work.
 
-Each pass refreshes inventory for Workers, Durable Object namespaces, Queues,
-D1, R2, KV, Vectorize, Hyperdrive, Pages, AI Gateway, and zones, then issues one
-aggregate Durable Objects GraphQL request and one aggregate Workers GraphQL
-request over the latest five-minute window. A one-page account normally uses
-about 13 Cloudflare API requests. Every 15 minutes Brolly adds one direct
-rolling-24-hour Durable Objects query; once daily it adds the optional Billing
-API reconciliation. Inventory pagination can increase that count, but the hard
-limit remains 150 API calls per pass.
+One run has default limits of 300 GraphQL dataset queries, 50 REST requests,
+100,000 D1 rows read, 50,000 D1 rows written, 30 dataset pages, four backfill
+slices, and 45 seconds. Configurable values remain under hard maxima. Budget
+exhaustion closes the monitor run as partial, preserves every continuation
+cursor, and keeps incomplete telemetry out of automatic enforcement. The
+Monitoring page edits these ceilings and displays each product maximum.
 
-These analytics queries do not wake each Durable Object and do not read its
-private SQLite rows. The monitoring cost is Brolly's own scheduled Worker
-invocation/CPU and bounded D1 activity. Per-pass limits are 25,000 D1 row
-operations, 20,000 samples, and 45 seconds. They are workload ceilings, not a
-guaranteed dollar ceiling. A manual dashboard scan runs the same monitor; the
-55-second lease prevents it from overlapping the automatic minute pass.
+Durable Object and Worker datasets use stable identifier ordering and keyset
+pages of up to 10,000 rows. The collectors query all supported billable sums in
+bounded dataset requests. They do not wake each Durable Object or read customer
+application storage. A 55-second lease prevents explicit dashboard refreshes
+from overlapping the scheduled pass.
 
 The optional first-run usage check is narrower than a monitor pass. It makes
 one rolling-24-hour Durable Objects Analytics request and one rolling-24-hour
@@ -28,30 +30,25 @@ and no incidents, notifications, controls, or policy changes are created. The
 browser applies returned suggestions only to its editable draft; setup must be
 finished before any suggested limit is saved.
 
-Live Durable Object evaluation covers every object returned by eight bounded
-per-metric operation queries, plus retained storage at Cloudflare's available
-namespace/account scopes. Historical baseline retention runs only every
-15 minutes and stores operation metrics for at most the 333 highest
-estimated-cost objects. New inventory is visible immediately, while existing asset
-freshness writes are coalesced to once per hour. This
-prevents Brolly's own D1 writes from scaling without a deterministic ceiling.
+One fixed completed window and one fixed preceding correction window update
+correction-safe local-day and billing-cycle accumulators. Persisted continuations
+retain their interval bounds across restarts. Each resource metric retains a bounded 12-scan
+baseline. Completed days seal into compact history. The 730-day target applies
+to account, product, namespace, and individual-resource rows under D1 capacity
+safeguards.
 
-The gross cost projection applies the published paid-plan marginal rates and
-the 20:1 incoming WebSocket message conversion. It deliberately ignores monthly
-included usage, discounts, and credits; daily Billing Read reconciliation is the
-authoritative backstop. SQLite retained data is attributable only to namespace
-and legacy key-value retained data only to account because those are the finest
-dimensions in Cloudflare Analytics.
+The dashboard separates evidence clearly:
 
-The dashboard separates response and observability state:
+- complete usage comes from a fully collected unsampled window;
+- partial, sampled, stale, and missing values retain those labels;
+- modeled resource cost is an estimate;
+- proportional billing allocation is labeled allocated;
+- reconciled account and product charges are authoritative aggregates.
 
-- **Usage incidents** crossed a configured hard or anomaly threshold and can
-  be acknowledged or routed into a reversible control.
-- **Coverage gaps** mean Cloudflare did not expose a usage signal, returned it
-  late, or denied the installation permission to read it. They do not mean zero usage.
-  They are prominent but are not counted as spend incidents.
-- **Current daily spend** is a gross rolling-24-hour telemetry estimate by
-  product category. It is not an invoice and is labeled as such.
+The **Monitoring cost** page reports query and D1 budgets, Worker usage,
+storage pressure, estimated monthly operating cost, collector deferrals, and
+recent monitor runs. **Backfill & retention** reports slice coverage, retries,
+oldest retained dates, and capacity policy.
 
 Before Cloudflare OAuth is completed, the dashboard is an unauthenticated local
 preview and live protection is inactive. A signed-in installation takes its
@@ -166,14 +163,12 @@ than a Brolly OAuth scope, the same screen verifies the token against Cloudflare
 AES-GCM-encrypted in the installation's D1; plaintext exists only for the
 request and Cloudflare API call. `CLOUDFLARE_BILLING_TOKEN`, when supplied as a
 Worker secret, remains the higher-precedence operator-managed alternative.
-Billing reconciliation reads Cloudflare's PayGo v1 `/billable-usage` endpoint,
-which explicitly accepts Billing Read tokens and returns the current billing
-period. Brolly does not call the similarly named `/billable/usage` v2 endpoint:
-Cloudflare marks v2 as restricted, and ordinary account Billing Read tokens are
-rejected there. Cloudflare currently exposes the billable-usage dashboard and
-API only to Pay-as-you-go accounts; Enterprise contract accounts continue with
-bounded Analytics estimates unless Cloudflare makes an invoice-aligned API
-available to that account.
+Billing reconciliation first requests Cloudflare's restricted v2
+`/billable/usage` endpoint with explicit date bounds. A 403 or 404 falls back
+to the Billing Read-compatible PayGo `/billable-usage` endpoint. The response
+supplies authoritative aggregate charges and actual billing-cycle boundaries.
+Enterprise accounts continue with bounded Analytics estimates and explicit
+billing coverage state when an invoice-aligned result is unavailable.
 The next account-budget screen can apply the cached historical suggestions.
 Brolly OAuth access is renewable: the publisher client enables refresh tokens,
 the authorization request includes `offline_access`, and each installation
@@ -207,17 +202,21 @@ rollback or desired fuse state is committed to D1 and audited before any
 Cloudflare mutation starts. Brolly never deletes a Worker, route, domain,
 queue, Durable Object, or stored data.
 
-Automatic actions are deliberately narrower: only classified `standard` or
-`disposable` Durable Objects and Workers marked with a tested
-`@standardagents/brolly-runtime` fuse can be quarantined automatically at an
-emergency threshold. The emergency must be observed twice, come from a raw
-usage meter, and remain fresh; projected cost and billing totals never trigger
-an automatic mutation. Verification must have passed in the last 24 hours.
-Brolly limits each monitor pass to five Worker rollouts, coalesces at most 15
-object actions per Worker, permits one automatic rollout per Worker per five
-minutes, and opens an account circuit breaker after 12 automatic rollouts in an
-hour. Queue controls always require an explicit operator action.
-`control_plane`, `critical`, and `unclassified` assets cannot be stopped.
+Automatic actions require global automatic mode and explicit opt-in on an applicable alert rule. Exact
+Worker and Durable Object targets need complete, fresh, unsampled usage,
+`standard` or `disposable` classification, inherited permission, a verified
+`@standardagents/brolly-runtime` fuse, and a sustained confirmation window.
+Aggregate contributor rules prioritize a child that crossed its own Emergency
+line. They require the same deterministic candidate in two consecutive scans,
+at least half of current interval usage or aggregate excess, and at least four
+times the candidate's rolling baseline. Modeled cost,
+allocated cost, billing totals, sampled data, partial data, missing data, and
+stale data can support operator review and cannot authorize an automatic mutation.
+
+Brolly coalesces at most 15 exact-object changes per Worker. Automation allows
+one deployment-changing action per Worker in 15 minutes and three automatic
+quarantines per account hour. Queue controls require explicit operator action.
+`control_plane`, `critical`, and `unclassified` assets remain ineligible.
 
 Exact-object quarantine is customer-visible downtime for that object. Worker
 ingress can return HTTP 503 before waking it, and the constructor throws before
@@ -254,21 +253,20 @@ presence, and runtime-marker result. A new inventory scan can add resources
 without affecting the statuses of already verified Workers; the new rows begin
 as not configured or partial until explicitly declared and refreshed.
 
-Notification targets are capped at 20 deliveries per hour. Twilio targets are
-additionally capped at five SMS messages per day. Incident notifications roll
-up for 15 minutes, while the configured daily summary bypasses severity filters
-but still respects delivery caps. Provider credentials are AES-GCM encrypted in
-D1 with a key held only as a Worker secret.
+Notification targets are capped at 20 deliveries per hour. Twilio targets also
+have a five-message daily cap. Warning lines default to one delivery for each
+period instance. Emergency lines default to immediate delivery followed by
+six-hour repeats while the instance stays open and unsilenced. Provider
+credentials are AES-GCM encrypted with a Worker-secret key.
 
-Discord, Slack, and Twilio SMS can be configured under **Incident
-notifications** on the separate `/settings` page. The read API returns only target status,
-minimum severity, and last-delivery metadata; it never decrypts or returns a
-webhook URL, Twilio token, or phone number. Use **Replace credentials** to rotate
-a destination, **Pause** to stop delivery without losing its encrypted config,
-and the severity menu to change escalation without re-entering secrets. Saving
-a target does not emit a test message.
+Discord, Slack, Resend, Postmark, Twilio SMS, and generic HTTPS webhooks are
+configured on **Notifications**. The read API returns target status, minimum
+severity, and last-delivery metadata. It never decrypts a destination
+credential. Generic webhooks refuse redirects and local or private-network
+addresses. **Replace credentials** rotates a destination, and **Pause** stops
+delivery while retaining encrypted configuration.
 
-Control actions on the **Incidents & controls** page (the overview shows the
+Control actions on the **Actions & quarantine** page (the overview shows the
 five most recent) are operator controls, not a passive log. Open a row to see
 its target, reason, timestamps, provider link, current state, and any failure.
 A `prepared` action can be approved and executed there; a `succeeded` action

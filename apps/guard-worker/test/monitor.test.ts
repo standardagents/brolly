@@ -1,45 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { Incident } from "@standardagents/brolly-core";
-import { confirmedAutomaticEmergency } from "../src/monitor.js";
+import { collectorWindow, windowContinuation } from "../src/monitor.js";
 
-function incident(overrides: Partial<Incident> = {}): Incident {
-  return {
-    id: "incident-1",
-    key: `account:durable_objects:${"a".repeat(64)}:rows_read:300000`,
-    asset: {
-      accountId: "account",
-      family: "durable_objects",
-      id: "a".repeat(64),
-      parentId: "namespace",
-      scope: "object",
-      tier: "standard",
-      tags: { brollyFuse: "true", cloudflareWorkerScript: "chat-worker" },
-    },
-    metric: "rows_read",
-    severity: "emergency",
-    observed: 5_000_000,
-    reason: "threshold",
-    action: "stop",
-    status: "open",
-    firstSeen: 1_000,
-    lastSeen: 301_000,
-    occurrences: 2,
-    ...overrides,
-  };
-}
-
-describe("automatic quarantine confirmation", () => {
-  it("requires a second nearby emergency observation", () => {
-    const current = incident();
-    expect(confirmedAutomaticEmergency(undefined, current)).toBe(false);
-    expect(confirmedAutomaticEmergency(incident({ lastSeen: 1_000, occurrences: 1 }), current)).toBe(true);
-    expect(confirmedAutomaticEmergency(incident({ lastSeen: current.lastSeen - 8 * 60_000, occurrences: 1 }), current)).toBe(false);
+describe("fixed collector windows", () => {
+  it("keeps a persisted continuation bound to its original interval", () => {
+    const stored = { startAt: 1_000, endAt: 301_000, cursor: { after: "object-10000" } };
+    expect(collectorWindow(stored, 601_000, 901_000)).toEqual(stored);
+    expect(windowContinuation(stored, { after: "object-20000" }, 901_000)).toEqual({
+      startAt: 1_000, endAt: 301_000, cursor: { after: "object-20000" },
+    });
   });
 
-  it("refuses projected spend and namespace-wide automatic actions", () => {
-    const current = incident();
-    const previous = incident({ lastSeen: 1_000, occurrences: 1 });
-    expect(confirmedAutomaticEmergency(previous, { ...current, metric: "projected_daily_cost_usd" })).toBe(false);
-    expect(confirmedAutomaticEmergency(previous, { ...current, asset: { ...current.asset, id: "namespace", scope: "namespace" } })).toBe(false);
+  it("advances a completed catch-up window by one fixed interval", () => {
+    const window = { startAt: 1_000, endAt: 301_000 };
+    expect(windowContinuation(window, null, 901_000)).toEqual({ startAt: 301_000, endAt: 601_000 });
+    expect(windowContinuation({ startAt: 601_000, endAt: 901_000 }, null, 901_000)).toBeNull();
+  });
+
+  it("replaces corrupt persisted bounds with the aligned fallback", () => {
+    expect(collectorWindow({ startAt: 10, endAt: 10, cursor: "bad" }, 1_000, 301_000))
+      .toEqual({ startAt: 1_000, endAt: 301_000 });
   });
 });

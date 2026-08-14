@@ -2,7 +2,10 @@ import type { AssetRef, ControlAction, CoverageResult, Evaluation, Incident, Met
 import { DEFAULT_POLICY, upsertIncident } from "@standardagents/brolly-core";
 
 export class Store {
-  constructor(private readonly db: D1Database, private readonly chargeRows: (amount: number) => void) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly chargeRows: (amount: number, kind: "read" | "write") => void,
+  ) {}
 
   async acquireLease(name: string, holder: string, ttlMs: number): Promise<boolean> {
     const now = Date.now();
@@ -17,7 +20,7 @@ export class Store {
 
   async loadPolicy(): Promise<Policy> {
     const row = await this.db.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>();
-    this.chargeRows(row ? 1 : 0);
+    this.chargeRows(row ? 1 : 0, "read");
     if (!row) return DEFAULT_POLICY;
     try {
       const policy = JSON.parse(row.value) as Policy;
@@ -64,25 +67,24 @@ export class Store {
     return result.results.map(row => row.value);
   }
 
-  async applyAssetPolicies(samples: MetricSample[], family: string): Promise<void> {
+  async applyPoliciesToAssets(assets: AssetRef[], family: string): Promise<void> {
     const result = await this.db.prepare(
-      `SELECT asset_id,tier,name,metadata_json FROM assets WHERE account_id=?1 AND family=?2 LIMIT 5000`,
-    ).bind(samples[0]?.asset.accountId ?? "", family).all<{ asset_id: string; tier: AssetRef["tier"]; name: string | null; metadata_json: string }>();
+      `SELECT asset_id,tier,name,metadata_json FROM assets WHERE account_id=?1 AND family=?2
+       ORDER BY CASE WHEN scope='namespace' THEN 0 WHEN scope='resource' THEN 1 ELSE 2 END,seen_at DESC
+       LIMIT 25000`,
+    ).bind(assets[0]?.accountId ?? "", family).all<{ asset_id: string; tier: AssetRef["tier"]; name: string | null; metadata_json: string }>();
     this.chargeMeta(result.meta);
     const policies = new Map(result.results.map(row => [row.asset_id, row]));
-    for (const sample of samples) {
-      const direct = policies.get(sample.asset.id);
-      const parent = sample.asset.parentId ? policies.get(sample.asset.parentId) : undefined;
+    for (const asset of assets) {
+      const direct = policies.get(asset.id);
+      const parent = asset.parentId ? policies.get(asset.parentId) : undefined;
       if (!direct && !parent) continue;
       const parentTags = parseTags(parent?.metadata_json);
       const directTags = parseTags(direct?.metadata_json);
-      const tier = direct?.tier && direct.tier !== "unclassified" ? direct.tier : parent?.tier ?? direct?.tier ?? sample.asset.tier;
-      sample.asset = {
-        ...sample.asset,
-        tier,
-        name: direct?.name ?? sample.asset.name,
-        tags: { ...parentTags, ...directTags },
-      };
+      const tier = direct?.tier && direct.tier !== "unclassified" ? direct.tier : parent?.tier ?? direct?.tier ?? asset.tier;
+      asset.tier = tier;
+      asset.name = direct?.name ?? asset.name;
+      asset.tags = { ...parentTags, ...directTags };
     }
   }
 
@@ -98,7 +100,7 @@ export class Store {
 
   async recordEvaluation(evaluation: Evaluation): Promise<{ previous?: Incident; incident: Incident; notify: boolean }> {
     const row = await this.db.prepare(`SELECT * FROM incidents WHERE incident_key=?1 LIMIT 1`).bind(evaluation.key).first<Record<string, unknown>>();
-    this.chargeRows(row ? 1 : 0);
+    this.chargeRows(row ? 1 : 0, "read");
     const previous = row ? fromIncidentRow(row, evaluation.asset) : undefined;
     const incident = upsertIncident(previous, evaluation);
     const lastNotifiedAt = row?.last_notified_at == null ? null : Number(row.last_notified_at);
@@ -119,7 +121,7 @@ export class Store {
       : "runtime_quarantine";
     const idempotencyKey = `${incident.id}:${incident.severity}:${kind}`;
     const existing = await this.db.prepare(`SELECT * FROM actions WHERE idempotency_key=?1 LIMIT 1`).bind(idempotencyKey).first<Record<string, unknown>>();
-    this.chargeRows(existing ? 1 : 0);
+    this.chargeRows(existing ? 1 : 0, "read");
     if (existing) return actionFromRow(existing, incident.asset);
     const id = crypto.randomUUID();
     const now = Date.now();
@@ -172,7 +174,7 @@ export class Store {
          SUM(CASE WHEN created_at>=?3 THEN 1 ELSE 0 END) AS daily
        FROM notification_deliveries WHERE target_id=?1 AND created_at>=?3`,
     ).bind(targetId, now - 3_600_000, now - 86_400_000).first<{ hourly: number | null; daily: number | null }>();
-    this.chargeRows(result ? 1 : 0);
+    this.chargeRows(result ? 1 : 0, "read");
     return Number(result?.hourly ?? 0) < 20 && (kind !== "twilio" || Number(result?.daily ?? 0) < 5);
   }
 
@@ -184,7 +186,8 @@ export class Store {
   }
 
   private chargeMeta(meta: { rows_read?: number; rows_written?: number; changes?: number }): void {
-    this.chargeRows((meta.rows_read ?? 0) + (meta.rows_written ?? meta.changes ?? 0));
+    this.chargeRows(meta.rows_read ?? 0, "read");
+    this.chargeRows(meta.rows_written ?? meta.changes ?? 0, "write");
   }
 
   private async runBatches(statements: D1PreparedStatement[], batchSize = 100): Promise<void> {

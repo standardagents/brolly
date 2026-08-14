@@ -238,7 +238,7 @@ button.stat-tile:hover { border-color: #b9c1ca; box-shadow: 0 6px 18px #10182812
 .credential-callout strong { font-size: 13px; }
 .credential-callout p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .notification-error, .notification-section .form-success { margin: 0 20px 12px; }
-.notification-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 20px 8px; }
+.notification-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; padding: 0 20px 8px; }
 .notification-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .notification-card header { display: flex; gap: 10px; align-items: flex-start; }
 .notification-card header div { flex: 1; min-width: 0; }

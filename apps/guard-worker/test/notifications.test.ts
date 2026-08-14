@@ -15,6 +15,11 @@ describe("notification configuration", () => {
     expect(validateNotificationConfig("twilio", { accountSid: "AC1", token: "secret", from: "+15550000000", to: "+15551111111" })).toBeNull();
   });
 
+  it("refuses private generic webhook destinations", () => {
+    expect(validateNotificationConfig("webhook", { url: "https://192.168.1.2/hook" })).toContain("private network");
+    expect(validateNotificationConfig("webhook", { url: "https://alerts.example.com/hook" })).toBeNull();
+  });
+
   it("never accepts an absent configuration", () => {
     expect(validateNotificationConfig("discord", undefined)).toBe("Notification configuration is required");
   });
