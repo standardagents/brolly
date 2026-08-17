@@ -33,14 +33,11 @@ describe("progressive monitoring-access onboarding", () => {
     expect(url.searchParams.get("accountId")).toBe("account-123");
     expect(url.searchParams.get("zoneId")).toBe("all");
     expect(url.searchParams.get("name")).toBe("Brolly Billing Read");
-    expect(source).toContain("Create the prefilled token in Cloudflare");
-    expect(source).toContain("Billing → Read");
-    expect(source).toContain("user API token");
+    expect(source).toContain("Create the token in Cloudflare");
+    expect(source).toContain("Paste the token here");
     expect(source).toContain("cfut_");
-    expect(source).toContain("cfat_");
     expect(source).not.toContain("Copy recipe");
     expect(source).toContain("Create billing token");
-    expect(source).toContain("Continue to summary");
     expect(source).toContain("Verify and save");
     expect(source).toContain("Billing access failed.");
     expect(source).toContain("Billing API access is highly recommended.");

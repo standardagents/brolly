@@ -172,9 +172,9 @@ function ContinueFooter({ billingConnected, busy, firstStep, onContinue }: {
   const label = firstStep ? billingConnected ? "Continue to limits" : "Continue without billing access" : "Continue";
   return (
     <footer className="setup-actions">
-      <span className="ml-auto flex max-w-[40ch] flex-col items-end gap-2 text-right">
-        {firstStep && !billingConnected && <small className="leading-5 text-[var(--muted)]"><strong className="text-[var(--ink)]">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>}
-        <button type="button" className="button primary" disabled={busy} onClick={onContinue}>{label}</button>
+      <span className="flex w-full flex-wrap items-center justify-between gap-4">
+        {firstStep && !billingConnected && <small className="max-w-[52ch] text-left leading-5 text-[var(--muted)]"><strong className="text-[var(--ink)]">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>}
+        <button type="button" className="button primary ml-auto shrink-0" disabled={busy} onClick={onContinue}>{label}</button>
       </span>
     </footer>
   );

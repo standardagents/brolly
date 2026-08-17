@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { Icon, InfoTip, ProductIcon } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
@@ -34,7 +34,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
       setBillingToken("");
       const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");
-      setBillingSuccess("Billing Read is connected. The token is encrypted in this Brolly installation and will not be shown again.");
+      setBillingSuccess("Billing access connected.");
       onVerified(verified);
     } catch (cause) {
       setBillingError(cause instanceof Error ? cause.message : String(cause));
@@ -102,42 +102,45 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--warn-bg)] text-[var(--warn)] [&_.icon]:size-5"><Icon name="wallet" /></span>
         <div>
-          <p className="eyebrow">One more permission</p>
-          <h3 id="billing-access-title" className="m-0 text-base">Add daily billing access</h3>
-          <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare requires one separate read-only user API token to show real bill totals for Pay-as-you-go accounts. Brolly can open Cloudflare with the correct account, name, and Billing Read permission already filled in. The token is limited to this account and cannot change billing or resources.</p>
+          <p className="eyebrow">Missing permission</p>
+          <h3 id="billing-access-title" className="m-0 text-base">Add billing access</h3>
+          <p className="mt-1 max-w-[60ch] text-xs leading-5 text-[var(--muted)]">Cloudflare keeps billing behind a separate read-only token.</p>
         </div>
       </div>
 
-      <ol className="mt-5 grid gap-3">
-        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
-          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">1</b>
-          <div>
-            <strong className="block text-sm">Create the prefilled token in Cloudflare</strong>
-            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Cloudflare will open a <strong>user API token</strong> with <strong>Brolly Billing Read</strong>, <strong>Billing → Read</strong>, and only this account selected. Review it, then click <strong>Continue to summary</strong> and <strong>Create Token</strong>.</p>
-          </div>
-          <a className="button primary shrink-0" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Create billing token</a>
-        </li>
+      <ol className="mt-4 grid gap-2">
+        <BillingStep index={1} label="Create the token in Cloudflare">
+          <a className="button primary w-full sm:w-auto" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Create billing token</a>
+        </BillingStep>
 
-        <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
-          <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">2</b>
-          <form className="grid gap-3" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
-            <div>
-              <strong className="block text-sm">Paste the token Cloudflare shows</strong>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Copy the token before leaving Cloudflare—it is displayed only once—then paste it here. A new user API token normally starts with <strong>cfut_</strong>; an account token starting with <strong>cfat_</strong> will not work with Cloudflare&apos;s billable-usage API.</p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <label className="sr-only" htmlFor="billing-access-token">Paste the new Cloudflare API token</label>
-              <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="Paste the Cloudflare API token" />
+        <BillingStep index={2} label="Paste the token here">
+          <form className="grid w-full gap-2 sm:w-[26rem]" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <label className="sr-only" htmlFor="billing-access-token">Paste the token Cloudflare shows</label>
+              <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" />
               <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Verifying…" : "Verify and save"}</button>
             </div>
-            <small className="leading-5 text-[var(--faint)]">Brolly verifies the token first, encrypts it in this installation, and never displays it again.</small>
-            {error && <p className="form-error mt-1" role="alert"><strong>Billing access failed.</strong> {error}</p>}
-            {success && <p className="form-success mt-1" role="status">{success}</p>}
+            {error && <p className="form-error" role="alert"><strong>Billing access failed.</strong> {error}</p>}
+            {success && <p className="form-success" role="status">{success}</p>}
           </form>
-        </li>
+        </BillingStep>
       </ol>
-      <p className="mt-3 text-xs text-[var(--faint)]">Need more help? <a className="font-semibold text-[var(--blue)] hover:underline" href="https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" target="_blank" rel="noreferrer">See Cloudflare&apos;s token instructions ↗</a></p>
+      <small className="mt-3 flex items-center gap-1.5 leading-5 text-[var(--faint)] [&_.icon]:size-3.5"><Icon name="lock" />Brolly encrypts your token inside your own installation and never shows it again.</small>
     </section>
+  );
+}
+
+/**
+ * Both billing steps share one row template so the numbers, the step labels,
+ * and the right-hand controls line up column for column across the steps.
+ */
+function BillingStep({ index, label, children }: { index: number; label: string; children: ReactNode }) {
+  return (
+    <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+      <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">{index}</b>
+      <strong className="text-sm">{label}</strong>
+      {children}
+    </li>
   );
 }
 
