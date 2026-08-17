@@ -308,7 +308,7 @@ export default {
 
     if (url.pathname === "/api/targets" && request.method === "GET") {
       const result = await env.DB.prepare(
-        `SELECT t.id,t.kind,t.enabled,t.minimum_severity,t.created_at,t.updated_at,
+        `SELECT t.id,t.kind,t.label,t.enabled,t.minimum_severity,t.created_at,t.updated_at,
           (SELECT d.created_at FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_at,
           (SELECT d.ok FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_ok,
           (SELECT d.error FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_error
@@ -316,7 +316,7 @@ export default {
       ).all<Record<string, unknown>>();
       return Response.json({
         targets: result.results.map(row => ({
-          id: String(row.id), kind: String(row.kind), enabled: Number(row.enabled) === 1,
+          id: String(row.id), kind: String(row.kind), label: row.label == null ? null : String(row.label), enabled: Number(row.enabled) === 1,
           minimumSeverity: String(row.minimum_severity), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
           lastDeliveryAt: row.last_delivery_at == null ? null : Number(row.last_delivery_at),
           lastDeliveryOk: row.last_delivery_ok == null ? null : Number(row.last_delivery_ok) === 1,
@@ -327,8 +327,10 @@ export default {
     }
 
     if (url.pathname === "/api/targets" && request.method === "POST") {
-      const body = await request.json<{ id?: string; kind: string; config: Record<string, unknown>; enabled?: boolean; minimumSeverity?: string }>();
+      const body = await request.json<{ id?: string; kind: string; label?: string | null; config: Record<string, unknown>; enabled?: boolean; minimumSeverity?: string }>();
       if (!["discord", "slack", "webhook", "resend", "postmark", "twilio"].includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
+      const label = normalizeTargetLabel(body.label);
+      if (label === false) return Response.json({ error: "Label must be 80 characters or fewer" }, { status: 400 });
       if (!["info", "warning", "critical", "emergency"].includes(body.minimumSeverity ?? "warning")) return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
       const configError = validateNotificationConfig(body.kind, body.config);
       if (configError) return Response.json({ error: configError }, { status: 400 });
@@ -336,26 +338,35 @@ export default {
       const id = body.id ?? crypto.randomUUID();
       const now = Date.now();
       await env.DB.prepare(
-        `INSERT INTO notification_targets(id,kind,config_json,enabled,minimum_severity,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)
-         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,config_json=excluded.config_json,enabled=excluded.enabled,minimum_severity=excluded.minimum_severity,updated_at=excluded.updated_at`,
-      ).bind(id, body.kind, await sealJson(body.config, env.BROLLY_CREDENTIAL_KEY), body.enabled === false ? 0 : 1, body.minimumSeverity ?? "warning", now).run();
-      await audit(env.DB, "admin", "notification_target.upsert", id, { kind: body.kind });
+        `INSERT INTO notification_targets(id,kind,label,config_json,enabled,minimum_severity,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7)
+         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,label=excluded.label,config_json=excluded.config_json,enabled=excluded.enabled,minimum_severity=excluded.minimum_severity,updated_at=excluded.updated_at`,
+      ).bind(id, body.kind, label, await sealJson(body.config, env.BROLLY_CREDENTIAL_KEY), body.enabled === false ? 0 : 1, body.minimumSeverity ?? "warning", now).run();
+      await audit(env.DB, "admin", "notification_target.upsert", id, { kind: body.kind, label });
       return Response.json({ ok: true, id });
     }
 
     const targetMatch = url.pathname.match(/^\/api\/targets\/([^/]+)$/);
     if (targetMatch && request.method === "PATCH") {
-      const body = await request.json<{ enabled?: boolean; minimumSeverity?: string }>();
+      const body = await request.json<{ enabled?: boolean; minimumSeverity?: string; label?: string | null }>();
       if (body.minimumSeverity !== undefined && !["info", "warning", "critical", "emergency"].includes(body.minimumSeverity)) {
         return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
       }
-      if (body.enabled === undefined && body.minimumSeverity === undefined) return Response.json({ error: "No target change supplied" }, { status: 400 });
+      const label = body.label === undefined ? undefined : normalizeTargetLabel(body.label);
+      if (label === false) return Response.json({ error: "Label must be 80 characters or fewer" }, { status: 400 });
+      if (body.enabled === undefined && body.minimumSeverity === undefined && label === undefined) return Response.json({ error: "No target change supplied" }, { status: 400 });
       const id = decodeURIComponent(targetMatch[1]!);
       const result = await env.DB.prepare(
-        `UPDATE notification_targets SET enabled=COALESCE(?2,enabled),minimum_severity=COALESCE(?3,minimum_severity),updated_at=?4 WHERE id=?1`,
-      ).bind(id, body.enabled === undefined ? null : body.enabled ? 1 : 0, body.minimumSeverity ?? null, Date.now()).run();
+        `UPDATE notification_targets SET enabled=COALESCE(?2,enabled),minimum_severity=COALESCE(?3,minimum_severity),label=CASE WHEN ?5=1 THEN ?4 ELSE label END,updated_at=?6 WHERE id=?1`,
+      ).bind(id, body.enabled === undefined ? null : body.enabled ? 1 : 0, body.minimumSeverity ?? null, label ?? null, label === undefined ? 0 : 1, Date.now()).run();
       if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
       await audit(env.DB, "admin", "notification_target.update", id, body);
+      return Response.json({ ok: true, id });
+    }
+    if (targetMatch && request.method === "DELETE") {
+      const id = decodeURIComponent(targetMatch[1]!);
+      const result = await env.DB.prepare(`DELETE FROM notification_targets WHERE id=?1`).bind(id).run();
+      if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
+      await audit(env.DB, "admin", "notification_target.delete", id, {});
       return Response.json({ ok: true, id });
     }
 
@@ -588,4 +599,12 @@ function validPolicy(policy: Policy, requireEveryFamily = false): boolean {
     && (threshold.warning === undefined || threshold.critical === undefined || threshold.warning <= threshold.critical)
     && (threshold.critical === undefined || threshold.emergency === undefined || threshold.critical <= threshold.emergency)
     && (threshold.warning === undefined || threshold.emergency === undefined || threshold.warning <= threshold.emergency));
+}
+
+/** Trim a target label; null clears it, false means it is too long. */
+function normalizeTargetLabel(label: string | null | undefined): string | null | false {
+  if (label == null) return null;
+  const trimmed = String(label).trim();
+  if (trimmed.length > 80) return false;
+  return trimmed || null;
 }

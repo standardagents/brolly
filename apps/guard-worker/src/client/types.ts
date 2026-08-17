@@ -159,6 +159,7 @@ export type NotificationKind = "discord" | "slack" | "webhook" | "resend" | "pos
 export interface NotificationTarget {
   id: string;
   kind: NotificationKind;
+  label: string | null;
   enabled: boolean;
   minimumSeverity: Severity;
   createdAt: number;

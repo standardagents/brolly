@@ -486,6 +486,7 @@ const targets = [
   {
     id: "target-1",
     kind: "discord",
+    label: "Ops server",
     enabled: true,
     minimumSeverity: "warning",
     createdAt: now - 6 * 24 * HOUR,

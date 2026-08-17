@@ -275,10 +275,11 @@ credentials are AES-GCM encrypted with a Worker-secret key.
 
 Discord, Slack, Resend, Postmark, Twilio SMS, and generic HTTPS webhooks are
 configured on **Notifications**. The read API returns target status, minimum
-severity, and last-delivery metadata. It never decrypts a destination
-credential. Generic webhooks refuse redirects and local or private-network
-addresses. **Replace credentials** rotates a destination, and **Pause** stops
-delivery while retaining encrypted configuration.
+severity, label, and last-delivery metadata. It never decrypts a destination
+credential. Operators can configure several targets of one kind and identify
+each target with a label. Generic webhooks refuse redirects and local or
+private-network addresses. **Replace credentials** rotates a destination.
+Removing a target deletes its encrypted configuration.
 
 Control actions on the **Actions & quarantine** page (the overview shows the
 five most recent) are operator controls, not a passive log. Open a row to see
