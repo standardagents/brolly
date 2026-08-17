@@ -21,11 +21,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     setAccessNotice("");
     setAccessError("");
     try {
-      const [result] = await Promise.all([
-        api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" }),
-        new Promise(resolve => setTimeout(resolve, 1400)),
-      ]);
-      setEstimates(result);
+      setEstimates(await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" }));
     } catch (cause) {
       setAccessError(cause instanceof Error ? cause.message : String(cause));
     } finally {

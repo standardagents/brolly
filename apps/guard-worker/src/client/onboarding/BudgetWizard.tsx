@@ -15,7 +15,7 @@ import { useOnboardingSave } from "./useOnboardingSave";
 import { useWizardNavigation } from "./useWizardNavigation";
 
 const STEPS = [
-  { label: "Verify account access", preview: "Confirm which Cloudflare usage APIs Brolly can read." },
+  { label: "Confirm account access", preview: "Confirm which Cloudflare usage APIs Brolly can read." },
   { label: "Account budget", preview: "One daily dollar limit for the whole account." },
   { label: "Product budgets", preview: "A daily limit for each Cloudflare product." },
   { label: "Resource budgets", preview: "A daily limit for each Worker and Durable Object namespace." },

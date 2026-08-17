@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { Icon, InfoTip, ProductIcon } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
@@ -24,6 +24,10 @@ export function AccessActions({ accountId, families, busy, result, notice, error
     return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
   }) : false;
   const billingNeedsToken = result ? result.access.billing.state !== "connected" : false;
+  const revealed = useStaggeredReveal(busy, result);
+  useInitialAccessCheck(busy, result, error, onVerify);
+  const monitoringDetected = !busy && result !== null && revealed >= 1 && capabilityStatus("monitoring", result).state === "ready";
+  const billingDetected = !busy && result !== null && revealed >= 2 && capabilityStatus("billing", result).state === "ready";
 
   async function saveBillingAccess() {
     setBillingBusy(true);
@@ -45,24 +49,20 @@ export function AccessActions({ accountId, families, busy, result, notice, error
 
   return (
     <div className="mb-5 grid gap-4">
-      <section className="flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--good-line)] bg-[var(--good-bg)] p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--panel)] text-[var(--good)] [&_.icon]:size-5"><Icon name="shield" /></span>
-          <div>
-            <div className="flex items-center gap-2"><strong className="text-sm">Check Brolly&apos;s access</strong><InfoTip label="How Brolly checks access">Brolly makes at most two read-only Analytics requests and one billing request only when Billing Read is configured. Results are cached for 15 minutes. This check never changes limits or Cloudflare resources.</InfoTip></div>
-            <p className="mt-1 max-w-[64ch] text-xs leading-5 text-[var(--muted)]">
-              {result && !busy ? `Checked ${new Date(result.generatedAt).toLocaleTimeString()}` : "Read-only. This check cannot change anything in your account."}
-            </p>
-            {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
-          </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-[var(--muted)]">
+        <span>{busy ? "Checking Brolly's access…" : result ? `Checked ${new Date(result.generatedAt).toLocaleTimeString()} · read-only` : "Read-only. This check cannot change anything in your account."}</span>
+        {notice && <span className="font-semibold text-[var(--good)]" role="status">{notice}</span>}
+      </div>
+      {error && !busy && (
+        <div className="form-error flex flex-wrap items-center justify-between gap-3" role="alert">
+          <span><strong>Monitoring access check failed.</strong> {error}</span>
+          <button type="button" className="button primary small shrink-0" disabled={billingBusy} onClick={onVerify}><Icon name="refresh" />Try again</button>
         </div>
-        <button type="button" className="button primary shrink-0" disabled={busy || billingBusy} onClick={onVerify}><Icon name="radar" />{busy ? "Checking…" : result ? "Check again" : "Check monitoring access"}</button>
-        {error && <p className="form-error basis-full" role="alert"><strong>Monitoring access check failed.</strong> {error}</p>}
-      </section>
+      )}
 
-      {(busy || result) && <UsageAccessResults result={result} checking={busy} />}
+      {(busy || result) && <UsageAccessResults result={result} checking={busy} revealed={revealed} />}
 
-      {(busy || result) && <ServiceCoverageGrid families={families} checking={busy} capped={result?.access.billing.state === "connected"} />}
+      {(busy || result) && <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />}
 
       {analyticsNeedsReconnect && (
         <article className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--warn-bg)] p-4">
@@ -98,27 +98,21 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
 }) {
   const templateUrl = billingTokenTemplateUrl(accountId);
   return (
-    <section className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
-      <div className="flex items-start gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--warn-bg)] text-[var(--warn)] [&_.icon]:size-5"><Icon name="wallet" /></span>
-        <div>
-          <p className="eyebrow">Missing permission</p>
-          <h3 id="billing-access-title" className="m-0 text-base">Add billing access</h3>
-          <p className="mt-1 max-w-[60ch] text-xs leading-5 text-[var(--muted)]">Cloudflare keeps billing behind a separate read-only token.</p>
-        </div>
-      </div>
+    <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
+      <h3 id="billing-access-title" className="m-0 text-base">Add billing access</h3>
+      <p className="mt-1 max-w-[60ch] text-xs leading-5 text-[var(--muted)]">Cloudflare keeps billing behind a separate read-only token.</p>
 
       <ol className="mt-4 grid gap-2">
-        <BillingStep index={1} label="Create the token in Cloudflare">
-          <a className="button primary w-full sm:w-auto" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Create billing token</a>
+        <BillingStep index={1} label="Create a billing token in Cloudflare" hint="Cloudflare's token creation page will be pre-configured with your account values.">
+          <a className="button primary w-full sm:w-auto" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</a>
         </BillingStep>
 
-        <BillingStep index={2} label="Paste the token here">
-          <form className="grid w-full gap-2 sm:w-[26rem]" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
+        <BillingStep index={2} label="Paste your token" hint="Cloudflare shows a new token one time. Brolly checks billing access when you save it." stacked>
+          <form className="grid w-full max-w-[30rem] gap-2" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-              <label className="sr-only" htmlFor="billing-access-token">Paste the token Cloudflare shows</label>
+              <label className="sr-only" htmlFor="billing-access-token">Billing token from Cloudflare</label>
               <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" />
-              <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Verifying…" : "Verify and save"}</button>
+              <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Saving…" : "Save"}</button>
             </div>
             {error && <p className="form-error" role="alert"><strong>Billing access failed.</strong> {error}</p>}
             {success && <p className="form-success" role="status">{success}</p>}
@@ -131,15 +125,19 @@ function BillingAccessSetup({ accountId, token, busy, error, success, onToken, o
 }
 
 /**
- * Both billing steps share one row template so the numbers, the step labels,
- * and the right-hand controls line up column for column across the steps.
+ * Both billing steps share one number + label + hint template. Step 1 keeps
+ * its single button on the right; step 2 stacks the token form under the
+ * label so the input gets full width.
  */
-function BillingStep({ index, label, children }: { index: number; label: string; children: ReactNode }) {
+function BillingStep({ index, label, hint, stacked, children }: { index: number; label: string; hint: string; stacked?: boolean; children: ReactNode }) {
   return (
-    <li className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+    <li className={`grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 ${stacked ? "grid-cols-[auto_minmax(0,1fr)]" : "sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"}`}>
       <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">{index}</b>
-      <strong className="text-sm">{label}</strong>
-      {children}
+      <div className="min-w-0">
+        <strong className="block text-sm leading-5">{label}</strong>
+        <span className="block text-pretty text-xs leading-4 text-[var(--muted)]">{hint}</span>
+      </div>
+      {stacked ? <div className="col-start-2">{children}</div> : children}
     </li>
   );
 }
@@ -179,7 +177,7 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
  */
 const ACCESS_CAPABILITIES = [
   { key: "monitoring" as const, label: "Usage monitoring", detail: "Live usage meters and alerts for every service.", icon: "pulse" as const },
-  { key: "billing" as const, label: "Billing access", detail: "Enables daily and monthly spending caps based on actual invoiced dollar amounts.", icon: "wallet" as const },
+  { key: "billing" as const, label: "Billing access", detail: "Daily and monthly spending caps based on invoiced dollar amounts.", icon: "wallet" as const },
 ];
 
 type CapabilityStatus =
@@ -204,56 +202,66 @@ function capabilityStatus(key: (typeof ACCESS_CAPABILITIES)[number]["key"], resu
 }
 
 /**
- * Permission cards that animate in once when the check starts and then
- * resolve in place — the pulsing dot flips to a status, staggered left to
- * right. The cards themselves never unmount or re-animate between the
- * checking and resolved states.
+ * The first access check runs as soon as step 1 mounts. It is read-only,
+ * cached for 15 minutes, and bounded to three Cloudflare requests, so there
+ * is nothing for the operator to decide before it runs. Re-runs happen on
+ * their own: a reconnect reloads the page, a token paste re-verifies, and an
+ * error offers a retry.
  */
-function UsageAccessResults({ result, checking }: { result: OnboardingBudgetEstimates | null; checking: boolean }) {
-  const [revealed, setRevealed] = useState(0);
+function useInitialAccessCheck(busy: boolean, result: OnboardingBudgetEstimates | null, error: string, onVerify: () => void) {
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current || busy || result || error) return;
+    started.current = true;
+    onVerify();
+  }, [busy, result, error, onVerify]);
+}
 
+// Monitoring resolves quickly; billing holds its spinner long enough that
+// the operator sees it settle on its own rather than appear pre-decided.
+const REVEAL_DELAYS_MS = [250, 1400];
+
+/**
+ * How many capability rows have resolved, in order, after a check finishes.
+ * Owned by AccessActions so the coverage grid lights follow the same reveal
+ * as the capability pills instead of jumping ahead of them.
+ */
+function useStaggeredReveal(checking: boolean, result: OnboardingBudgetEstimates | null): number {
+  const [revealed, setRevealed] = useState(0);
   useEffect(() => {
     if (checking || !result) {
       setRevealed(0);
       return;
     }
-    const timers = ACCESS_CAPABILITIES.map((_, index) => window.setTimeout(() => setRevealed(count => Math.max(count, index + 1)), 200 + index * 180));
+    const timers = ACCESS_CAPABILITIES.map((_, index) => window.setTimeout(() => setRevealed(count => Math.max(count, index + 1)), REVEAL_DELAYS_MS[index]));
     return () => timers.forEach(timer => window.clearTimeout(timer));
   }, [checking, result]);
+  return revealed;
+}
 
+/**
+ * Permission cards. They mount with the step (the check starts on its own),
+ * then resolve in place, staggered top to bottom. Every card is one full-width
+ * row: icon, label + detail, status pill. The pill is vertically centered
+ * against the text block, so the status column lines up across rows no
+ * matter how long a detail line runs. The cards never unmount or re-animate
+ * between the checking and resolved states.
+ */
+function UsageAccessResults({ result, checking, revealed }: { result: OnboardingBudgetEstimates | null; checking: boolean; revealed: number }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
+    <div className="grid gap-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
       {ACCESS_CAPABILITIES.map((row, index) => {
         const status: CapabilityStatus = !checking && result && index < revealed ? capabilityStatus(row.key, result) : { state: "checking" };
-        const badge = status.state === "ready" ? { icon: "check" as const, tone: "bg-[var(--good-bg)] text-[var(--good)]" }
-          : status.state === "action" || status.state === "attention" ? { icon: "alert" as const, tone: "bg-[var(--warn-bg)] text-[var(--warn)]" }
-            : null;
         return (
           <article
             key={row.key}
-            className="flex flex-col gap-2.5 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4 [animation:access-reveal_.4s_cubic-bezier(.2,.7,.3,1)_both] motion-reduce:animate-none"
-            style={{ animationDelay: `${index * 90}ms` }}
-          >
-            <header className="flex items-start justify-between">
-              <span className="grid size-[34px] flex-none place-items-center rounded-[7px] bg-[var(--panel-soft)] text-[var(--muted)] [&_.icon]:size-[19px]"><Icon name={row.icon} /></span>
-              {badge ? (
-                <span className={`grid size-[22px] flex-none place-items-center rounded-full [animation:access-resolve_.3s_cubic-bezier(.2,.7,.3,1)_both] motion-reduce:animate-none [&_.icon]:size-[13px] ${badge.tone}`}>
-                  <Icon name={badge.icon} />
-                </span>
-              ) : (
-                <span className="grid size-[22px] flex-none place-items-center">
-                  <i className="size-2 rounded-full bg-[var(--orange)] [animation:access-pulse_1s_ease-in-out_infinite] motion-reduce:[animation-duration:2.4s]" style={{ animationDelay: `${index * 160}ms` }} />
-                </span>
-              )}
-            </header>
-            <div>
-              <strong className="block text-sm leading-none">{row.label}</strong>
-              <span className="mt-1 block text-xs leading-4 text-[var(--faint)]">{row.detail}</span>
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] px-4 py-3">
+            <span className="grid size-9 place-items-center rounded-lg bg-[var(--panel-soft)] text-[var(--muted)] [&_.icon]:size-5"><Icon name={row.icon} /></span>
+            <div className="min-w-0">
+              <strong className="block text-sm leading-5">{row.label}</strong>
+              <span className="block text-xs leading-4 text-[var(--muted)]">{row.detail}</span>
             </div>
-            {status.state === "checking" && <span className="text-xs text-[var(--faint)]">Checking…</span>}
-            {status.state === "ready" && <span className="text-xs font-semibold text-[var(--good)]">{status.note}</span>}
-            {status.state === "attention" && <span className="text-xs font-semibold text-[var(--warn)]">{status.note}</span>}
-            {status.state === "action" && <a className="text-xs font-bold text-[var(--blue)] hover:underline" href={status.href}>{status.label} →</a>}
+            <CapabilityPill status={status} />
           </article>
         );
       })}
@@ -262,20 +270,49 @@ function UsageAccessResults({ result, checking }: { result: OnboardingBudgetEsti
 }
 
 /**
- * Every monitored service with a status light. Yellow = monitor only; green =
- * monitoring plus spending caps. All lights turn green together when Billing
- * Read connects — the grid exists to make that upgrade worth the manual token
- * paste, so the carrot line stays visible until billing is connected.
+ * One pill shape for every state so the right column of the cards stays the
+ * same size while a check resolves. Checking uses a spinning arc, which reads
+ * as "in progress" where a pulsing dot reads as a status light. Not connected
+ * is neutral because billing access is optional; only a real permission
+ * denial (the reconnect action) uses accent color.
+ */
+function CapabilityPill({ status }: { status: CapabilityStatus }) {
+  const base = "inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-semibold leading-none [&_.icon]:size-3.5";
+  if (status.state === "checking") {
+    return (
+      <span className={`${base} border-[var(--line)] bg-[var(--panel-soft)] text-[var(--muted)]`}>
+        <i className="size-3 animate-spin rounded-full border-2 border-[var(--line)] border-t-[var(--orange)] motion-reduce:[animation-duration:2s]" aria-hidden="true" />
+        Checking
+      </span>
+    );
+  }
+  const resolved = "animate-access-resolve motion-reduce:animate-none";
+  if (status.state === "ready") {
+    return <span className={`${base} ${resolved} border-[var(--good-line)] bg-[var(--good-bg)] text-[var(--good)]`}><Icon name="check" />{status.note}</span>;
+  }
+  if (status.state === "attention") {
+    return <span className={`${base} ${resolved} border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]`}><i className="size-2 rounded-full border-[1.5px] border-current" aria-hidden="true" />{status.note}</span>;
+  }
+  return <a className={`${base} ${resolved} border-[var(--line)] bg-[var(--panel)] text-[var(--blue)] hover:border-[var(--blue)]`} href={status.href}><Icon name="refresh" />{status.label}</a>;
+}
+
+/**
+ * Every monitored service with a status light. Off = monitoring not yet
+ * confirmed; yellow = monitor only; green = monitoring plus spending caps.
+ * Lights stay off until the Usage monitoring row resolves as connected, and
+ * all turn green together when Billing Read connects — the grid exists to
+ * make that upgrade worth the manual token paste, so the carrot line stays
+ * visible until billing is connected.
  */
 // Bright status-light hues, deliberately hotter than the muted --good/--warn
 // text tokens so the dots read as lights in both themes.
 const LIGHT_GREEN = "bg-[#2fd05e] shadow-[0_0_6px_#2fd05e66]";
 const LIGHT_YELLOW = "bg-[#ffc53d] shadow-[0_0_6px_#ffc53d66]";
 
-function ServiceCoverageGrid({ families, checking, capped }: { families: OnboardingData["families"]; checking: boolean; capped?: boolean }) {
-  const dot = checking ? "bg-[var(--faint)] opacity-40" : capped ? LIGHT_GREEN : LIGHT_YELLOW;
+function ServiceCoverageGrid({ families, monitored, capped }: { families: OnboardingData["families"]; monitored: boolean; capped: boolean }) {
+  const dot = capped ? LIGHT_GREEN : monitored ? LIGHT_YELLOW : "bg-[var(--faint)] opacity-40";
   return (
-    <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4 [animation:access-reveal_.4s_cubic-bezier(.2,.7,.3,1)_both] [animation-delay:180ms] motion-reduce:animate-none" aria-label="Service coverage">
+    <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4" aria-label="Service coverage">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">Service coverage</strong>
         <span className="flex items-center gap-4 text-[11px] text-[var(--muted)]">
@@ -284,9 +321,9 @@ function ServiceCoverageGrid({ families, checking, capped }: { families: Onboard
         </span>
       </header>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-        {families.map((family, index) => (
+        {families.map(family => (
           <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-2.5 py-2">
-            <i className={`size-2 flex-none rounded-full ${dot} ${checking ? "[animation:access-pulse_1s_ease-in-out_infinite]" : ""}`} style={checking ? { animationDelay: `${index * 60}ms` } : undefined} />
+            <i className={`size-2 flex-none rounded-full ${dot}`} />
             <span className="truncate text-xs font-semibold">{family.label}</span>
           </span>
         ))}

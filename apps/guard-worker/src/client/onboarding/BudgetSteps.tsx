@@ -25,8 +25,8 @@ export function AccessStep({ data, token, busy, result, notice, error, onVerify,
   onVerified: (result: OnboardingBudgetEstimates) => void;
 }) {
   return <>
-    <h2>Verify account access</h2>
-    <p className="section-copy">Brolly monitors usage through Cloudflare&apos;s read-only APIs. Confirm it has access.</p>
+    <h2>Confirm account access</h2>
+    <p className="section-copy">Brolly monitors usage through Cloudflare&apos;s read-only APIs.</p>
     <AccessActions accountId={data.accountId} families={data.families} busy={busy} result={result} notice={notice} error={error} token={token} onVerify={onVerify} onVerified={onVerified} />
   </>;
 }
