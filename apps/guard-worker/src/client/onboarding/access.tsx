@@ -1,8 +1,26 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { api } from "../api";
-import { Icon, InfoTip, ProductIcon } from "../components/ui";
+import { Button, Icon, InfoTip, Input, Notice } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
+
+/**
+ * Anchor styled exactly like <Button>. Access setup leaves the app for
+ * Cloudflare's token page and re-enters it through the OAuth login route, so
+ * both actions must be real links.
+ */
+function ButtonLink({ variant, className = "", ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { variant: "primary" | "secondary" }) {
+  return (
+    <a
+      className={`inline-flex min-h-9 cursor-pointer items-center justify-center gap-[7px] rounded-field border px-3.5 text-[13.5px] font-[620] transition-[background-color,border-color,box-shadow] duration-[130ms] [&>svg]:size-4 ${
+        variant === "primary"
+          ? "border-orange bg-orange text-white hover:border-orange-hover hover:bg-orange-hover"
+          : "border-line-strong bg-panel text-ink hover:border-faint hover:bg-panel-soft dark:hover:bg-[#252a31]"
+      } ${className}`}
+      {...rest}
+    />
+  );
+}
 
 export function AccessActions({ accountId, families, busy, result, notice, error, token, onVerify, onVerified }: {
   accountId: string;
@@ -18,7 +36,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   const [billingToken, setBillingToken] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
-  const [billingSuccess, setBillingSuccess] = useState("");
+  const [billingSaved, setBillingSaved] = useState(false);
   const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
     const access = result.access[key];
     return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
@@ -32,13 +50,13 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   async function saveBillingAccess() {
     setBillingBusy(true);
     setBillingError("");
-    setBillingSuccess("");
+    setBillingSaved(false);
     try {
       await api("/api/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
       setBillingToken("");
       const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");
-      setBillingSuccess("Billing access connected.");
+      setBillingSaved(true);
       onVerified(verified);
     } catch (cause) {
       setBillingError(cause instanceof Error ? cause.message : String(cause));
@@ -49,15 +67,15 @@ export function AccessActions({ accountId, families, busy, result, notice, error
 
   return (
     <div className="mb-5 grid gap-4">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-[var(--muted)]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-muted">
         <span>{busy ? "Checking Brolly's access…" : result ? `Checked ${new Date(result.generatedAt).toLocaleTimeString()} · read-only` : "Read-only. This check cannot change anything in your account."}</span>
-        {notice && <span className="font-semibold text-[var(--good)]" role="status">{notice}</span>}
+        {notice && <span className="font-semibold text-good" role="status">{notice}</span>}
       </div>
       {error && !busy && (
-        <div className="form-error flex flex-wrap items-center justify-between gap-3" role="alert">
+        <Notice tone="error" className="flex flex-wrap items-center justify-between gap-3">
           <span><strong>Monitoring access check failed.</strong> {error}</span>
-          <button type="button" className="button primary small shrink-0" disabled={billingBusy} onClick={onVerify}><Icon name="refresh" />Try again</button>
-        </div>
+          <Button variant="primary" size="small" className="shrink-0" disabled={billingBusy} onClick={onVerify}><Icon name="refresh" />Try again</Button>
+        </Notice>
       )}
 
       {(busy || result) && <UsageAccessResults result={result} checking={busy} revealed={revealed} />}
@@ -65,20 +83,20 @@ export function AccessActions({ accountId, families, busy, result, notice, error
       {(busy || result) && <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />}
 
       {analyticsNeedsReconnect && (
-        <article className="rounded-[var(--radius)] border border-[var(--warn-line)] bg-[var(--warn-bg)] p-4">
+        <article className="rounded-panel border border-warn-line bg-warn-bg p-4">
           <div className="flex items-center gap-2"><Icon name="refresh" /><strong className="text-sm">Workers and Durable Object access</strong></div>
-          <p className="mt-2 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">Cloudflare denied at least one Analytics permission. Reconnect the account, approve Brolly&apos;s current scopes, then run the monitoring check again. You will return to this installation.</p>
-          <a className="button secondary mt-3" href="/api/auth/login"><Icon name="external" /> Reconnect Cloudflare</a>
+          <p className="mt-2 max-w-[72ch] text-xs leading-5 text-muted">Cloudflare denied at least one Analytics permission. Reconnect the account, approve Brolly&apos;s current scopes, then run the monitoring check again. You will return to this installation.</p>
+          <ButtonLink variant="secondary" className="mt-3" href="/api/auth/login"><Icon name="external" /> Reconnect Cloudflare</ButtonLink>
         </article>
       )}
 
-      {(billingNeedsToken || billingSuccess) && (
+      {(billingNeedsToken || billingSaved) && (
         <BillingAccessSetup
           accountId={accountId}
           token={billingToken}
           busy={billingBusy}
           error={billingError}
-          success={billingSuccess}
+          saved={billingSaved}
           onToken={setBillingToken}
           onSubmit={() => void saveBillingAccess()}
         />
@@ -87,57 +105,58 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   );
 }
 
-function BillingAccessSetup({ accountId, token, busy, error, success, onToken, onSubmit }: {
+function BillingAccessSetup({ accountId, token, busy, error, saved, onToken, onSubmit }: {
   accountId: string;
   token: string;
   busy: boolean;
   error: string;
-  success: string;
+  saved: boolean;
   onToken: (value: string) => void;
   onSubmit: () => void;
 }) {
   const templateUrl = billingTokenTemplateUrl(accountId);
   return (
-    <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-5" aria-labelledby="billing-access-title">
+    <section className="rounded-panel border border-line bg-panel p-5" aria-labelledby="billing-access-title">
       <h3 id="billing-access-title" className="m-0 text-base">Add billing access</h3>
-      <p className="mt-1 max-w-[60ch] text-xs leading-5 text-[var(--muted)]">Cloudflare keeps billing behind a separate read-only token.</p>
+      <p className="mt-1 max-w-[60ch] text-xs leading-5 text-muted">Cloudflare keeps billing behind a separate read-only token.</p>
 
       <ol className="mt-4 grid gap-2">
         <BillingStep index={1} label="Create a billing token in Cloudflare" hint="Cloudflare's token creation page will be pre-configured with your account values.">
-          <a className="button primary w-full sm:w-auto" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</a>
+          <ButtonLink variant="primary" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</ButtonLink>
         </BillingStep>
 
-        <BillingStep index={2} label="Paste your token" hint="Cloudflare shows a new token one time. Brolly checks billing access when you save it." stacked>
+        <BillingStep index={2} label="Paste your token" hint="Cloudflare shows a new token one time. Brolly checks billing access when you save it.">
           <form className="grid w-full max-w-[30rem] gap-2" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <label className="sr-only" htmlFor="billing-access-token">Billing token from Cloudflare</label>
-              <input id="billing-access-token" className="min-h-10 min-w-0 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel)] px-3 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" />
-              <button type="submit" className="button primary" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Saving…" : "Save"}</button>
+              <Input id="billing-access-token" className="min-w-0 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" disabled={saved} />
+              {saved
+                ? <span className="inline-flex min-h-9 min-w-24 items-center justify-center gap-[7px] rounded-field border border-good-line bg-good-bg px-3.5 text-[13.5px] font-[620] text-good [&>svg]:size-4" role="status"><Icon name="check" /> Saved</span>
+                : <Button type="submit" variant="primary" className="min-w-24" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Saving…" : "Save"}</Button>}
             </div>
-            {error && <p className="form-error" role="alert"><strong>Billing access failed.</strong> {error}</p>}
-            {success && <p className="form-success" role="status">{success}</p>}
+            {error && <Notice tone="error"><strong>Billing access failed.</strong> {error}</Notice>}
           </form>
         </BillingStep>
       </ol>
-      <small className="mt-3 flex items-center gap-1.5 leading-5 text-[var(--faint)] [&_.icon]:size-3.5"><Icon name="lock" />Brolly encrypts your token inside your own installation and never shows it again.</small>
+      <small className="mt-3 flex items-center gap-1.5 leading-5 text-faint"><Icon name="lock" className="size-3.5" />Brolly encrypts your token inside your own installation and never shows it again.</small>
     </section>
   );
 }
 
 /**
- * Both billing steps share one number + label + hint template. Step 1 keeps
- * its single button on the right; step 2 stacks the token form under the
- * label so the input gets full width.
+ * Both billing steps share one template: number, then label, hint, and the
+ * control stacked in one column. The controls therefore start on the same
+ * left edge in both steps.
  */
-function BillingStep({ index, label, hint, stacked, children }: { index: number; label: string; hint: string; stacked?: boolean; children: ReactNode }) {
+function BillingStep({ index, label, hint, children }: { index: number; label: string; hint: string; children: ReactNode }) {
   return (
-    <li className={`grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 ${stacked ? "grid-cols-[auto_minmax(0,1fr)]" : "sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"}`}>
-      <b className="grid size-7 shrink-0 place-items-center rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">{index}</b>
+    <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+      <b className="grid size-7 place-items-center self-start rounded-full bg-[var(--orange-soft)] text-xs text-[var(--orange-deep)]">{index}</b>
       <div className="min-w-0">
-        <strong className="block text-sm leading-5">{label}</strong>
+        <strong className="block text-sm leading-7">{label}</strong>
         <span className="block text-pretty text-xs leading-4 text-[var(--muted)]">{hint}</span>
       </div>
-      {stacked ? <div className="col-start-2">{children}</div> : children}
+      <div className="col-start-2 flex">{children}</div>
     </li>
   );
 }
@@ -149,20 +168,20 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
   onSuggest: () => void;
 }) {
   return (
-    <section className="mb-5 flex flex-col gap-4 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="recent-usage-estimator-title">
+    <section className="mb-5 flex flex-col gap-4 rounded-panel border border-line bg-panel-soft p-4 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="recent-usage-estimator-title">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--orange-soft)] text-[var(--orange-deep)] [&_.icon]:size-5"><Icon name="trend" /></span>
+        <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg bg-orange-soft text-orange-deep"><Icon name="trend" className="size-5" /></span>
         <div>
           <div className="flex items-center gap-2">
             <strong id="recent-usage-estimator-title" className="text-sm">Fill limits from this account&apos;s recent usage</strong>
             <InfoTip label="How recent-usage suggestions work">Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.</InfoTip>
           </div>
-          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-[var(--muted)]">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
-          {notice && <p className="mt-2 text-xs font-semibold text-[var(--good)]" role="status">{notice}</p>}
-          {result && <p className="mt-1 text-[11px] text-[var(--faint)]">{result.cached ? "Reused the 15-minute cache" : `${result.apiCalls} bounded Cloudflare API ${result.apiCalls === 1 ? "request" : "requests"}`} · Window ended {new Date(result.windowEndAt).toLocaleString()}</p>}
+          <p className="mt-1 max-w-[62ch] text-xs leading-5 text-muted">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
+          {notice && <p className="mt-2 text-xs font-semibold text-good" role="status">{notice}</p>}
+          {result && <p className="mt-1 text-[11px] text-faint">{result.cached ? "Reused the 15-minute cache" : `${result.apiCalls} bounded Cloudflare API ${result.apiCalls === 1 ? "request" : "requests"}`} · Window ended {new Date(result.windowEndAt).toLocaleString()}</p>}
         </div>
       </div>
-      <button type="button" className="button secondary shrink-0" disabled={busy} onClick={onSuggest}><Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}</button>
+      <Button className="shrink-0" disabled={busy} onClick={onSuggest}><Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}</Button>
     </section>
   );
 }
@@ -255,11 +274,11 @@ function UsageAccessResults({ result, checking, revealed }: { result: Onboarding
         return (
           <article
             key={row.key}
-            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] px-4 py-3">
-            <span className="grid size-9 place-items-center rounded-lg bg-[var(--panel-soft)] text-[var(--muted)] [&_.icon]:size-5"><Icon name={row.icon} /></span>
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-panel border border-line bg-panel px-4 py-3">
+            <span className="grid size-9 place-items-center rounded-lg bg-panel-soft text-muted"><Icon name={row.icon} className="size-5" /></span>
             <div className="min-w-0">
               <strong className="block text-sm leading-5">{row.label}</strong>
-              <span className="block text-xs leading-4 text-[var(--muted)]">{row.detail}</span>
+              <span className="block text-xs leading-4 text-muted">{row.detail}</span>
             </div>
             <CapabilityPill status={status} />
           </article>
@@ -277,23 +296,23 @@ function UsageAccessResults({ result, checking, revealed }: { result: Onboarding
  * denial (the reconnect action) uses accent color.
  */
 function CapabilityPill({ status }: { status: CapabilityStatus }) {
-  const base = "inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-semibold leading-none [&_.icon]:size-3.5";
+  const base = "inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-semibold leading-none";
   if (status.state === "checking") {
     return (
-      <span className={`${base} border-[var(--line)] bg-[var(--panel-soft)] text-[var(--muted)]`}>
-        <i className="size-3 animate-spin rounded-full border-2 border-[var(--line)] border-t-[var(--orange)] motion-reduce:[animation-duration:2s]" aria-hidden="true" />
+      <span className={`${base} border-line bg-panel-soft text-muted`}>
+        <i className="size-3 animate-spin rounded-full border-2 border-line border-t-orange motion-reduce:[animation-duration:2s]" aria-hidden="true" />
         Checking
       </span>
     );
   }
   const resolved = "animate-access-resolve motion-reduce:animate-none";
   if (status.state === "ready") {
-    return <span className={`${base} ${resolved} border-[var(--good-line)] bg-[var(--good-bg)] text-[var(--good)]`}><Icon name="check" />{status.note}</span>;
+    return <span className={`${base} ${resolved} border-good-line bg-good-bg text-good`}><Icon name="check" className="size-3.5" />{status.note}</span>;
   }
   if (status.state === "attention") {
-    return <span className={`${base} ${resolved} border-[var(--line)] bg-[var(--panel)] text-[var(--muted)]`}><i className="size-2 rounded-full border-[1.5px] border-current" aria-hidden="true" />{status.note}</span>;
+    return <span className={`${base} ${resolved} border-line bg-panel text-muted`}><i className="size-2 rounded-full border-[1.5px] border-current" aria-hidden="true" />{status.note}</span>;
   }
-  return <a className={`${base} ${resolved} border-[var(--line)] bg-[var(--panel)] text-[var(--blue)] hover:border-[var(--blue)]`} href={status.href}><Icon name="refresh" />{status.label}</a>;
+  return <a className={`${base} ${resolved} border-line bg-panel text-blue hover:border-blue`} href={status.href}><Icon name="refresh" className="size-3.5" />{status.label}</a>;
 }
 
 /**
@@ -310,19 +329,19 @@ const LIGHT_GREEN = "bg-[#2fd05e] shadow-[0_0_6px_#2fd05e66]";
 const LIGHT_YELLOW = "bg-[#ffc53d] shadow-[0_0_6px_#ffc53d66]";
 
 function ServiceCoverageGrid({ families, monitored, capped }: { families: OnboardingData["families"]; monitored: boolean; capped: boolean }) {
-  const dot = capped ? LIGHT_GREEN : monitored ? LIGHT_YELLOW : "bg-[var(--faint)] opacity-40";
+  const dot = capped ? LIGHT_GREEN : monitored ? LIGHT_YELLOW : "bg-faint opacity-40";
   return (
-    <section className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4" aria-label="Service coverage">
+    <section className="rounded-panel border border-line bg-panel p-4" aria-label="Service coverage">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">Service coverage</strong>
-        <span className="flex items-center gap-4 text-[11px] text-[var(--muted)]">
+        <span className="flex items-center gap-4 text-[11px] text-muted">
           <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_YELLOW}`} /> Monitor only</span>
           <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_GREEN}`} /> Monitoring + spending caps</span>
         </span>
       </header>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {families.map(family => (
-          <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-2.5 py-2">
+          <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-field border border-line-soft bg-panel-soft px-2.5 py-2">
             <i className={`size-2 flex-none rounded-full ${dot}`} />
             <span className="truncate text-xs font-semibold">{family.label}</span>
           </span>
