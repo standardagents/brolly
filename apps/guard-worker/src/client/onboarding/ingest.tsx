@@ -74,22 +74,18 @@ function ImportCollectorRow({ collector, paused }: { collector: InitialIngestion
   const finished = completed + failed >= collector.total;
   const completeWithoutGaps = finished && failed === 0 && !paused;
   const percentage = collector.total ? Math.min(100, (completed / collector.total) * 100) : 0;
-  const status = paused ? "Paused: storage" : !finished ? "Importing" : failed ? `${failed} ${failed === 1 ? "gap" : "gaps"}` : null;
-  const statusTone = paused || failed ? "border-[var(--warn-line)] bg-[var(--warn-bg)] text-[var(--warn)]" : "border-[var(--line)] bg-[var(--panel-soft)] text-[var(--muted)]";
+  const status = paused ? "Paused: storage" : !finished ? "Importing" : failed ? `${failed} ${failed === 1 ? "gap" : "gaps"}` : "Complete";
+  const statusTone = paused || failed ? "text-[var(--warn)]" : completeWithoutGaps ? "text-[var(--good)]" : "text-[var(--muted)]";
 
   return (
     <article className="grid gap-2 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">{collector.label}</strong>
-        {status && <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${statusTone}`}>{status}</span>}
+        <span className={`text-xs font-semibold ${statusTone}`}>{status}</span>
       </div>
-      <div className="flex items-center gap-3">
-        <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--line-soft)]" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.total} aria-valuenow={completed}>
-          <div className={`h-full rounded-full transition-[width] duration-500 ${paused ? "bg-[var(--warn)]" : completeWithoutGaps ? "bg-[var(--good)]" : "bg-[var(--orange)]"}`} style={{ width: `${percentage}%` }} />
-        </div>
-        <span className="shrink-0 text-xs font-semibold text-[var(--muted)]">{completed}/{collector.total}</span>
+      <div className="h-2 min-w-0 overflow-hidden rounded-full bg-[var(--line-soft)]" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.total} aria-valuenow={completed}>
+        <div className={`h-full rounded-full transition-[width] duration-500 ${paused ? "bg-[var(--warn)]" : completeWithoutGaps ? "bg-[var(--good)]" : "bg-[var(--orange)]"}`} style={{ width: `${percentage}%` }} />
       </div>
-      <span className="text-xs text-[var(--faint)]">{collector.oldestCompleteAt ? `${formatDate(collector.oldestCompleteAt)} – current` : "Import range pending"}</span>
     </article>
   );
 }
@@ -102,11 +98,6 @@ function ingestionIsActive(response: InitialIngestionResponse): boolean {
 
 function isStoragePaused(status: string | undefined): boolean {
   return status === "paused" || status === "paused_storage" || status === "storage_paused";
-}
-
-function formatDate(value: string | number): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
 }
 
 function message(cause: unknown): string {
