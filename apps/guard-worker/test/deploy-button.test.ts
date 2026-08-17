@@ -9,11 +9,10 @@ const run = promisify(execFile);
 
 describe("Deploy to Cloudflare inputs", () => {
   it("ships a complete isolated template with explicit production and preview deploy commands", async () => {
-    const [wrangler, manifest, localSecrets, siteSource, readme, workflow, sourceDeployHelper, templateDeployHelper, updaterWorkflow, release] = await Promise.all([
+    const [wrangler, manifest, localSecrets, readme, workflow, sourceDeployHelper, templateDeployHelper, updaterWorkflow, release] = await Promise.all([
       readFile("deploy/wrangler.jsonc", "utf8").then(value => JSON.parse(value) as { main: string; no_bundle: boolean; find_additional_modules: boolean; d1_databases: Array<{ binding: string; database_id: string }> }),
       readFile("deploy/package.json", "utf8").then(value => JSON.parse(value) as { cloudflare: { bindings: Record<string, unknown> }; scripts: Record<string, string> }),
       readFile("dev.vars.example", "utf8"),
-      readFile("apps/docs-site/src/App.tsx", "utf8"),
       readFile("README.md", "utf8"),
       readFile(".github/workflows/deploy-docs.yml", "utf8"),
       readFile("scripts/deploy-guard.mjs", "utf8"),
@@ -31,9 +30,7 @@ describe("Deploy to Cloudflare inputs", () => {
     expect(manifest.scripts.deploy).toContain("db:migrate:remote");
     expect(manifest.scripts.deploy).toContain("deploy-guard.mjs wrangler.jsonc");
     expect(manifest.scripts.preview).toContain("wrangler versions upload");
-    expect(siteSource).toContain("https://github.com/standardagents/brolly/tree/deploy-template");
     expect(readme).toContain("https://github.com/standardagents/brolly/tree/deploy-template");
-    expect(siteSource).not.toContain("tree/main/deploy");
     expect(readme).not.toContain("tree/main/deploy");
     expect(workflow).toContain("contents: write");
     expect(workflow).toContain("npm --prefix deploy run build");

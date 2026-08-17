@@ -41,6 +41,34 @@ client (`apps/guard-worker/src/client`):
   and fix the code now; never substitute a baseline, exception ledger,
   compliance test, or ceremonial workflow for the refactor.
 
+## Tests must exercise behavior
+
+A test earns its place by calling code and asserting on what it returns,
+renders, or persists. Tests that read source files as text and assert on the
+presence of strings, class names, imports, or animations are forbidden. They
+break on every legitimate rewrite, pass when the feature is broken, and exist
+only to make a checklist feel enforced. Concretely:
+
+- Never `readFileSync` a `.ts`, `.tsx`, or `.css` file inside a test and
+  `toContain` on it. Import the module and call it, or render the component
+  and query the DOM.
+- Never test that a label, hint, button text, or copy string exists in a
+  source file. If copy matters to behavior, render the component; if it does
+  not, do not test it.
+- Never test styling by grep. Design rules (Tailwind-first, no semantic class
+  names, dark mode) are enforced by review and by rewriting the offending
+  code, never by a scanner test.
+- Never test that an animation, keyframe, or transition exists.
+- Never write a test whose only purpose is to pin the current implementation
+  shape (function names, hook signatures, route string literals). Test the
+  observable contract instead.
+
+The one exception is `test/frontend-line-limit.test.ts`, which measures a
+number and names the file to split. When you find a test that violates this
+section, delete it in the same change. Replace it with a behavior test only if
+the underlying invariant is real (a security boundary, a data contract, a
+calculation), never to preserve coverage numbers.
+
 ## Commands
 
 ```bash

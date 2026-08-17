@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MetricSample } from "@standardagents/brolly-core";
-import { billingTokenValidationError, buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
+import { billingAccessConfiguration, billingTokenValidationError, buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
 
 const start = Date.UTC(2026, 7, 11);
 const end = start + 86_400_000;
@@ -25,6 +25,20 @@ function sample(family: string, id: string, cost: number, options: { parentId?: 
     end,
   };
 }
+
+describe("billing access configuration", () => {
+  it("reports credential metadata only and never the stored token", async () => {
+    const stored = { key: "billing_credentials", value: "cfut_encrypted_secret_material", updated_at: 1_700_000_000_000 };
+    const db = { prepare: () => ({ first: async () => stored }) };
+    const fromDatabase = await billingAccessConfiguration({ DB: db } as never);
+    expect(fromDatabase).toEqual({ configured: true, source: "encrypted_database", updatedAt: stored.updated_at });
+    expect(JSON.stringify(fromDatabase)).not.toContain(stored.value);
+
+    const fromSecret = await billingAccessConfiguration({ DB: db, CLOUDFLARE_BILLING_TOKEN: "cfut_worker_secret_value" } as never);
+    expect(fromSecret).toEqual({ configured: true, source: "worker_secret", updatedAt: null });
+    expect(JSON.stringify(fromSecret)).not.toContain("cfut_worker_secret_value");
+  });
+});
 
 describe("onboarding budget estimates", () => {
   it("accepts bounded API-token values without accepting whitespace or empty secrets", () => {
