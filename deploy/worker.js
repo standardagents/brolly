@@ -598,6 +598,17 @@ var MAX_LEDGER_RUN_LIMITS = {
 	backfillSlices: 12,
 	wallMs: 55e3
 };
+/**
+* Per-request budget for the one-shot onboarding import.  The import has a
+* smaller Cloudflare request allowance than the recurring monitor so a fresh
+* install cannot crowd out normal monitoring work.
+*/
+var INITIAL_INGESTION_LIMITS = {
+	...MAX_LEDGER_RUN_LIMITS,
+	graphqlQueries: 40,
+	restRequests: 5,
+	wallMs: 25e3
+};
 var LedgerBudgetExceededError = class extends Error {
 	kind;
 	used;
@@ -1653,14 +1664,27 @@ var CloudflareClient = class {
 	async billingUsage(since, until) {
 		const token = await configuredBillingToken(this.env);
 		if (!token) return null;
-		const from = new Date(since).toISOString().slice(0, 10);
-		const to = new Date(until).toISOString().slice(0, 10);
 		try {
-			return await this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, token);
+			const requested = await this.getBillingUsage(since, until, token);
+			const aligned = billingAlignedStart(requested, since, until);
+			if (aligned !== null) return await this.getBillingUsage(aligned, until, token);
+			return requested;
 		} catch (error) {
 			if (!(error instanceof CloudflareApiError) || ![403, 404].includes(error.status)) throw error;
-			return (await this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage`, token)).map(normalizePaygoBillingRecord);
+			const alignedRecords = (await this.getPaygoBillingUsage(since, until, token)).map(normalizePaygoBillingRecord);
+			const aligned = billingAlignedStart(alignedRecords, since, until);
+			if (aligned !== null) return (await this.getPaygoBillingUsage(aligned, until, token)).map(normalizePaygoBillingRecord);
+			return alignedRecords;
 		}
+	}
+	async getBillingUsage(since, until, token) {
+		const from = new Date(since).toISOString().slice(0, 10);
+		const to = new Date(until).toISOString().slice(0, 10);
+		return await this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, token);
+	}
+	async getPaygoBillingUsage(since, until, token) {
+		const from = new Date(since).toISOString().slice(0, 10);
+		return this.get(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(new Date(until).toISOString().slice(0, 10))}`, token);
 	}
 	async get(path, token) {
 		return (await this.request(path, token)).result;
@@ -1684,12 +1708,20 @@ var CloudflareClient = class {
 		};
 	}
 	async request(path, token) {
-		this.budget.charge("apiCalls");
-		this.ledgerBudget?.charge("restRequests");
-		const response = await fetch(`${API$2}${path}`, {
-			headers: authHeaders(token ?? await this.token()),
-			signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
-		});
+		const authorization = authHeaders(token ?? await this.token());
+		let response;
+		for (let attempt = 0;; attempt += 1) {
+			this.budget.charge("apiCalls");
+			this.ledgerBudget?.charge("restRequests");
+			response = await fetch(`${API$2}${path}`, {
+				headers: authorization,
+				signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+			});
+			if (response.status !== 429 || attempt > 0) break;
+			const retryAfter = retryAfterMilliseconds(response.headers.get("Retry-After"));
+			if (retryAfter === null) break;
+			await delayWithSignal(retryAfter, this.budget.signal);
+		}
 		if (!response.ok) throw await cloudflareApiError(response);
 		const envelope = await response.json();
 		if (!envelope.success) throw new Error(envelope.errors?.map((error) => error.message).join("; ") || "Cloudflare API error");
@@ -1713,10 +1745,55 @@ function normalizePaygoBillingRecord(row) {
 		x_ProductFamilyName: family,
 		x_ZoneId: row.ZoneId,
 		x_ZoneName: row.ZoneName,
+		BillingPeriodStart: row.BillingPeriodStart,
+		BillingPeriodEnd: row.BillingPeriodEnd,
 		BilledCost: row.BilledCost,
 		EffectiveCost: row.EffectiveCost,
 		ListCost: row.ListCost
 	};
+}
+function startOfUtcDay(timestamp) {
+	const date = new Date(timestamp);
+	return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+function billingCycleStart(records) {
+	const starts = records.map((record) => record.BillingPeriodStart ? Date.parse(record.BillingPeriodStart) : NaN).filter(Number.isFinite);
+	return starts.length ? Math.min(...starts) : null;
+}
+function billingAlignedStart(records, since, until) {
+	const cycleStart = billingCycleStart(records);
+	if (cycleStart === null) return null;
+	const previous = previousCycleStart(cycleStart);
+	const aligned = previous !== null && until - previous <= 7776e6 ? previous : cycleStart;
+	return aligned === startOfUtcDay(since) ? null : aligned;
+}
+function previousCycleStart(timestamp) {
+	const date = new Date(timestamp);
+	const year = date.getUTCFullYear();
+	const month = date.getUTCMonth();
+	const day = date.getUTCDate();
+	const previous = new Date(Date.UTC(year, month - 1, day));
+	return previous.getUTCDate() === day ? previous.getTime() : null;
+}
+function retryAfterMilliseconds(value) {
+	if (!value) return null;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1e3, REQUEST_TIMEOUT_MS);
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp)) return null;
+	return Math.max(0, Math.min(timestamp - Date.now(), REQUEST_TIMEOUT_MS));
+}
+async function delayWithSignal(milliseconds, signal) {
+	if (milliseconds <= 0) return;
+	await new Promise((resolve, reject) => {
+		const timer = setTimeout(resolve, milliseconds);
+		const abort = () => {
+			clearTimeout(timer);
+			reject(signal.reason ?? /* @__PURE__ */ new Error("Cloudflare request aborted"));
+		};
+		if (signal.aborted) abort();
+		else signal.addEventListener("abort", abort, { once: true });
+	});
 }
 function catalogCapabilityGaps(accountId, checkedAt) {
 	return METRIC_CATALOG.filter((product) => product.family !== "workers" && product.family !== "durable_objects").map((product) => ({
@@ -3346,8 +3423,10 @@ function parseNullableNumberMap(value) {
 //#endregion
 //#region src/billing-ledger.ts
 var MAX_BATCH$2 = 100;
-async function reconcileBilling(env, client, budget, now = Date.now()) {
-	const records = await client.billingUsage(now - 26784e5, now);
+async function reconcileBilling(env, client, budget, now = Date.now(), window) {
+	const startsAt = window?.startsAt ?? now - 26784e5;
+	const endsAt = window?.endsAt ?? now;
+	const records = await client.billingUsage(startsAt, endsAt);
 	if (!records) return {
 		available: false,
 		complete: false,
@@ -3512,6 +3591,12 @@ async function reconcileBilling(env, client, budget, now = Date.now()) {
        human_explanation=excluded.human_explanation,state=excluded.state,watermark_at=excluded.watermark_at`).bind(env.BROLLY_ACCOUNT_ID, nowValue, `Billing reconciliation retained the first 20,000 of ${records.length} lines`));
 	await runBatches$3(env.DB, statements, budget);
 	await allocateAuthoritativeCosts(env.DB, env.BROLLY_ACCOUNT_ID, boundedRecords, timeZone, budget);
+	const effectiveStart = effectiveBillingStart(boundedRecords, startsAt);
+	const missingRanges = window?.recordGaps ? billingMissingRanges(boundedRecords, effectiveStart, endsAt) : [];
+	const gapDetail = missingRanges.length ? `Billing data is missing for ${missingRanges.map((range) => `${range.from} through ${range.to}`).join(", ")}` : void 0;
+	if (gapDetail) chargeMeta$2(budget, (await env.DB.prepare(`INSERT INTO metric_coverage(family,metric,finest_scope,state,detail,checked_at)
+       VALUES('billing','initial_import_gaps','account','delayed',?1,?2)
+       ON CONFLICT(family,metric) DO NOTHING`).bind(gapDetail, nowValue).run()).meta);
 	const authoritativeCostUsd = [...cycles.values()].reduce((total, cycle) => total + cycle.cost, 0);
 	const alertChanges = billingAlertChanges(env.BROLLY_ACCOUNT_ID, boundedRecords, [...cycles.values()], env.BROLLY_TIMEZONE ?? "UTC", now);
 	return {
@@ -3522,8 +3607,46 @@ async function reconcileBilling(env, client, budget, now = Date.now()) {
 		unknownProducts: [...unknownProducts].sort(),
 		authoritativeCostUsd,
 		alertChanges,
-		...truncated ? { error: `Billing reconciliation reached its 20,000-line limit from ${records.length} returned lines` } : {}
+		...truncated || gapDetail ? { error: [truncated ? `Billing reconciliation reached its 20,000-line limit from ${records.length} returned lines` : null, gapDetail].filter(Boolean).join("; ") } : {}
 	};
+}
+function billingMissingRanges(records, startsAt, endsAt) {
+	const firstDay = utcDayStart(startsAt);
+	const lastDay = utcDayStart(endsAt) - 864e5;
+	if (lastDay < firstDay) return [];
+	const covered = /* @__PURE__ */ new Set();
+	for (const record of records) {
+		const start = safeDate(record.ChargePeriodStart, startsAt);
+		const end = Math.max(start + 1, safeDate(record.ChargePeriodEnd, endOfUtcDay(start)));
+		for (let day = utcDayStart(start); day < end; day += 864e5) if (day >= firstDay && day <= lastDay) covered.add(utcDate(day));
+	}
+	const missing = [];
+	for (let day = firstDay; day <= lastDay; day += 864e5) if (!covered.has(utcDate(day))) missing.push(day);
+	const ranges = [];
+	for (const day of missing) {
+		const previous = ranges.at(-1);
+		const date = utcDate(day);
+		if (previous && utcDate(Date.parse(`${previous.to}T00:00:00Z`) + 864e5) === date) previous.to = date;
+		else ranges.push({
+			from: date,
+			to: date
+		});
+	}
+	return ranges;
+}
+function effectiveBillingStart(records, requestedStart) {
+	const starts = records.map((record) => record.BillingPeriodStart ? Date.parse(record.BillingPeriodStart) : NaN).filter(Number.isFinite);
+	return starts.length ? Math.max(requestedStart, Math.min(...starts)) : requestedStart;
+}
+function utcDayStart(timestamp) {
+	const date = new Date(timestamp);
+	return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+function endOfUtcDay(timestamp) {
+	return utcDayStart(timestamp) + 864e5;
+}
+function utcDate(timestamp) {
+	return new Date(timestamp).toISOString().slice(0, 10);
 }
 function addBillingAggregate(target, key, value) {
 	const aggregate = target.get(key) ?? {
@@ -3690,6 +3813,57 @@ function safeDate(value, fallback) {
 	if (!value) return fallback;
 	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) ? parsed : fallback;
+}
+//#endregion
+//#region src/ingest.ts
+/** Collects, normalizes, and persists one bounded usage or billing window. */
+async function ingestWindow(options) {
+	if (options.collector === "billing") {
+		const result = await reconcileBilling(options.env, options.client, options.budget, options.endsAt, {
+			startsAt: options.startsAt,
+			endsAt: options.endsAt,
+			recordGaps: options.historical === true
+		});
+		const state = !result.available ? "permission_denied" : result.error && options.historical ? "delayed" : result.complete ? "healthy" : "delayed";
+		return {
+			observations: result.records,
+			complete: result.complete,
+			continuation: null,
+			samples: [],
+			coverage: [{
+				family: "billing",
+				metric: options.historical ? "initial_import_gaps" : "authoritative_usage",
+				finestScope: "account",
+				state,
+				checkedAt: options.endsAt,
+				detail: result.error ?? (result.available ? void 0 : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries")
+			}],
+			changes: result.alertChanges,
+			watermarkAt: options.endsAt
+		};
+	}
+	const result = options.collector === "graphql:durable-objects" ? await options.client.durableObjectUsagePaged(options.startsAt, options.endsAt, {
+		cursor: options.cursor,
+		maxPages: options.maxPages
+	}) : await options.client.workerUsage(options.startsAt, options.endsAt, {
+		cursor: options.cursor,
+		maxPages: options.maxPages
+	});
+	const observations = expandUsageObservations(result.samples, options.collector, options.collector === "graphql:durable-objects" ? "durable-object-usage" : "workersInvocationsAdaptive", result.complete ? "complete" : "partial", {
+		watermarkAt: result.watermarkAt,
+		historical: options.historical ?? false
+	});
+	const changes = options.persist === false ? [] : await options.ledger.applyObservations(observations, options.timeZone);
+	return {
+		observations: observations.length,
+		complete: result.complete,
+		continuation: result.continuation,
+		samples: result.samples,
+		coverage: result.coverage,
+		changes,
+		watermarkAt: result.watermarkAt,
+		normalizedObservations: observations
+	};
 }
 //#endregion
 //#region src/alert-engine.ts
@@ -4399,65 +4573,28 @@ function chargeMeta(budget, meta) {
 }
 //#endregion
 //#region src/backfill.ts
-async function ensureOnboardingBackfill(db, accountId, now = Date.now()) {
-	if (await db.prepare(`SELECT 1 AS present FROM backfill_jobs WHERE account_id=?1 LIMIT 1`).bind(accountId).first()) return {
-		jobs: 0,
-		slices: 0
-	};
-	const capabilityRows = await db.prepare(`SELECT DISTINCT collector_key FROM collector_capabilities
-     WHERE account_id=?1 AND available=1 AND collector_key LIKE 'graphql:%' LIMIT 50`).bind(accountId).all();
-	const collectors = capabilityRows.results.length ? capabilityRows.results.map((row) => row.collector_key) : ["graphql:durable-objects", "graphql:workers"];
-	const monthStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
-	const phases = [
-		{
-			startsAt: now - 864e5,
-			endsAt: now
-		},
-		{
-			startsAt: monthStart,
-			endsAt: now - 864e5
-		},
-		{
-			startsAt: now - 63072e6,
-			endsAt: monthStart
-		}
-	].filter((phase) => phase.startsAt < phase.endsAt);
-	let slices = 0;
-	const statements = [];
-	for (const phase of phases) {
-		const jobId = crypto.randomUUID();
-		statements.push(db.prepare(`INSERT INTO backfill_jobs(
-         id,account_id,requested_start_at,requested_end_at,newest_first,status,created_at,updated_at
-       ) VALUES(?1,?2,?3,?4,1,'pending',?5,?5)`).bind(jobId, accountId, phase.startsAt, phase.endsAt, now));
-		for (let end = phase.endsAt; end > phase.startsAt; end -= 864e5) {
-			const start = Math.max(phase.startsAt, end - 864e5);
-			for (const collector of collectors) {
-				statements.push(db.prepare(`INSERT INTO backfill_slices(
-             id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at
-           ) VALUES(?1,?2,?3,'',?4,?5,'pending','missing',?6)`).bind(crypto.randomUUID(), jobId, collector, start, end, now));
-				slices += 1;
-			}
-		}
-	}
-	for (let offset = 0; offset < statements.length; offset += 100) await db.batch(statements.slice(offset, offset + 100));
-	return {
-		jobs: phases.length,
-		slices
-	};
-}
-async function runOneBackfillSlice(env, client, ledger, budget, timeZone) {
-	if (budget.remaining("graphqlQueries") < 16 || budget.remaining("d1RowsWritten") < 1e3 || budget.remaining("wallMs") < 8e3) return {
+async function runOneBackfillSlice(env, client, ledger, budget, timeZone, options = {}) {
+	if (budget.remaining("d1RowsWritten") < 1e3 || budget.remaining("wallMs") < 8e3) return {
 		worked: false,
 		complete: false,
 		samples: 0
 	};
 	const slice = await env.DB.prepare(`SELECT s.* FROM backfill_slices s JOIN backfill_jobs j ON j.id=s.backfill_job_id
      WHERE s.status='pending' AND j.status IN ('pending','running')
-     ORDER BY s.ends_at DESC,s.collector_key LIMIT 1`).first();
+       AND (?1 IS NULL OR j.id=?1)
+       AND (?2 IS NULL OR j.kind=?2)
+       AND (s.next_eligible_at IS NULL OR s.next_eligible_at<=?3)
+     ORDER BY s.ends_at DESC,s.collector_key LIMIT 1`).bind(options.jobId ?? null, options.kind ?? null, Date.now()).first();
 	budget.charge("d1RowsRead", slice ? 1 : 0);
 	if (!slice) return {
 		worked: false,
 		complete: true,
+		samples: 0
+	};
+	const collector = toUsageCollector(slice.collector_key);
+	if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < 16) return {
+		worked: false,
+		complete: false,
 		samples: 0
 	};
 	budget.charge("backfillSlices");
@@ -4469,58 +4606,45 @@ async function runOneBackfillSlice(env, client, ledger, budget, timeZone) {
 		samples: 0
 	};
 	try {
-		let observations;
-		let complete = true;
-		let cursor;
-		if (slice.collector_key.includes("durable")) {
-			const result = await client.durableObjectUsagePaged(slice.starts_at, slice.ends_at, {
-				cursor: parseCursor(slice.cursor_json),
-				maxPages: 2
-			});
-			complete = result.complete;
-			cursor = result.continuation;
-			observations = expandUsageObservations(result.samples, "graphql:durable-objects", "durable-object-usage", result.complete ? "complete" : "partial", {
-				watermarkAt: result.watermarkAt,
-				historical: true
-			});
-		} else if (slice.collector_key.includes("workers")) {
-			const result = await client.workerUsage(slice.starts_at, slice.ends_at, {
-				cursor: parseWorkerCursor(slice.cursor_json),
-				maxPages: 2
-			});
-			complete = result.complete;
-			cursor = result.continuation;
-			observations = expandUsageObservations(result.samples, "graphql:workers", "workersInvocationsAdaptive", result.complete ? "complete" : "partial", {
-				watermarkAt: slice.ends_at,
-				historical: true
-			});
-		} else {
+		if (!collector) {
 			await finishSlice(env.DB, budget, slice, "complete", null, "Collector has no historical implementation", "missing");
+			await updateJobStatus(env.DB, budget, slice.backfill_job_id);
 			return {
 				worked: true,
 				complete: true,
 				samples: 0
 			};
 		}
-		const changes = await ledger.applyObservations(observations, timeZone);
-		const cycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, slice.ends_at - 1);
-		await evaluateUsageAlerts(env, changes, {
+		const result = await ingestWindow({
+			env,
+			client,
+			ledger,
+			collector,
+			startsAt: slice.starts_at,
+			endsAt: slice.ends_at,
+			cursor: collector === "graphql:durable-objects" ? parseCursor(slice.cursor_json) : parseWorkerCursor(slice.cursor_json),
+			budget,
 			timeZone,
-			billingCycleId: cycle.id,
-			billingCycleStart: cycle.startsAt,
-			billingCycleEnd: cycle.endsAt,
-			now: Date.now(),
-			budget
+			historical: true,
+			maxPages: 2
 		});
-		await finishSlice(env.DB, budget, slice, complete ? "complete" : "pending", cursor, complete ? null : "Continuation saved after the bounded page budget", complete ? "complete" : "partial");
+		const unavailable = result.coverage.find((item) => (item.state === "permission_denied" || item.state === "unavailable") && !(collector === "graphql:workers" && item.metric === "cache_requests"));
+		if (unavailable) throw new Error(unavailable.detail ?? `${collector} telemetry is ${unavailable.state}`);
+		const terminal = collector === "billing" || result.complete;
+		const coverage = collector === "billing" ? result.coverage.some((item) => item.metric === "initial_import_gaps" && item.state !== "healthy") ? "partial" : "complete" : result.complete ? "complete" : "partial";
+		await finishSlice(env.DB, budget, slice, terminal ? "complete" : "pending", result.continuation, terminal ? null : "Continuation saved after the bounded page budget", coverage);
 		await updateJobStatus(env.DB, budget, slice.backfill_job_id);
 		return {
 			worked: true,
-			complete,
-			samples: observations.length
+			complete: result.complete,
+			samples: result.observations
 		};
 	} catch (error) {
-		await finishSlice(env.DB, budget, slice, "pending", parseCursor(slice.cursor_json), error instanceof Error ? error.message : String(error), "missing", true);
+		const previousRetryCount = Math.min(3, Number(slice.retry_count ?? 0));
+		const failed = previousRetryCount >= 3;
+		const retryCount = failed ? 3 : previousRetryCount + 1;
+		await finishSlice(env.DB, budget, slice, failed ? "failed" : "pending", parseCursor(slice.cursor_json), error instanceof Error ? error.message : String(error), "missing", !failed, retryCount);
+		await updateJobStatus(env.DB, budget, slice.backfill_job_id);
 		return {
 			worked: true,
 			complete: false,
@@ -4528,19 +4652,30 @@ async function runOneBackfillSlice(env, client, ledger, budget, timeZone) {
 		};
 	}
 }
-async function finishSlice(db, budget, slice, status, cursor, error, coverage, retry = false) {
+async function finishSlice(db, budget, slice, status, cursor, error, coverage, retry = false, retryCount) {
+	const nextEligibleAt = retry && (retryCount ?? 0) <= 3 ? Date.now() + [
+		3e4,
+		12e4,
+		48e4
+	][Math.max(0, (retryCount ?? 1) - 1)] : null;
 	const result = await db.prepare(`UPDATE backfill_slices SET
        status=?2,cursor_json=?3,error=?4,coverage_status=?5,
-       retry_count=retry_count+?6,updated_at=?7 WHERE id=?1`).bind(slice.id, status, cursor ? JSON.stringify(cursor) : null, error?.slice(0, 2e3) ?? null, coverage, retry ? 1 : 0, Date.now()).run();
+       retry_count=COALESCE(?6,retry_count),next_eligible_at=?7,updated_at=?8 WHERE id=?1`).bind(slice.id, status, cursor ? JSON.stringify(cursor) : null, error?.slice(0, 2e3) ?? null, coverage, retryCount ?? null, nextEligibleAt, Date.now()).run();
 	budget.charge("d1RowsWritten", Number(result.meta.rows_written ?? result.meta.changes ?? 0));
 }
 async function updateJobStatus(db, budget, jobId) {
 	const result = await db.prepare(`UPDATE backfill_jobs SET
        status=CASE WHEN EXISTS(
-         SELECT 1 FROM backfill_slices WHERE backfill_job_id=?1 AND status!='complete'
+         SELECT 1 FROM backfill_slices WHERE backfill_job_id=?1 AND status IN ('pending','running')
        ) THEN 'running' ELSE 'complete' END,
        updated_at=?2 WHERE id=?1`).bind(jobId, Date.now()).run();
 	budget.charge("d1RowsWritten", Number(result.meta.rows_written ?? result.meta.changes ?? 0));
+}
+function toUsageCollector(value) {
+	if (value === "billing" || value.includes("billing")) return "billing";
+	if (value.includes("durable")) return "graphql:durable-objects";
+	if (value.includes("workers")) return "graphql:workers";
+	return null;
 }
 function parseCursor(value) {
 	if (!value) return void 0;
@@ -4850,10 +4985,54 @@ async function runMonitor(env, options = {}) {
 		const workerActiveWindow = collectorWindow(workerActiveCursor, since, collectionEnd);
 		const workerCorrectionWindow = collectorWindow(workerCorrectionCursor, since - 3e5, since);
 		const [durableObjects, durableCorrections, workers, workerCorrections] = await Promise.all([
-			client.durableObjectUsagePaged(durableActiveWindow.startAt, durableActiveWindow.endAt, { cursor: durableActiveWindow.cursor }),
-			client.durableObjectUsagePaged(durableCorrectionWindow.startAt, durableCorrectionWindow.endAt, { cursor: durableCorrectionWindow.cursor }),
-			client.workerUsage(workerActiveWindow.startAt, workerActiveWindow.endAt, { cursor: workerActiveWindow.cursor }),
-			client.workerUsage(workerCorrectionWindow.startAt, workerCorrectionWindow.endAt, { cursor: workerCorrectionWindow.cursor })
+			ingestWindow({
+				env,
+				client,
+				ledger,
+				collector: "graphql:durable-objects",
+				budget: ledgerBudget,
+				timeZone,
+				startsAt: durableActiveWindow.startAt,
+				endsAt: durableActiveWindow.endAt,
+				cursor: durableActiveWindow.cursor,
+				persist: false
+			}),
+			ingestWindow({
+				env,
+				client,
+				ledger,
+				collector: "graphql:durable-objects",
+				budget: ledgerBudget,
+				timeZone,
+				startsAt: durableCorrectionWindow.startAt,
+				endsAt: durableCorrectionWindow.endAt,
+				cursor: durableCorrectionWindow.cursor,
+				persist: false
+			}),
+			ingestWindow({
+				env,
+				client,
+				ledger,
+				collector: "graphql:workers",
+				budget: ledgerBudget,
+				timeZone,
+				startsAt: workerActiveWindow.startAt,
+				endsAt: workerActiveWindow.endAt,
+				cursor: workerActiveWindow.cursor,
+				persist: false
+			}),
+			ingestWindow({
+				env,
+				client,
+				ledger,
+				collector: "graphql:workers",
+				budget: ledgerBudget,
+				timeZone,
+				startsAt: workerCorrectionWindow.startAt,
+				endsAt: workerCorrectionWindow.endAt,
+				cursor: workerCorrectionWindow.cursor,
+				persist: false
+			})
 		]);
 		runContinuation = {
 			durableObjects: windowContinuation(durableActiveWindow, durableObjects.continuation, collectionEnd),
@@ -4864,13 +5043,13 @@ async function runMonitor(env, options = {}) {
 		await store.saveCoverage([...durableObjects.coverage, ...workers.coverage]);
 		await store.applyPoliciesToAssets([...durableObjects.samples, ...durableCorrections.samples].map((sample) => sample.asset), "durable_objects");
 		await store.applyPoliciesToAssets([...workers.samples, ...workerCorrections.samples].map((sample) => sample.asset), "workers");
+		normalizedSamples = durableObjects.observations + durableCorrections.observations + workers.observations + workerCorrections.observations;
 		const ledgerObservations = [
-			...expandUsageObservations(durableCorrections.samples, "graphql:durable-objects", "durable-object-usage", durableCorrections.complete ? "complete" : "partial", { watermarkAt: durableCorrections.watermarkAt }),
-			...expandUsageObservations(durableObjects.samples, "graphql:durable-objects", "durable-object-usage", durableObjects.complete ? "complete" : "partial", { watermarkAt: durableObjects.watermarkAt }),
-			...expandUsageObservations(workerCorrections.samples, "graphql:workers", "workersInvocationsAdaptive", workerCorrections.complete ? "complete" : "partial", { watermarkAt: workerCorrections.watermarkAt }),
-			...expandUsageObservations(workers.samples, "graphql:workers", "workersInvocationsAdaptive", workers.complete ? "complete" : "partial", { watermarkAt: workers.watermarkAt })
+			...durableCorrections.normalizedObservations ?? [],
+			...durableObjects.normalizedObservations ?? [],
+			...workerCorrections.normalizedObservations ?? [],
+			...workers.normalizedObservations ?? []
 		];
-		normalizedSamples = ledgerObservations.length;
 		const ledgerChanges = await ledger.applyObservations(ledgerObservations, timeZone);
 		const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
 		const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
@@ -4892,9 +5071,18 @@ async function runMonitor(env, options = {}) {
 		await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:workers", "correction", workerCorrectionWindow, workerCorrections, now);
 		await ledger.sealCompletedDays(env.BROLLY_ACCOUNT_ID, timeZone, now);
 		if (billingDue) try {
-			const billing = await reconcileBilling(env, client, ledgerBudget, now);
+			const billing = await ingestWindow({
+				env,
+				client,
+				ledger,
+				collector: "billing",
+				budget: ledgerBudget,
+				timeZone,
+				startsAt: now - 26784e5,
+				endsAt: now
+			});
 			const reconciledCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, now);
-			await dispatchAlertNotifications(env, (await evaluateUsageAlerts(env, billing.alertChanges, {
+			await dispatchAlertNotifications(env, (await evaluateUsageAlerts(env, billing.changes, {
 				timeZone,
 				billingCycleId: reconciledCycle.id,
 				billingCycleStart: reconciledCycle.startsAt,
@@ -4906,9 +5094,9 @@ async function runMonitor(env, options = {}) {
 				family: "billing",
 				metric: "authoritative_usage",
 				finestScope: "account",
-				state: billing.complete ? "healthy" : billing.available ? "delayed" : "permission_denied",
+				state: billing.coverage[0]?.state ?? "unavailable",
 				checkedAt: now,
-				detail: billing.error ?? (billing.available ? void 0 : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries")
+				detail: billing.coverage[0]?.detail
 			}]);
 			await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", "", {
 				watermarkAt: now,
@@ -6249,7 +6437,7 @@ function htmlError(message, status) {
 }
 //#endregion
 //#region src/budget-estimates.ts
-var DAY_MS = 864e5;
+var DAY_MS$1 = 864e5;
 var CACHE_MS$1 = 9e5;
 var CACHE_KEY$1 = "onboarding_budget_estimates";
 var LEASE_NAME$1 = "onboarding-budget-estimates";
@@ -6279,7 +6467,7 @@ async function configureOnboardingBillingAccess(env, token) {
 	const records = await new CloudflareClient({
 		...env,
 		CLOUDFLARE_BILLING_TOKEN: normalized
-	}, budget).billingUsage(Date.now() - 2 * DAY_MS, Date.now()).catch((error) => {
+	}, budget).billingUsage(Date.now() - 2 * DAY_MS$1, Date.now()).catch((error) => {
 		const detail = error instanceof Error ? error.message : String(error);
 		if (/insufficient_permissions|permission|forbidden|unauthorized/i.test(detail)) throw new Error("Cloudflare rejected this token for billable usage. Create a user API token scoped to this account with Billing Read, then try again.");
 		throw error;
@@ -6331,7 +6519,7 @@ async function onboardingBudgetEstimates(env) {
 	if (Number(lease.meta.changes ?? 0) !== 1) throw new BudgetEstimateInProgressError();
 	try {
 		const windowEndAt = Date.now();
-		const windowStartAt = windowEndAt - DAY_MS;
+		const windowStartAt = windowEndAt - DAY_MS$1;
 		const budget = new RunBudget({
 			apiCalls: 4,
 			databaseRows: 100,
@@ -6342,7 +6530,7 @@ async function onboardingBudgetEstimates(env) {
 		const [durableObjects, workers, billingResult] = await Promise.all([
 			client.durableObjectUsage(windowStartAt, windowEndAt),
 			client.workerUsage(windowStartAt, windowEndAt),
-			client.billingUsage(windowStartAt - DAY_MS, windowEndAt).then((records) => ({
+			client.billingUsage(windowStartAt - DAY_MS$1, windowEndAt).then((records) => ({
 				records,
 				error: null
 			})).catch((error) => ({
@@ -6514,7 +6702,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "5aa9fdf187ce24b2df5b8926dd6d49fbe5793794";
+var BROLLY_RELEASE = "6c7a3a5cf9d40d4ec9216d1b287615d7a9e084d5";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -6905,7 +7093,7 @@ async function createBackfill(request, db, accountId, actor) {
 	const body = await request.json();
 	const endsAt = finiteTimestamp(body.endsAt) ?? Date.now();
 	const startsAt = finiteTimestamp(body.startsAt) ?? endsAt - 2592e6;
-	if (startsAt >= endsAt || endsAt - startsAt > 63072e6) return Response.json({ error: "Backfill range must be between one day and 730 days" }, { status: 400 });
+	if (startsAt >= endsAt || endsAt - startsAt > 7776e6) return Response.json({ error: "Backfill range must be between one day and 90 days" }, { status: 400 });
 	const capabilities = await db.prepare(`SELECT DISTINCT collector_key FROM collector_capabilities WHERE account_id=?1 AND available=1 AND collector_key LIKE 'graphql:%' LIMIT 50`).bind(accountId).all();
 	const collectors = capabilities.results.length ? capabilities.results.map((row) => row.collector_key) : ["graphql:durable-objects", "graphql:workers"];
 	const id = crypto.randomUUID();
@@ -7335,6 +7523,156 @@ function jsonValue(value) {
 	}
 }
 //#endregion
+//#region src/initial-ingestion.ts
+var DAY_MS = 864e5;
+var NINETY_DAYS_MS = 90 * DAY_MS;
+var MAX_SLICE_MS = 32 * DAY_MS;
+var INITIAL_USAGE_COLLECTORS = [{
+	collector: "graphql:durable-objects",
+	label: "Durable Objects",
+	dataset: "durable-object-usage"
+}, {
+	collector: "graphql:workers",
+	label: "Workers",
+	dataset: "workersInvocationsAdaptive"
+}];
+var INITIAL_BILLING_COLLECTOR = {
+	collector: "billing",
+	label: "Billing",
+	dataset: "billable-usage"
+};
+/** Return whether a Billing Read credential is available without making a network request. */
+async function billingIngestionAvailable(env) {
+	try {
+		return Boolean(await configuredBillingToken(env));
+	} catch {
+		return false;
+	}
+}
+/**
+* Create the single initial job and its fixed 90-day slices.  The partial
+* unique index in migration 0004 makes this safe when two onboarding tabs race.
+*/
+async function ensureInitialIngestionJob(db, accountId, options = {}) {
+	const now = options.now ?? Date.now();
+	const existing = await db.prepare(`SELECT id,status,updated_at FROM backfill_jobs
+     WHERE account_id=?1 AND kind='initial' LIMIT 1`).bind(accountId).first();
+	if (existing) {
+		const count = await db.prepare(`SELECT COUNT(*) AS count FROM backfill_slices WHERE backfill_job_id=?1`).bind(existing.id).first();
+		return {
+			id: existing.id,
+			created: false,
+			status: existing.status,
+			slices: Number(count?.count ?? 0)
+		};
+	}
+	const startsAt = now - NINETY_DAYS_MS;
+	const jobId = crypto.randomUUID();
+	const slices = initialIngestionSlicePlan(now, options.billingAvailable === true);
+	const statements = [db.prepare(`INSERT INTO backfill_jobs(
+       id,account_id,kind,requested_start_at,requested_end_at,newest_first,status,created_at,updated_at
+     ) VALUES(?1,?2,'initial',?3,?4,1,'pending',?5,?5)`).bind(jobId, accountId, startsAt, now, now)];
+	for (const slice of slices) statements.push(db.prepare(`INSERT INTO backfill_slices(
+         id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,
+         retry_count,next_eligible_at,coverage_status,updated_at
+       ) VALUES(?1,?2,?3,'',?4,?5,'pending',0,?6,'missing',?7)`).bind(crypto.randomUUID(), jobId, slice.collector, slice.startsAt, slice.endsAt, now, now));
+	try {
+		for (let offset = 0; offset < statements.length; offset += 100) await db.batch(statements.slice(offset, offset + 100));
+	} catch (error) {
+		const raced = await db.prepare(`SELECT id,status,updated_at FROM backfill_jobs
+       WHERE account_id=?1 AND kind='initial' LIMIT 1`).bind(accountId).first();
+		if (!raced) throw error;
+		const count = await db.prepare(`SELECT COUNT(*) AS count FROM backfill_slices WHERE backfill_job_id=?1`).bind(raced.id).first();
+		return {
+			id: raced.id,
+			created: false,
+			status: raced.status,
+			slices: Number(count?.count ?? 0)
+		};
+	}
+	return {
+		id: jobId,
+		created: true,
+		status: "pending",
+		slices: slices.length
+	};
+}
+/** Return the immutable newest-first import plan for a given request time. */
+function initialIngestionSlicePlan(now, billingAvailable) {
+	const startsAt = now - NINETY_DAYS_MS;
+	const slices = [];
+	for (const collector of INITIAL_USAGE_COLLECTORS) for (let end = now; end > startsAt;) {
+		const start = Math.max(startsAt, end - MAX_SLICE_MS);
+		slices.push({
+			collector: collector.collector,
+			startsAt: start,
+			endsAt: end
+		});
+		end = start;
+	}
+	if (billingAvailable) slices.push({
+		collector: INITIAL_BILLING_COLLECTOR.collector,
+		startsAt,
+		endsAt: now
+	});
+	return slices;
+}
+/** Build the progress response directly from backfill_slices counts. */
+async function initialIngestionProgress(db, accountId) {
+	const [job, rows] = await Promise.all([db.prepare(`SELECT id,status,created_at,updated_at FROM backfill_jobs
+       WHERE account_id=?1 AND kind='initial' LIMIT 1`).bind(accountId).first(), db.prepare(`SELECT s.collector_key,
+         COUNT(*) AS total,
+         SUM(CASE WHEN s.status='complete' THEN 1 ELSE 0 END) AS complete,
+         SUM(CASE WHEN s.status='failed' OR (s.status='complete' AND s.coverage_status!='complete') THEN 1 ELSE 0 END) AS failed,
+         MIN(CASE WHEN s.status='complete' THEN s.starts_at END) AS oldest_complete_at
+       FROM backfill_slices s JOIN backfill_jobs j ON j.id=s.backfill_job_id
+       WHERE j.account_id=?1 AND j.kind='initial'
+       GROUP BY s.collector_key ORDER BY s.collector_key`).bind(accountId).all()]);
+	return {
+		job: job ? {
+			id: job.id,
+			status: job.status,
+			startedAt: job.created_at,
+			updatedAt: job.updated_at
+		} : null,
+		collectors: rows.results.map((row) => ({
+			collector: row.collector_key,
+			label: collectorLabel(row.collector_key),
+			total: Number(row.total ?? 0),
+			complete: Number(row.complete ?? 0),
+			failed: Number(row.failed ?? 0),
+			oldestCompleteAt: row.oldest_complete_at == null ? null : Number(row.oldest_complete_at)
+		}))
+	};
+}
+/**
+* Drain eligible slices for one initial job.  A fresh budget belongs to this
+* invocation and is never shared with the recurring monitor.
+*/
+async function runInitialIngestion(env, jobId, now = Date.now()) {
+	const ledgerBudget = new LedgerRunBudget(INITIAL_INGESTION_LIMITS);
+	const budget = new RunBudget({
+		apiCalls: INITIAL_INGESTION_LIMITS.graphqlQueries + INITIAL_INGESTION_LIMITS.restRequests,
+		databaseRows: INITIAL_INGESTION_LIMITS.d1RowsRead + INITIAL_INGESTION_LIMITS.d1RowsWritten,
+		samples: 1e5,
+		wallMs: INITIAL_INGESTION_LIMITS.wallMs
+	});
+	const client = new CloudflareClient(env, budget, ledgerBudget);
+	const ledger = new LedgerStore(env.DB, ledgerBudget);
+	const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
+	while (true) {
+		if (ledgerBudget.remaining("wallMs") < 8e3 || budget.remaining("wallMs") < 8e3) break;
+		if (!(await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone, {
+			jobId,
+			kind: "initial"
+		})).worked) break;
+	}
+}
+function collectorLabel(collector) {
+	if (collector === INITIAL_BILLING_COLLECTOR.collector) return INITIAL_BILLING_COLLECTOR.label;
+	return INITIAL_USAGE_COLLECTORS.find((item) => item.collector === collector)?.label ?? collector;
+}
+//#endregion
 //#region src/index.ts
 var src_default = {
 	async scheduled(_controller, env, ctx) {
@@ -7343,7 +7681,7 @@ var src_default = {
 			if (activeEnv) await runMonitor(activeEnv);
 		})());
 	},
-	async fetch(request, env) {
+	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 		if (url.pathname === "/health") return Response.json({
 			ok: true,
@@ -7386,6 +7724,21 @@ var src_default = {
 			}
 		}
 		if (url.pathname === "/api/onboarding" && request.method === "GET") return Response.json(await onboardingData(env));
+		if (url.pathname === "/api/onboarding/ingest" && request.method === "GET") return Response.json(await initialIngestionProgress(env.DB, env.BROLLY_ACCOUNT_ID), { headers: { "cache-control": "no-store" } });
+		if (url.pathname === "/api/onboarding/ingest" && request.method === "POST") {
+			const job = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, { billingAvailable: await billingIngestionAvailable(env) });
+			if (job.created || job.status === "pending" || job.status === "running") {
+				const work = runInitialIngestion(env, job.id).catch(() => void 0);
+				if (ctx) ctx.waitUntil(work);
+			}
+			return Response.json({
+				ok: true,
+				job
+			}, {
+				status: job.created ? 202 : 200,
+				headers: { "cache-control": "no-store" }
+			});
+		}
 		if (url.pathname === "/api/onboarding/estimates" && request.method === "POST") try {
 			return Response.json(await onboardingBudgetEstimates(env), { headers: { "cache-control": "no-store" } });
 		} catch (error) {
@@ -7450,7 +7803,14 @@ var src_default = {
 			for (let index = 0; index < integrationStatements.length; index += 100) await env.DB.batch(integrationStatements.slice(index, index + 100));
 			await new LedgerStore(env.DB).syncMetricCatalog();
 			await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, body.policy, true);
-			const backfill = await ensureOnboardingBackfill(env.DB, env.BROLLY_ACCOUNT_ID, now);
+			const initialIngestion = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, {
+				billingAvailable: await billingIngestionAvailable(env),
+				now
+			});
+			if (initialIngestion.created || initialIngestion.status === "pending" || initialIngestion.status === "running") {
+				const work = runInitialIngestion(env, initialIngestion.id, now).catch(() => void 0);
+				if (ctx) ctx.waitUntil(work);
+			}
 			await audit(env.DB, "admin", "onboarding.complete", body.policy.version, {
 				mode: body.policy.mode,
 				families: Object.keys(body.policy.familyDailySpend ?? {}).length,
@@ -7461,7 +7821,7 @@ var src_default = {
 			return Response.json({
 				ok: true,
 				policy: body.policy,
-				backfill
+				initialIngestion
 			});
 		}
 		if (url.pathname === "/api/status" && request.method === "GET") {

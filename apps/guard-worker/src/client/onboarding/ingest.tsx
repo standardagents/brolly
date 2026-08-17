@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { Button, Notice } from "../components/ui";
+import { Button, Notice, Spinner } from "../components/ui";
 import type { InitialIngestionCollector, InitialIngestionResponse } from "../types";
 import { StepActions, StepIntro } from "./BudgetSteps";
 
@@ -81,7 +81,7 @@ function ImportCollectorRow({ collector, paused }: { collector: InitialIngestion
   return (
     <article className="grid gap-2 rounded-panel border border-line bg-panel p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong className="text-sm">{collector.label}</strong>
+        <span className="flex items-center gap-2"><strong className="text-sm">{collector.label}</strong>{!finished && !paused && <Spinner />}</span>
         <span className={`text-xs font-semibold ${statusTone}`}>{status}</span>
       </div>
       <div className="h-2 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.total} aria-valuenow={completed}>

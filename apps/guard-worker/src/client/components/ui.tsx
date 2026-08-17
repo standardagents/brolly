@@ -293,6 +293,11 @@ export function LinkButton({ inline = false, className, type = "button", ...rest
   );
 }
 
+/** Small in-progress arc for inline "still working" states next to a label. */
+export function Spinner({ className }: { className?: string }) {
+  return <i className={cx("inline-block size-3 flex-none animate-spin rounded-full border-2 border-line border-t-orange motion-reduce:[animation-duration:2s]", className)} aria-hidden="true" />;
+}
+
 /** Round 34px icon-only button. */
 export function IconButton({ className, type = "button", ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (

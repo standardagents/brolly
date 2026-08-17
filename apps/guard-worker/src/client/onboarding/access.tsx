@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { familyControl } from "@standardagents/brolly-core";
 import { api } from "../api";
-import { Button, Icon, InfoTip, Input, Notice } from "../components/ui";
+import { Button, Icon, InfoTip, Input, Notice, Spinner } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
 
@@ -303,7 +303,7 @@ function CapabilityPill({ status }: { status: CapabilityStatus }) {
   if (status.state === "checking") {
     return (
       <span className={`${base} border-line bg-panel-soft text-muted`}>
-        <i className="size-3 animate-spin rounded-full border-2 border-line border-t-orange motion-reduce:[animation-duration:2s]" aria-hidden="true" />
+        <Spinner />
         Checking
       </span>
     );
