@@ -1,6 +1,24 @@
-import { useState } from "react";
-import { Icon, InfoTip, ProductIcon } from "./ui";
+import { useState, type ReactNode } from "react";
+import { Button, Eyebrow, Icon, InfoTip, Panel, PanelHead, Pill, ProductIcon, StepNumber, type Tone } from "./ui";
 import type { OnboardingData, Policy } from "../types";
+
+/** Dark code block used by the install guide. */
+function Code({ children }: { children: ReactNode }) {
+  return (
+    <pre className="mt-2 overflow-x-auto rounded-field border border-code-line bg-code-bg px-3.5 py-3 text-[12px] leading-[1.55] text-code-ink">
+      <code className="font-mono break-normal">{children}</code>
+    </pre>
+  );
+}
+
+/** Warning-toned footnote used under the explainer and the install guide. */
+function QuarantineNote({ className = "", children }: { className?: string; children: ReactNode }) {
+  return (
+    <div className={`rounded-field border border-warn-line bg-warn-soft px-[13px] py-[11px] text-[12.5px] leading-[1.5] text-warn-ink ${className}`}>
+      {children}
+    </div>
+  );
+}
 
 /**
  * Shared, exact language about what shutdown levers exist. Brolly cannot
@@ -9,83 +27,119 @@ import type { OnboardingData, Policy } from "../types";
  */
 export function ControlCapabilities() {
   return (
-    <section id="shutdown-options" className="panel-section controls-explainer">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Shutdown playbook</p>
-          <h2 className="heading-with-info">
-            What Brolly can stop
-            <InfoTip label="How shutdown controls work">
-              <h4>Detection is not enforcement</h4>
-              <p>A budget crossing creates an incident. A stop is only available when the asset is classified, the relevant control is supported, and the selected policy mode permits it.</p>
-              <p>Every Cloudflare-side change saves rollback state first and is written to the audit log. Brolly never deletes stored customer data.</p>
-            </InfoTip>
-          </h2>
-          <p>The blast radius depends on which lever exists for that Cloudflare resource.</p>
-        </div>
+    <Panel id="shutdown-options" className="pb-4">
+      <PanelHead
+        eyebrow="Shutdown playbook"
+        title="What Brolly can stop"
+        titleExtra={
+          <InfoTip label="How shutdown controls work">
+            <h4>Detection is not enforcement</h4>
+            <p>A budget crossing creates an incident. A stop is only available when the asset is classified, the relevant control is supported, and the selected policy mode permits it.</p>
+            <p>Every Cloudflare-side change saves rollback state first and is written to the audit log. Brolly never deletes stored customer data.</p>
+          </InfoTip>
+        }
+        sub="The blast radius depends on which lever exists for that Cloudflare resource."
+      />
+      <div className="grid grid-cols-2 gap-2.5 px-5 pt-1 pb-1.5 max-xl:grid-cols-[minmax(0,1fr)]">
+        <CapabilityCard
+          icon={<ProductIcon family="durable_objects" />}
+          title="One Durable Object"
+          pill="Precise · needs runtime fuse"
+          tone="good"
+        >
+          The deployment fuse names one exact 64-character object ID. Its constructor throws before application handlers run, while stored data and other IDs remain available. A Worker-version rollout may restart other live objects in that script.
+        </CapabilityCard>
+        <CapabilityCard
+          icon={<ProductIcon family="workers" />}
+          title="One Worker script"
+          pill="Broad impact"
+          tone="warn"
+        >
+          An installed Worker guard can reject every instrumented entry point through the same fuse. Without the package, Brolly remains alert-only; it will not remove routes, domains, triggers, or the Worker.
+        </CapabilityCard>
+        <CapabilityCard
+          icon={<ProductIcon family="queues" />}
+          title="Queue delivery"
+          pill="Reversible pause"
+          tone="blue"
+        >
+          Brolly can pause the queue consumer. Messages remain queued, but processing stops until rollback restores the consumer. Producers may continue adding backlog and storage/retention rules still apply.
+        </CapabilityCard>
+        <CapabilityCard
+          icon={<span className="grid size-[34px] flex-none place-items-center rounded-[7px] bg-danger-bg text-danger"><Icon name="alert" /></span>}
+          title={'Account-wide "kill every object"'}
+          pill="Not exposed by Cloudflare"
+          tone="danger"
+          muted
+        >
+          Cloudflare has no generic account API to terminate every Durable Object instance. Brolly deliberately has no broad route-deletion fallback: account-wide containment must be performed directly in Cloudflare with its outage impact reviewed.
+        </CapabilityCard>
       </div>
-      <div className="control-capability-grid">
-        <article>
-          <ProductIcon family="durable_objects" />
-          <div>
-            <strong>One Durable Object</strong>
-            <span className="capability-pill precise">Precise · needs runtime fuse</span>
-            <p>The deployment fuse names one exact 64-character object ID. Its constructor throws before application handlers run, while stored data and other IDs remain available. A Worker-version rollout may restart other live objects in that script.</p>
-          </div>
-        </article>
-        <article>
-          <ProductIcon family="workers" />
-          <div>
-            <strong>One Worker script</strong>
-            <span className="capability-pill broad">Broad impact</span>
-            <p>An installed Worker guard can reject every instrumented entry point through the same fuse. Without the package, Brolly remains alert-only; it will not remove routes, domains, triggers, or the Worker.</p>
-          </div>
-        </article>
-        <article>
-          <ProductIcon family="queues" />
-          <div>
-            <strong>Queue delivery</strong>
-            <span className="capability-pill reversible">Reversible pause</span>
-            <p>Brolly can pause the queue consumer. Messages remain queued, but processing stops until rollback restores the consumer. Producers may continue adding backlog and storage/retention rules still apply.</p>
-          </div>
-        </article>
-        <article className="unavailable">
-          <span className="capability-icon"><Icon name="alert" /></span>
-          <div>
-            <strong>Account-wide "kill every object"</strong>
-            <span className="capability-pill unavailable">Not exposed by Cloudflare</span>
-            <p>Cloudflare has no generic account API to terminate every Durable Object instance. Brolly deliberately has no broad route-deletion fallback: account-wide containment must be performed directly in Cloudflare with its outage impact reviewed.</p>
-          </div>
-        </article>
+    </Panel>
+  );
+}
+
+function CapabilityCard({ icon, title, pill, tone, muted = false, children }: {
+  icon: ReactNode;
+  title: ReactNode;
+  pill: string;
+  tone: Tone;
+  muted?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <article className={`flex min-w-0 gap-3 rounded-field border border-line p-3.5 ${muted ? "bg-panel-soft" : ""}`}>
+      {icon}
+      <div className="min-w-0 flex-1">
+        <strong className="block text-[13.5px]">{title}</strong>
+        <Pill tone={tone} className="mt-1 mb-1.5">{pill}</Pill>
+        <p className="m-0 text-[12.5px] leading-[1.5] text-muted">{children}</p>
       </div>
-    </section>
+    </article>
+  );
+}
+
+function ImpactCard({ accent, title, children }: { accent: string; title: ReactNode; children: ReactNode }) {
+  return (
+    <div className={`rounded-field border border-line-soft border-l-[3px] bg-panel px-3 py-2.5 ${accent}`}>
+      <strong className="mb-[3px] block text-[12.5px]">{title}</strong>
+      <p className="m-0 text-[12px] leading-[1.5] text-muted">{children}</p>
+    </div>
   );
 }
 
 /** Exact service-impact framing for an exact-object quarantine. */
 export function ObjectStopImpact({ compact = false }: { compact?: boolean }) {
   return (
-    <section className={`stop-impact ${compact ? "compact" : ""}`}>
-      <h3>Service impact while quarantined</h3>
-      <div className="impact-grid">
-        <div className="impact-card interrupted">
-          <strong>Deployment enforcement</strong>
-          <p>Cloudflare rolls out a new Worker version. Existing synchronous code cannot be preempted at an arbitrary instruction, but subsequent object construction ejects before application code.</p>
-        </div>
-        <div className="impact-card blocked">
-          <strong>Blocked until resume</strong>
-          <p>Worker ingress can return HTTP 503 before waking the object; the constructor guard also blocks direct calls, RPC, alarms, and WebSocket events.</p>
-        </div>
-        <div className="impact-card preserved">
-          <strong>Preserved</strong>
-          <p>The object's SQLite rows, messages, queued records, and history are not deleted. Other object IDs keep serving normally.</p>
-        </div>
-        <div className="impact-card recovery">
-          <strong>Recovery</strong>
-          <p>Resume removes this ID from the secret and deploys the next generation. Recovery is manual by default so a stopped spike cannot flap back on automatically.</p>
-        </div>
+    <section>
+      <h3 className="mb-2 text-[13.5px]">Service impact while quarantined</h3>
+      <div className={`grid gap-2 ${compact ? "grid-cols-1" : "grid-cols-2 max-md:grid-cols-1"}`}>
+        <ImpactCard accent="border-l-[#e0a53a]" title="Deployment enforcement">
+          Cloudflare rolls out a new Worker version. Existing synchronous code cannot be preempted at an arbitrary instruction, but subsequent object construction ejects before application code.
+        </ImpactCard>
+        <ImpactCard accent="border-l-danger" title="Blocked until resume">
+          Worker ingress can return HTTP 503 before waking the object; the constructor guard also blocks direct calls, RPC, alarms, and WebSocket events.
+        </ImpactCard>
+        <ImpactCard accent="border-l-[#24a468]" title="Preserved">
+          The object's SQLite rows, messages, queued records, and history are not deleted. Other object IDs keep serving normally.
+        </ImpactCard>
+        <ImpactCard accent="border-l-[#4d7cc2]" title="Recovery">
+          Resume removes this ID from the secret and deploys the next generation. Recovery is manual by default so a stopped spike cannot flap back on automatically.
+        </ImpactCard>
       </div>
     </section>
+  );
+}
+
+function ControlFlowStep({ step, title, children }: { step: number; title: ReactNode; children: ReactNode }) {
+  return (
+    <li className="flex gap-[11px]">
+      <StepNumber size={24}>{step}</StepNumber>
+      <div>
+        <strong className="text-[13px]">{title}</strong>
+        <p className="mt-0.5 text-[12.5px] leading-[1.5] text-muted">{children}</p>
+      </div>
+    </li>
   );
 }
 
@@ -97,94 +151,86 @@ export function ProtectionExplainer({ mode }: { mode: Policy["mode"] }) {
       : "Automatic mode may quarantine a standard or disposable object immediately after every safety requirement passes.";
 
   return (
-    <section className="protection-explainer">
-      <header>
-        <Icon name="shield" />
+    <section className="mt-[22px] overflow-hidden rounded-panel border border-line">
+      <header className="flex gap-[11px] bg-dark-surface px-4 py-3.5 text-white">
+        <Icon name="shield" className="mt-px size-[21px]" />
         <div>
-          <strong>What "stop this object" actually means</strong>
-          <p>An exact-object stop is a deployment-carried application fuse—not a Cloudflare pause switch.</p>
+          <strong className="text-[14px]">What "stop this object" actually means</strong>
+          <p className="mt-0.5 text-[12.5px] text-[#aab2bc]">An exact-object stop is a deployment-carried application fuse—not a Cloudflare pause switch.</p>
         </div>
       </header>
-      <div className="protection-body">
-        <section className="explainer-section">
-          <h3>How Brolly reaches one object from outside</h3>
-          <ol className="control-flow">
-            <li><span>1</span><div><strong>Detect and identify</strong><p>A bounded scan attributes the emergency to one 64-character Durable Object ID.</p></div></li>
-            <li><span>2</span><div><strong>Deploy a fuse generation</strong><p>Brolly updates the owning Worker's reserved BROLLY_FUSE secret. Cloudflare creates and deploys a new Worker version.</p></div></li>
-            <li><span>3</span><div><strong>Compare locally</strong><p>The Worker ingress guard and object constructor compare the requested or current 64-character object ID against the secret entirely in memory.</p></div></li>
-            <li><span>4</span><div><strong>Eject before application code</strong><p>Only the matching object throws before fetch, RPC, alarm, or WebSocket handlers run. No Brolly, KV, D1, HTTP, or object-storage lookup occurs.</p></div></li>
+      <div className="grid gap-4 p-4">
+        <section>
+          <h3 className="mb-2.5 text-[13.5px]">How Brolly reaches one object from outside</h3>
+          <ol className="m-0 grid list-none gap-2 p-0">
+            <ControlFlowStep step={1} title="Detect and identify">A bounded scan attributes the emergency to one 64-character Durable Object ID.</ControlFlowStep>
+            <ControlFlowStep step={2} title="Deploy a fuse generation">Brolly updates the owning Worker's reserved BROLLY_FUSE secret. Cloudflare creates and deploys a new Worker version.</ControlFlowStep>
+            <ControlFlowStep step={3} title="Compare locally">The Worker ingress guard and object constructor compare the requested or current 64-character object ID against the secret entirely in memory.</ControlFlowStep>
+            <ControlFlowStep step={4} title="Eject before application code">Only the matching object throws before fetch, RPC, alarm, or WebSocket handlers run. No Brolly, KV, D1, HTTP, or object-storage lookup occurs.</ControlFlowStep>
           </ol>
         </section>
         <ObjectStopImpact />
-        <section className="mode-explanation">
-          <strong>What your selected mode does</strong>
-          <p>{finalStep} Warning and critical incidents only alert; only an emergency is eligible for quarantine.</p>
+        <section className="rounded-field border border-line bg-panel-soft px-3.5 py-3">
+          <strong className="text-[13px]">What your selected mode does</strong>
+          <p className="mt-[3px] text-[12.5px] text-muted">{finalStep} Warning and critical incidents only alert; only an emergency is eligible for quarantine.</p>
         </section>
       </div>
-      <div className="quarantine-note">
+      <QuarantineNote className="mx-4 mb-4">
         <strong>This requires one package and one constructor line in the owning runtime.</strong> Cloudflare deploys the fuse at Worker-script scope, so other live objects in that script may be restarted during rollout even though only the selected ID is denied. Nothing is deleted.
-      </div>
+      </QuarantineNote>
     </section>
+  );
+}
+
+function InstallStep({ step, title, children }: { step: number; title: ReactNode; children: ReactNode }) {
+  return (
+    <li className="flex min-w-0 gap-3">
+      <StepNumber>{step}</StepNumber>
+      <div className="min-w-0 flex-1">
+        <strong className="text-[13.5px]">{title}</strong>
+        {children}
+      </div>
+    </li>
   );
 }
 
 /** Copy-paste runtime integration guide, kept in lockstep with docs/runtime-integration.md. */
 export function RuntimeInstallGuide() {
   return (
-    <div className="runtime-install-guide">
-      <ol>
-        <li>
-          <span>1</span>
-          <div>
-            <strong>Install the package in the protected Worker</strong>
-            <pre><code>pnpm add @standardagents/brolly-runtime</code></pre>
-          </div>
-        </li>
-        <li>
-          <span>2</span>
-          <div>
-            <strong>Require and initialize the deployment secret</strong>
-            <pre><code>{`// wrangler.jsonc
+    <div>
+      <ol className="m-0 grid list-none grid-cols-[minmax(0,1fr)] gap-3.5 p-0">
+        <InstallStep step={1} title="Install the package in the protected Worker">
+          <Code>pnpm add @standardagents/brolly-runtime</Code>
+        </InstallStep>
+        <InstallStep step={2} title="Require and initialize the deployment secret">
+          <Code>{`// wrangler.jsonc
 "secrets": { "required": ["BROLLY_FUSE"] }
 
 printf '%s' '{"version":1,"generation":0,"objects":{}}' \\
-  | pnpm wrangler secret put BROLLY_FUSE`}</code></pre>
-            <p>Secrets survive ordinary code deployments. Brolly replaces this value only when applying or clearing a quarantine. Its Cloudflare account grant must include <strong>Workers Scripts Write</strong>; without it, the action fails and Brolly records the error instead of claiming a stop.</p>
-          </div>
-        </li>
-        <li>
-          <span>3</span>
-          <div>
-            <strong>Add one line after super() in every protected Durable Object</strong>
-            <pre><code>{`constructor(ctx: DurableObjectState, env: Env) {
+  | pnpm wrangler secret put BROLLY_FUSE`}</Code>
+          <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">Secrets survive ordinary code deployments. Brolly replaces this value only when applying or clearing a quarantine. Its Cloudflare account grant must include <strong>Workers Scripts Write</strong>; without it, the action fails and Brolly records the error instead of claiming a stop.</p>
+        </InstallStep>
+        <InstallStep step={3} title="Add one line after super() in every protected Durable Object">
+          <Code>{`constructor(ctx: DurableObjectState, env: Env) {
   super(ctx, env)
   brollyDurableObject(ctx, env)
-}`}</code></pre>
-          </div>
-        </li>
-        <li>
-          <span>4</span>
-          <div>
-            <strong>Guard Worker ingress before work starts</strong>
-            <pre><code>{`brollyWorker(env)
+}`}</Code>
+        </InstallStep>
+        <InstallStep step={4} title="Guard Worker ingress before work starts">
+          <Code>{`brollyWorker(env)
 const id = env.ROOMS.idFromName(name)
 brollyWorker(env, { durableObjectId: id.toString() })
-return env.ROOMS.get(id).fetch(request)`}</code></pre>
-            <p>The first call enforces a Worker-wide stop. The second avoids waking an exact quarantined object. The constructor line remains the final backstop.</p>
-          </div>
-        </li>
-        <li>
-          <span>5</span>
-          <div>
-            <strong>Map each namespace to its owning Worker</strong>
-            <pre><code>brolly classify durable_objects NAMESPACE_ID standard --worker-script=my-worker</code></pre>
-            <p>The budget wizard's install step saves the same mapping. Individual object IDs inherit it from their namespace. Do this before enabling automatic mode; clearing remains an explicit Resume action.</p>
-          </div>
-        </li>
+return env.ROOMS.get(id).fetch(request)`}</Code>
+          <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">The first call enforces a Worker-wide stop. The second avoids waking an exact quarantined object. The constructor line remains the final backstop.</p>
+        </InstallStep>
+        <InstallStep step={5} title="Map each namespace to its owning Worker">
+          <Code>brolly classify durable_objects NAMESPACE_ID standard --worker-script=my-worker</Code>
+          <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">The budget wizard's install step saves the same mapping. Individual object IDs inherit it from their namespace. Do this before enabling automatic mode; clearing remains an explicit Resume action.</p>
+        </InstallStep>
       </ol>
-      <div className="quarantine-note">
+      <QuarantineNote className="mt-3">
         <strong>Runtime cost:</strong> the checks only parse an environment binding and compare IDs. They do not call Brolly, Cloudflare APIs, KV, D1, or Durable Object storage.
-      </div>
+      </QuarantineNote>
     </div>
   );
 }
@@ -245,52 +291,74 @@ export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scoped
   }
 
   return (
-    <section className="agent-handoff" aria-labelledby="agent-handoff-title">
-      <header>
+    <section className="overflow-hidden rounded-panel border border-line bg-panel shadow-panel" aria-labelledby="agent-handoff-title">
+      <header className="flex items-end justify-between gap-[18px] border-b border-line bg-panel-soft px-5 py-[18px] max-md:flex-col max-md:items-start">
         <div>
-          <p className="eyebrow orange">Recommended</p>
-          <h3 id="agent-handoff-title">Hand this to your coding agent</h3>
-          <p>The prompt finds your Worker entry points and Durable Object classes, installs the two local guards, adds tests, and stops before making any Cloudflare changes.</p>
+          <Eyebrow tone="orange">Recommended</Eyebrow>
+          <h3 id="agent-handoff-title" className="m-0 text-[17px] tracking-[-.015em]">Hand this to your coding agent</h3>
+          <p className="mt-1 max-w-[68ch] text-[12.5px] leading-[1.55] text-muted">The prompt finds your Worker entry points and Durable Object classes, installs the two local guards, adds tests, and stops before making any Cloudflare changes.</p>
         </div>
-        <div className="agent-roster" aria-label="Compatible coding agents">
+        <div className="flex flex-none flex-wrap items-center justify-end gap-1.5 max-md:justify-start" aria-label="Compatible coding agents">
           <AgentChip kind="claude" label="Claude Code" />
           <AgentChip kind="codex" label="Codex" />
           <AgentChip kind="cursor" label="Cursor" />
           <AgentChip kind="terminal" label="Other agent" />
         </div>
       </header>
-      <div className="agent-prompt">
-        <div className="agent-prompt-bar">
-          <span><i aria-hidden="true" />Brolly runtime install task</span>
-          <button type="button" className="button primary copy-agent-prompt" onClick={() => void copyPrompt()}>
+      <div className="m-4 overflow-hidden rounded-panel border border-[#30363d] bg-[#101317] max-md:m-3">
+        <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#30363d] py-[7px] pr-2 pl-3.5 text-[#c8d0d9] max-md:flex-col max-md:items-stretch max-md:p-2.5">
+          <span className="inline-flex items-center gap-2 text-[11.5px] font-[720] tracking-[.02em]">
+            <i className="block size-2 rounded-full bg-orange shadow-[0_0_0_3px_#f6821f26]" aria-hidden="true" />
+            Brolly runtime install task
+          </span>
+          <Button variant="primary" className="min-h-[34px] max-md:w-full" onClick={() => void copyPrompt()}>
             <Icon name={copied ? "check" : "clipboard"} />
             {copied ? "Copied" : "Copy agent prompt"}
-          </button>
+          </Button>
         </div>
-        <div className={`agent-prompt-preview ${expanded ? "expanded" : ""}`}>
-          <pre tabIndex={0} role="region" aria-label="Coding agent prompt"><code>{prompt}</code></pre>
+        <div
+          className={`relative overflow-hidden ${
+            expanded
+              ? "max-h-none"
+              : "max-h-[176px] after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-[62px] after:bg-[linear-gradient(transparent,#101317)] after:content-['']"
+          }`}
+        >
+          <pre tabIndex={0} role="region" aria-label="Coding agent prompt" className="m-0 max-h-[420px] overflow-auto rounded-none border-0 bg-[#101317] p-4 text-[11.5px] leading-[1.6] whitespace-pre-wrap text-[#dfe5eb] max-md:max-h-[300px]"><code className="font-mono break-normal">{prompt}</code></pre>
         </div>
-        <button type="button" className="agent-prompt-expand" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        <button
+          type="button"
+          className="min-h-[38px] w-full cursor-pointer border-0 border-t border-[#30363d] bg-[#171b20] text-[12px] font-bold text-[#aeb8c2] hover:bg-[#1d2228] hover:text-white"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
           {expanded ? "Collapse prompt" : "Show full prompt"}
         </button>
       </div>
-      <div className="agent-handoff-safety">
-        <Icon name="shield" />
-        <p><strong>Safe handoff:</strong> the agent edits and tests your repository, but the prompt forbids deployment or Cloudflare mutations. You review the diff and initialize the secret yourself.</p>
+      <div className="mx-4 mb-4 flex items-start gap-[9px] rounded-field border border-good-line bg-good-bg px-[13px] py-[11px] text-good max-md:mx-3 max-md:mb-3">
+        <Icon name="shield" className="mt-px size-[17px]" />
+        <p className="m-0 text-[12px] leading-[1.5]"><strong>Safe handoff:</strong> the agent edits and tests your repository, but the prompt forbids deployment or Cloudflare mutations. You review the diff and initialize the secret yourself.</p>
       </div>
-      <span className="visually-hidden" aria-live="polite">{copied ? "Brolly runtime installation prompt copied" : ""}</span>
+      <span className="sr-only" aria-live="polite">{copied ? "Brolly runtime installation prompt copied" : ""}</span>
     </section>
   );
 }
 
+const AGENT_GLYPH_BG: Record<string, string> = {
+  claude: "bg-[#d97757]",
+  codex: "bg-[#202123]",
+  cursor: "bg-[#6b63dc]",
+  terminal: "bg-[#58616d]",
+};
+
 function AgentChip({ kind, label }: { kind: "claude" | "codex" | "cursor" | "terminal"; label: string }) {
+  const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" } as const;
   return (
-    <span className="agent-chip">
-      <span className={`agent-glyph ${kind}`} aria-hidden="true">
-        {kind === "claude" && <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>}
-        {kind === "codex" && <svg viewBox="0 0 24 24"><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><circle cx="12" cy="12" r="3.3" /></svg>}
-        {kind === "cursor" && <svg viewBox="0 0 24 24"><path d="m6 3 12 10-6.2.8L9 20 6 3Z" /></svg>}
-        {kind === "terminal" && <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>}
+    <span className="inline-flex items-center gap-[5px] rounded-full border border-line bg-panel py-1 pr-2 pl-[5px] text-[10.5px] font-bold whitespace-nowrap text-muted">
+      <span className={`grid size-5 place-items-center rounded-full text-white ${AGENT_GLYPH_BG[kind]}`} aria-hidden="true">
+        {kind === "claude" && <svg viewBox="0 0 24 24" className="size-3" {...stroke}><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>}
+        {kind === "codex" && <svg viewBox="0 0 24 24" className="size-3" {...stroke}><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><circle cx="12" cy="12" r="3.3" /></svg>}
+        {kind === "cursor" && <svg viewBox="0 0 24 24" className="size-3" fill="currentColor" stroke="none"><path d="m6 3 12 10-6.2.8L9 20 6 3Z" /></svg>}
+        {kind === "terminal" && <svg viewBox="0 0 24 24" className="size-3" {...stroke}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></svg>}
       </span>
       {label}
     </span>

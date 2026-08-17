@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Brand, Icon } from "../components/ui";
+import { Brand, Button, Eyebrow, Icon, Notice } from "../components/ui";
 import type { OnboardingData } from "../types";
 import {
   AccessStep,
@@ -8,6 +8,7 @@ import {
   ProductBudgetStep,
   ResourceBudgetStep,
   RuntimeStep,
+  StepActions,
 } from "./BudgetSteps";
 import { preparePolicy, prepareRuntimeIntegrations } from "./model";
 import { useBudgetEstimates } from "./useBudgetEstimates";
@@ -24,6 +25,23 @@ const STEPS = [
   { label: "Per-object limits", preview: "Usage thresholds for individual Durable Objects." },
   { label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
 ];
+
+/** Round step marker: filled while active, green once done, outlined otherwise. */
+function StepMarker({ state = "todo", children }: { state?: "active" | "done" | "todo"; children: ReactNode }) {
+  return (
+    <span
+      className={`grid size-[27px] flex-none place-items-center rounded-full border text-[12px] ${
+        state === "active"
+          ? "border-orange bg-orange text-white"
+          : state === "done"
+            ? "border-[#74b996] bg-good-bg dark:border-[#4a8a68]"
+            : "border-[#cbd1d7] dark:border-[#505862]"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
 
 export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onLogout, onSaved }: {
   data: OnboardingData;
@@ -70,16 +88,16 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   ];
 
   return (
-    <main className="setup-shell">
-      <header className="setup-header">
+    <main className="min-h-screen bg-bg">
+      <header className="sticky top-0 z-40 flex h-[60px] items-center gap-6 border-b border-line bg-panel px-7 font-[680] max-md:px-3.5">
         <Brand />
-        <div>{editing ? "Budget settings" : "First-run setup"}</div>
+        <div className="border-l border-line pl-6 text-[14px] text-muted max-md:hidden">{editing ? "Budget settings" : "First-run setup"}</div>
         <span className="ml-auto flex items-center gap-2">
-          {onCancel && <button type="button" className="button quiet" onClick={onCancel}>Close</button>}
-          <button type="button" className="button quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</button>
+          {onCancel && <Button variant="quiet" onClick={onCancel}>Close</Button>}
+          <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
       </header>
-      <div className="setup-layout">
+      <div className="mx-auto grid max-w-[1280px] grid-cols-[340px_minmax(0,1fr)] gap-14 px-8 pt-14 pb-[100px] max-xl:grid-cols-[290px_1fr] max-xl:gap-[30px] max-xl:px-6 max-xl:pt-10 max-xl:pb-20 max-md:block max-md:px-3.5 max-md:pt-[26px] max-md:pb-[60px]">
         <WizardSidebar editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection} />
         <div className="grid min-w-0 gap-5">
           {STEPS.map((step, index) => index > navigation.unlocked
@@ -88,11 +106,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <section
                 key={step.label}
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
-                className="setup-panel scroll-mt-[84px]"
+                className="scroll-mt-[84px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
               >
-                <p className="eyebrow orange">Step {index + 1} of {STEPS.length}</p>
+                <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
-                {index === navigation.unlocked && index === 2 && estimates.suggestionError && <p className="form-error">{estimates.suggestionError}</p>}
+                {index === navigation.unlocked && index === 2 && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
                 {index === navigation.unlocked && index < STEPS.length - 1 && index !== 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}
@@ -127,23 +145,26 @@ function WizardSidebar({ editing, active, unlocked, onSelect }: {
   onSelect: (index: number) => void;
 }) {
   return (
-    <aside className="setup-steps">
-      <h1>{editing ? "Tune your limits" : "Customize Brolly"}</h1>
-      <ol>
+    <aside className="sticky top-24 h-max max-md:static max-md:mb-5">
+      <h1 className="mt-5 mb-3.5 text-[37px] leading-[1.05] tracking-[-.035em] max-md:text-[28px]">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
+      <ol className="mt-[26px] list-none border-t border-line pt-[18px] max-md:mt-2 max-md:flex max-md:justify-between max-md:border-t-0 max-md:pt-2">
         {STEPS.map((step, index) => {
           const reachable = index <= unlocked;
           return (
-            <li key={step.label} className={index === active ? "active" : index < unlocked ? "done" : reachable ? "" : "locked"}>
+            <li
+              key={step.label}
+              className={`text-[14px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}
+            >
               <button
                 type="button"
-                className="setup-step-button"
+                className="group/step flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent py-[9px] text-left text-[14px] font-[640] text-inherit disabled:cursor-default max-md:gap-0 max-md:py-1"
                 disabled={!reachable}
                 aria-current={index === active ? "step" : undefined}
                 title={reachable ? undefined : "Unlocks when you reach this step"}
                 onClick={() => onSelect(index)}
               >
-                <span className="setup-step-marker">{index < unlocked ? "✓" : index + 1}</span>
-                <span className="setup-step-label">{step.label}</span>
+                <StepMarker state={index === active ? "active" : index < unlocked ? "done" : "todo"}>{index < unlocked ? "✓" : index + 1}</StepMarker>
+                <span className={`max-md:sr-only ${reachable ? "group-hover/step:text-ink" : ""}`}>{step.label}</span>
               </button>
             </li>
           );
@@ -155,13 +176,13 @@ function WizardSidebar({ editing, active, unlocked, onSelect }: {
 
 function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number }) {
   return (
-    <section className="flex items-center gap-3.5 rounded-xl border border-dashed border-[var(--line)] px-[22px] py-4 text-[var(--faint)]" aria-label={`${step.label} (locked)`}>
-      <span className="setup-step-marker">{index + 1}</span>
+    <section className="flex items-center gap-3.5 rounded-xl border border-dashed border-line px-[22px] py-4 text-faint" aria-label={`${step.label} (locked)`}>
+      <StepMarker>{index + 1}</StepMarker>
       <div>
-        <strong className="block text-sm text-[var(--muted)]">{step.label}</strong>
+        <strong className="block text-sm text-muted">{step.label}</strong>
         <p className="mt-0.5 text-[12.5px] leading-normal">{step.preview}</p>
       </div>
-      <span className="ml-auto flex-none [&_.icon]:size-4"><Icon name="lock" /></span>
+      <span className="ml-auto flex-none"><Icon name="lock" className="size-4" /></span>
     </section>
   );
 }
@@ -174,12 +195,12 @@ function ContinueFooter({ billingConnected, busy, firstStep, onContinue }: {
 }) {
   const label = firstStep ? billingConnected ? "Continue to import" : "Continue without billing access" : "Continue";
   return (
-    <footer className="setup-actions">
+    <StepActions>
       <span className="flex w-full flex-wrap items-center justify-between gap-4">
-        {firstStep && !billingConnected && <small className="max-w-[52ch] text-left leading-5 text-[var(--muted)]"><strong className="text-[var(--ink)]">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>}
-        <button type="button" className="button primary ml-auto shrink-0" disabled={busy} onClick={onContinue}>{label}</button>
+        {firstStep && !billingConnected && <small className="max-w-[52ch] text-left leading-5 text-muted"><strong className="text-ink">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>}
+        <Button variant="primary" className="ml-auto shrink-0" disabled={busy} onClick={onContinue}>{label}</Button>
       </span>
-    </footer>
+    </StepActions>
   );
 }
 
@@ -194,14 +215,14 @@ function FinishFooter({ assetCount, automatic, busy, editing, error, installedCo
 }) {
   const buttonLabel = busy ? "Saving…" : editing ? "Save runtime status" : installedCount ? "Finish and verify installs" : "Finish setup — alerts only";
   return <>
-    {error && <p className="form-error">{error}</p>}
-    <footer className="setup-actions">
-      <span className={`runtime-finish-note ${automatic && installedCount === 0 ? "caution" : ""}`}>
+    {error && <Notice tone="error">{error}</Notice>}
+    <StepActions>
+      <span className={`mx-auto max-w-[42ch] px-3.5 text-center text-[11.5px] leading-[1.45] max-md:order-first max-md:basis-full ${automatic && installedCount === 0 ? "text-warn" : "text-muted"}`}>
         {assetCount
-          ? <><strong>{installedCount} of {assetCount} resources reported installed.</strong> {installedCount ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
-          : <><strong>No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
+          ? <><strong className="text-ink">{installedCount} of {assetCount} resources reported installed.</strong> {installedCount ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
+          : <><strong className="text-ink">No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
       </span>
-      <button type="button" className="button primary" disabled={busy} onClick={onSave}>{buttonLabel}</button>
-    </footer>
+      <Button variant="primary" disabled={busy} onClick={onSave}>{buttonLabel}</Button>
+    </StepActions>
   </>;
 }

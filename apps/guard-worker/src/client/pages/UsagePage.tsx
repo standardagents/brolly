@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type SelectHTMLAttributes } from "react";
 import { api } from "../api";
 import { dataSize, dateTime, money, number, relativeTime } from "../format";
 import type { DataQuality, LedgerResource, UsagePoint, UsageResponse } from "../types";
-import { EmptyState, Icon, ProductIcon } from "../components/ui";
+import { Button, EmptyState, Icon, Notice, Panel, PanelHead, Pill, ProductIcon, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 
 export function UsagePage({ token }: { token: string }) {
   const [resources, setResources] = useState<LedgerResource[]>([]);
@@ -61,72 +61,92 @@ export function UsagePage({ token }: { token: string }) {
   }) : [];
 
   return (
-    <div className="grid gap-4">
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">Stored ledger</p>
-            <h2>Account usage hierarchy</h2>
-            <p className="panel-sub">Select any account, product, namespace, Worker, or individual resource. Every value comes from D1 and carries collection-quality state.</p>
-          </div>
-          {usage?.freshnessAt && <span className="estimate-pill">Updated {relativeTime(usage.freshnessAt)}</span>}
-        </div>
-        <div className="asset-toolbar px-5 pb-3">
-          <label className="search-field"><Icon name="search" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find a resource" /></label>
-          <select aria-label="Product family" value={family} onChange={event => setFamily(event.target.value)}>
+    <>
+      <Panel>
+        <PanelHead
+          eyebrow="Stored ledger"
+          title="Account usage hierarchy"
+          sub="Select any account, product, namespace, Worker, or individual resource. Every value comes from D1 and carries collection-quality state."
+          actions={usage?.freshnessAt
+            ? <span className="inline-flex flex-none items-center gap-[7px] rounded-full border border-line bg-panel-soft px-[11px] py-1.5 text-[12px] font-[650] text-muted">Updated {relativeTime(usage.freshnessAt)}</span>
+            : undefined}
+        />
+        <div className="flex flex-wrap items-center gap-2 px-5 pb-3">
+          <label className="flex min-h-9 items-center gap-[7px] rounded-field border border-field-line bg-panel px-2.5 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1f]">
+            <Icon name="search" className="size-[15px] text-faint" />
+            <input
+              className="min-w-[190px] border-0 bg-transparent text-[13px] text-ink outline-none"
+              value={search}
+              onChange={event => setSearch(event.target.value)}
+              placeholder="Find a resource"
+            />
+          </label>
+          <ToolbarSelect aria-label="Product family" value={family} onChange={event => setFamily(event.target.value)}>
             <option value="">All products</option>
             {families.map(item => <option key={item} value={item}>{display(item)}</option>)}
-          </select>
+          </ToolbarSelect>
         </div>
         {visibleResources.length ? (
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead><tr><th>Resource</th><th>Scope</th><th>Coverage</th><th>Last activity</th><th>Alerts</th></tr></thead>
+          <TableScroll>
+            <Table>
+              <thead><tr><Th>Resource</Th><Th>Scope</Th><Th>Coverage</Th><Th>Last activity</Th><Th>Alerts</Th></tr></thead>
               <tbody>
                 {visibleResources.map(resource => (
-                  <tr key={resource.id} className={selectedId === resource.id ? "clickable bg-[var(--orange-soft)]" : "clickable"} onClick={() => setSelectedId(resource.id)}>
-                    <td>
-                      <span className="cell-main">
+                  <Tr key={resource.id} clickable className={selectedId === resource.id ? "bg-orange-soft" : undefined} onClick={() => setSelectedId(resource.id)}>
+                    <Td>
+                      <span className="flex min-w-0 flex-col gap-[3px]">
                         <strong className="flex items-center gap-2"><ProductIcon family={resource.productFamily} />{resource.displayName}</strong>
-                        <small>{resource.cloudflareId}</small>
+                        <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-faint">{resource.cloudflareId}</small>
                       </span>
-                    </td>
-                    <td>{scopeLabel(resource.resourceType)}</td>
-                    <td><QualityBadge quality={resource.coverageStatus} /></td>
-                    <td>{resource.lastActiveAt ? relativeTime(resource.lastActiveAt) : "No observed activity"}</td>
-                    <td className="numeric">{resource.openAlerts}</td>
-                  </tr>
+                    </Td>
+                    <Td>{scopeLabel(resource.resourceType)}</Td>
+                    <Td><QualityBadge quality={resource.coverageStatus} /></Td>
+                    <Td>{resource.lastActiveAt ? relativeTime(resource.lastActiveAt) : "No observed activity"}</Td>
+                    <Td numeric>{resource.openAlerts}</Td>
+                  </Tr>
                 ))}
               </tbody>
-            </table>
-            {nextCursor && <div className="flex justify-center border-t border-[var(--line-soft)] p-3"><button className="button secondary" type="button" onClick={() => void loadResources(true)}>Load more resources</button></div>}
-          </div>
+            </Table>
+            {nextCursor && (
+              <div className="flex justify-center border-t border-line-soft p-3">
+                <Button variant="secondary" onClick={() => void loadResources(true)}>Load more resources</Button>
+              </div>
+            )}
+          </TableScroll>
         ) : <EmptyState icon="search" title="No matching resources">Adjust the product or search filter.</EmptyState>}
-      </section>
+      </Panel>
 
       {usage && (
-        <section className="panel">
-          <div className="panel-head">
-            <div>
-              <p className="eyebrow">{display(usage.resource.productFamily)} · {scopeLabel(usage.resource.resourceType)}</p>
-              <h2>{usage.resource.displayName}</h2>
-              <p className="panel-sub">
-                {usage.oldestRetainedAt ? `Individual history begins ${usage.oldestRetainedAt}.` : "Individual history is still being collected."}
-              </p>
-            </div>
-            <select className="min-h-9 rounded border border-[var(--line)] bg-white px-3 text-sm" value={metricId} onChange={event => setMetricId(event.target.value)}>
-              {availableMetrics.map(metric => <option key={metric.id} value={metric.id}>{metric.displayName}</option>)}
-            </select>
-          </div>
+        <Panel>
+          <PanelHead
+            eyebrow={`${display(usage.resource.productFamily)} · ${scopeLabel(usage.resource.resourceType)}`}
+            title={usage.resource.displayName}
+            sub={usage.oldestRetainedAt ? `Individual history begins ${usage.oldestRetainedAt}.` : "Individual history is still being collected."}
+            actions={
+              <ToolbarSelect aria-label="Metric" value={metricId} onChange={event => setMetricId(event.target.value)}>
+                {availableMetrics.map(metric => <option key={metric.id} value={metric.id}>{metric.displayName}</option>)}
+              </ToolbarSelect>
+            }
+          />
           {usage.points.length ? <UsageHistory points={usage.points} metricId={metricId} unit={availableMetrics.find(item => item.id === metricId)?.unit ?? "count"} /> : (
             <EmptyState icon="trend" title="History is pending">The active collector and newest-first backfill will add daily records as coverage becomes available.</EmptyState>
           )}
-        </section>
+        </Panel>
       )}
 
-      {loading && <p className="loading-inline">Loading stored usage…</p>}
-      {error && <p className="form-error" role="alert">{error}</p>}
-    </div>
+      {loading && <p className="py-2.5 text-[13px] text-muted">Loading stored usage…</p>}
+      {error && <Notice tone="error">{error}</Notice>}
+    </>
+  );
+}
+
+/** Compact filter/metric picker used in the usage toolbar and panel headings. */
+function ToolbarSelect({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className={`min-h-9 rounded-field border border-field-line bg-panel px-2.5 text-[13px] text-ink focus:border-orange focus:shadow-[0_0_0_3px_#f6821f24] focus:outline-none ${className ?? ""}`}
+      {...rest}
+    />
   );
 }
 
@@ -135,43 +155,43 @@ function UsageHistory({ points, metricId, unit }: { points: UsagePoint[]; metric
   const maximum = Math.max(1, ...values);
   return (
     <div className="grid gap-4 px-5 pb-5">
-      <div className="flex h-40 items-end gap-1 rounded border border-[var(--line)] bg-[var(--panel-soft)] p-3" aria-label="Daily usage chart">
+      <div className="flex h-40 items-end gap-1 rounded border border-line bg-panel-soft p-3" aria-label="Daily usage chart">
         {points.slice(-60).map((point, index) => {
           const value = point.metrics[metricId];
           return (
           <div
             key={`${point.localDay}:${index}`}
-            className={`min-w-1 flex-1 rounded-t ${value === undefined ? "bg-[var(--line)]" : point.quality === "complete" ? "bg-[var(--orange)]" : "bg-[var(--warn)] opacity-60"}`}
+            className={`min-w-1 flex-1 rounded-t ${value === undefined ? "bg-line" : point.quality === "complete" ? "bg-orange" : "bg-warn opacity-60"}`}
             style={{ height: value === undefined ? "2%" : `${Math.max(2, Number(value) / maximum * 100)}%` }}
             title={`${point.localDay}: ${value === undefined ? "missing" : formatValue(Number(value), unit)} (${point.quality})`}
           />
           );
         })}
       </div>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead><tr><th>Local day</th><th>Usage</th><th>Estimated cost</th><th>Allocated billed cost</th><th>Evidence</th><th>Revised</th></tr></thead>
+      <TableScroll>
+        <Table>
+          <thead><tr><Th>Local day</Th><Th>Usage</Th><Th>Estimated cost</Th><Th>Allocated billed cost</Th><Th>Evidence</Th><Th>Revised</Th></tr></thead>
           <tbody>
             {[...points].reverse().map((point, index) => (
-              <tr key={`${point.localDay}:${index}`}>
-                <td><strong>{point.localDay}</strong>{!point.sealed && <small className="ml-2 text-[var(--faint)]">live</small>}</td>
-                <td className="numeric">{point.metrics[metricId] === undefined ? "Missing" : formatValue(Number(point.metrics[metricId]), unit)}</td>
-                <td className="numeric">{point.estimatedCostUsd == null ? "Unavailable" : money(point.estimatedCostUsd)}</td>
-                <td className="numeric">{point.authoritativeCostUsd == null ? "Unallocated" : money(point.authoritativeCostUsd)}</td>
-                <td><QualityBadge quality={point.quality} /></td>
-                <td>{dateTime(point.revisedAt)}</td>
-              </tr>
+              <Tr key={`${point.localDay}:${index}`}>
+                <Td><strong>{point.localDay}</strong>{!point.sealed && <small className="ml-2 text-faint">live</small>}</Td>
+                <Td numeric>{point.metrics[metricId] === undefined ? "Missing" : formatValue(Number(point.metrics[metricId]), unit)}</Td>
+                <Td numeric>{point.estimatedCostUsd == null ? "Unavailable" : money(point.estimatedCostUsd)}</Td>
+                <Td numeric>{point.authoritativeCostUsd == null ? "Unallocated" : money(point.authoritativeCostUsd)}</Td>
+                <Td><QualityBadge quality={point.quality} /></Td>
+                <Td>{dateTime(point.revisedAt)}</Td>
+              </Tr>
             ))}
           </tbody>
-        </table>
-      </div>
+        </Table>
+      </TableScroll>
     </div>
   );
 }
 
 export function QualityBadge({ quality }: { quality: DataQuality }) {
-  const tone = quality === "complete" ? "good" : quality === "missing" || quality === "stale" ? "danger" : "warning";
-  return <span className={`action-state ${tone}`}>{quality}</span>;
+  const tone = quality === "complete" ? "good" : quality === "missing" || quality === "stale" ? "danger" : "warn";
+  return <Pill tone={tone} shape="tag">{quality}</Pill>;
 }
 
 function metricIds(points: UsagePoint[]): string[] {

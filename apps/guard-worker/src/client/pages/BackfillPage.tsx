@@ -1,8 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { dataSize, dateTime, number } from "../format";
 import type { BackfillJobView, BackfillSliceView, RetentionView } from "../types";
-import { EmptyState, Icon } from "../components/ui";
+import { Button, EmptyState, Icon, Notice, Panel, PanelHead, Pill, Select, Table, TableScroll, Td, Th, Tr } from "../components/ui";
+
+/** Overview-style summary tile. `accent` draws the 3px status stripe down its left edge. */
+function StatTile({ label, value, note, accent, valueTone }: {
+  label: ReactNode;
+  value: ReactNode;
+  note: ReactNode;
+  accent?: string;
+  valueTone?: string;
+}) {
+  return (
+    <article className={`flex min-h-[104px] cursor-default flex-col items-start gap-1 rounded-panel border border-line bg-panel px-4 py-3.5 text-left shadow-panel ${accent ?? ""}`}>
+      <span className="inline-flex items-center gap-[5px] text-[12px] font-[680] text-muted">{label}</span>
+      <strong className={`text-[27px] leading-[1.1] tracking-[-.02em] tabular-nums ${valueTone ?? ""}`}>{value}</strong>
+      <small className="inline-flex items-center gap-[5px] text-[12px] text-faint">{note}</small>
+    </article>
+  );
+}
 
 export function BackfillPage({ token }: { token: string }) {
   const [jobs, setJobs] = useState<BackfillJobView[]>([]);
@@ -40,16 +57,34 @@ export function BackfillPage({ token }: { token: string }) {
   const pressure = retention?.pressure == null ? 0 : retention.pressure;
   return (
     <div className="grid gap-4">
-      <section className="stat-row">
-        <article className="stat-tile neutral"><span className="stat-label">Target retention</span><strong>{retention?.targetRetentionDays ?? 730} days</strong><small>Account, product, and namespace aggregates are always preserved</small></article>
-        <article className={`stat-tile ${pressure >= .9 ? "danger" : pressure >= .7 ? "warning" : "good"}`}><span className="stat-label">D1 capacity</span><strong>{retention ? `${number(pressure * 100)}%` : "Pending"}</strong><small>{retention ? `${dataSize(retention.projectedBytes)} projected of ${dataSize(retention.capacityBytes)}` : "Capacity check pending"}</small></article>
-        <article className="stat-tile neutral"><span className="stat-label">Oldest resource day</span><strong>{retention?.oldestResourceDay ?? "Pending"}</strong><small>High-cardinality individual-resource history</small></article>
-        <article className="stat-tile neutral"><span className="stat-label">Pending slices</span><strong>{retention?.backfillPending ?? 0}</strong><small>Newest slices run from unused collection budget</small></article>
+      <section className="mb-[18px] grid grid-cols-[1.3fr_1fr_1fr_1fr] gap-3 max-xl:grid-cols-[repeat(2,minmax(0,1fr))] max-md:grid-cols-[minmax(0,1fr)]">
+        <StatTile
+          label="Target retention"
+          value={`${retention?.targetRetentionDays ?? 730} days`}
+          note="Account, product, and namespace aggregates are always preserved"
+        />
+        <StatTile
+          label="D1 capacity"
+          value={retention ? `${number(pressure * 100)}%` : "Pending"}
+          note={retention ? `${dataSize(retention.projectedBytes)} projected of ${dataSize(retention.capacityBytes)}` : "Capacity check pending"}
+          accent={pressure >= .9 ? "border-l-[3px] border-l-danger" : pressure >= .7 ? "border-l-[3px] border-l-[#e0a53a]" : undefined}
+          valueTone={pressure >= .9 ? "text-danger" : pressure >= .7 ? "text-warn" : "text-good"}
+        />
+        <StatTile
+          label="Oldest resource day"
+          value={retention?.oldestResourceDay ?? "Pending"}
+          note="High-cardinality individual-resource history"
+        />
+        <StatTile
+          label="Pending slices"
+          value={retention?.backfillPending ?? 0}
+          note="Newest slices run from unused collection budget"
+        />
       </section>
 
       {pressure >= .7 && (
-        <div className={`inline-note ${pressure >= .9 ? "warning" : ""}`}>
-          <Icon name="alert" />
+        <div className={`mx-5 mb-3 flex items-start gap-[9px] rounded-field border px-3 py-2.5 text-[12.5px] ${pressure >= .9 ? "border-warn-line bg-warn-bg text-warn-ink" : "border-line bg-panel-soft text-muted"}`}>
+          <Icon name="alert" className="mt-px size-[15px]" />
           <span>{pressure >= .9
             ? "D1 capacity crossed 90%. Brolly prunes the oldest individual-resource days toward 80% while retaining aggregate history, current state, alerts, actions, audit, and billing records."
             : pressure >= .8
@@ -58,62 +93,67 @@ export function BackfillPage({ token }: { token: string }) {
         </div>
       )}
 
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">Newest first</p>
-            <h2>Historical backfill</h2>
-            <p className="panel-sub">Backfill uses only request, wall-time, and D1 budget left after active safeguards. Historical breaches can populate charts and instances; delivery and control execution stay disabled.</p>
-          </div>
-          <div className="flex gap-2">
-            <select className="rounded border border-[var(--line)] bg-white px-3 text-sm" value={days} onChange={event => setDays(event.target.value)}>
-              <option value="1">Previous 24 hours</option><option value="30">Previous 30 days</option><option value="90">Previous 90 days</option>
-            </select>
-            <button className="button primary" disabled={busy} type="button" onClick={() => void create()}>{busy ? "Scheduling…" : "Schedule backfill"}</button>
-          </div>
-        </div>
+      <Panel>
+        <PanelHead
+          eyebrow="Newest first"
+          title="Historical backfill"
+          sub="Backfill uses only request, wall-time, and D1 budget left after active safeguards. Historical breaches can populate charts and instances; delivery and control execution stay disabled."
+          actions={
+            <>
+              <Select className="text-sm" value={days} onChange={event => setDays(event.target.value)}>
+                <option value="1">Previous 24 hours</option><option value="30">Previous 30 days</option><option value="90">Previous 90 days</option>
+              </Select>
+              <Button variant="primary" disabled={busy} onClick={() => void create()}>{busy ? "Scheduling…" : "Schedule backfill"}</Button>
+            </>
+          }
+        />
         {jobs.length ? (
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead><tr><th>Range</th><th>Status</th><th>Completed slices</th><th>Coverage gaps</th><th>Updated</th></tr></thead>
+          <TableScroll>
+            <Table>
+              <thead><tr><Th>Range</Th><Th>Status</Th><Th>Completed slices</Th><Th>Coverage gaps</Th><Th>Updated</Th></tr></thead>
               <tbody>{jobs.map(job => {
                 const jobSlices = slices.filter(slice => slice.backfillJobId === job.id);
                 return (
-                  <tr key={job.id}>
-                    <td><span className="cell-main"><strong>{new Date(job.requestedStartAt).toLocaleDateString()} to {new Date(job.requestedEndAt).toLocaleDateString()}</strong><small>Newest first</small></span></td>
-                    <td><span className={`action-state ${job.status === "complete" ? "good" : job.status === "paused" ? "warning" : ""}`}>{job.status}</span>{job.pausedReason && <small className="ml-2">{job.pausedReason}</small>}</td>
-                    <td className="numeric">{jobSlices.filter(slice => slice.status === "complete").length}/{jobSlices.length}</td>
-                    <td className="numeric">{jobSlices.filter(slice => slice.coverageStatus !== "complete").length}</td>
-                    <td>{dateTime(job.updatedAt)}</td>
-                  </tr>
+                  <Tr key={job.id}>
+                    <Td>
+                      <span className="flex min-w-0 flex-col gap-[3px]">
+                        <strong className="max-w-[46ch] truncate">{new Date(job.requestedStartAt).toLocaleDateString()} to {new Date(job.requestedEndAt).toLocaleDateString()}</strong>
+                        <small className="text-[12px] text-faint">Newest first</small>
+                      </span>
+                    </Td>
+                    <Td><Pill shape="tag">{job.status}</Pill>{job.pausedReason && <small className="ml-2">{job.pausedReason}</small>}</Td>
+                    <Td numeric>{jobSlices.filter(slice => slice.status === "complete").length}/{jobSlices.length}</Td>
+                    <Td numeric>{jobSlices.filter(slice => slice.coverageStatus !== "complete").length}</Td>
+                    <Td>{dateTime(job.updatedAt)}</Td>
+                  </Tr>
                 );
               })}</tbody>
-            </table>
-          </div>
+            </Table>
+          </TableScroll>
         ) : <EmptyState icon="clock" title="Backfill has not started">Setup schedules the previous day, current billing cycle, and remaining available history in that order.</EmptyState>}
-      </section>
+      </Panel>
 
-      <section className="panel">
-        <div className="panel-head"><div><h2>Recent slices</h2><p className="panel-sub">Each collector-day slice stores its cursor, retry count, and explicit coverage result.</p></div></div>
+      <Panel>
+        <PanelHead title="Recent slices" sub="Each collector-day slice stores its cursor, retry count, and explicit coverage result." />
         {slices.length ? (
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead><tr><th>Collector</th><th>Window</th><th>Status</th><th>Coverage</th><th>Retries</th><th>Error</th></tr></thead>
+          <TableScroll>
+            <Table>
+              <thead><tr><Th>Collector</Th><Th>Window</Th><Th>Status</Th><Th>Coverage</Th><Th>Retries</Th><Th>Error</Th></tr></thead>
               <tbody>{slices.slice(0, 100).map(slice => (
-                <tr key={slice.id}>
-                  <td><strong>{slice.collectorKey}</strong></td>
-                  <td>{new Date(slice.startsAt).toLocaleDateString()}</td>
-                  <td>{slice.status}</td>
-                  <td>{slice.coverageStatus}</td>
-                  <td className="numeric">{slice.retryCount}</td>
-                  <td>{slice.error ?? "None"}</td>
-                </tr>
+                <Tr key={slice.id}>
+                  <Td><strong>{slice.collectorKey}</strong></Td>
+                  <Td>{new Date(slice.startsAt).toLocaleDateString()}</Td>
+                  <Td>{slice.status}</Td>
+                  <Td>{slice.coverageStatus}</Td>
+                  <Td numeric>{slice.retryCount}</Td>
+                  <Td>{slice.error ?? "None"}</Td>
+                </Tr>
               ))}</tbody>
-            </table>
-          </div>
+            </Table>
+          </TableScroll>
         ) : <EmptyState icon="clock" title="No slice records">Backfill progress appears after a job is scheduled.</EmptyState>}
-      </section>
-      {error && <p className="form-error" role="alert">{error}</p>}
+      </Panel>
+      {error && <Notice tone="error">{error}</Notice>}
     </div>
   );
 }

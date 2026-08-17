@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api";
 import { compactId, dateTime, metricTitle } from "../format";
 import { humanizeReason } from "./IncidentDrawer";
 import type { ControlActionRow, Incident } from "../types";
 import { ObjectStopImpact } from "./protection";
-import { Drawer, Icon } from "./ui";
+import { ActionStatePill, Button, DetailBlock, Drawer, ExternalAction, Icon, KeyValueList, Notice } from "./ui";
 
 export function actionStateTitle(state: string): string {
   const titles: Record<string, string> = {
@@ -70,72 +70,87 @@ export function ActionDrawer({ action, incident, token, onClose, onChanged }: {
     }
   }
 
+  const statusCard = stopped
+    ? "border-danger-line bg-danger-bg text-[#7c1f1a] dark:text-danger"
+    : action.state === "rolled_back"
+      ? "border-good-line bg-good-bg text-[#135a36] dark:text-good"
+      : action.state === "failed"
+        ? "border-danger-line bg-danger-bg"
+        : "border-line bg-[#eef1f4] dark:bg-[#252a31]";
+  const statusSub = stopped ? "text-[#8c4440] dark:text-[#e49a96]" : "text-muted";
+
+  const detailRows: Array<[ReactNode, ReactNode]> = [
+    ["Action ID", <code className="font-mono text-[.92em] break-all">{action.id}</code>],
+    ["Target", <code className="font-mono text-[.92em] break-all">{action.family}/{action.assetId}</code>],
+    ["Prepared", dateTime(action.createdAt)],
+    ["Last changed", dateTime(action.updatedAt)],
+  ];
+  if (action.error) detailRows.push(["Last error", <span className="text-danger">{action.error}</span>]);
+
   return (
     <Drawer
       onClose={onClose}
       labelledBy="action-drawer-title"
       header={
         <div>
-          <span className={`action-state ${action.state}`}>{metricTitle(action.state)}</span>
+          <ActionStatePill state={action.state} />
           <h2 id="action-drawer-title">{actionKindLabel(action.kind)}</h2>
           <p>{incident?.assetName ?? compactId(action.assetId)}</p>
         </div>
       }
-      footer={<button type="button" className="button secondary" onClick={onClose}>Done</button>}
+      footer={<Button onClick={onClose}>Done</Button>}
     >
-      <section className={`action-status-card ${stopped ? "stopped" : action.state}`}>
-        <Icon name={stopped ? "alert" : action.state === "rolled_back" ? "check" : "shield"} />
+      <section className={`flex items-start gap-[13px] rounded-panel border p-4 ${statusCard}`}>
+        <Icon name={stopped ? "alert" : action.state === "rolled_back" ? "check" : "shield"} className="mt-0.5 size-[22px]" />
         <div>
-          <span>Current control state</span>
-          <strong>{actionStateTitle(action.state)}</strong>
-          <p>{actionStateDescription(action.state)}</p>
+          <span className={`block text-[11px] font-[750] uppercase tracking-[.07em] ${statusSub}`}>Current control state</span>
+          <strong className="mt-[3px] mb-1 block text-[15.5px]">{actionStateTitle(action.state)}</strong>
+          <p className={`m-0 text-[12.5px] ${statusSub}`}>{actionStateDescription(action.state)}</p>
         </div>
       </section>
 
-      <section className="detail-block">
-        <h3>Action details</h3>
-        <p>{incident ? humanizeReason(action.reason, incident.metric, incident.metricLabel) : action.reason}.</p>
-        <dl>
-          <div><dt>Action ID</dt><dd><code>{action.id}</code></dd></div>
-          <div><dt>Target</dt><dd><code>{action.family}/{action.assetId}</code></dd></div>
-          <div><dt>Prepared</dt><dd>{dateTime(action.createdAt)}</dd></div>
-          <div><dt>Last changed</dt><dd>{dateTime(action.updatedAt)}</dd></div>
-          {action.error && <div><dt>Last error</dt><dd className="error-text">{action.error}</dd></div>}
-        </dl>
-        <p className="audit-note"><Icon name="clock" /> Every prepare, execute, resume, and failure on this action is written to the audit log with its rollback snapshot before Cloudflare is touched.</p>
+      <DetailBlock>
+        <h3 className="mb-2 text-[14.5px]">Action details</h3>
+        <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{incident ? humanizeReason(action.reason, incident.metric, incident.metricLabel) : action.reason}.</p>
+        <KeyValueList
+          labelWidth="125px"
+          className="my-3 [&>div]:text-[12.5px] [&>div:first-child]:border-t"
+          rows={detailRows}
+        />
+        <p className="my-2.5 flex items-start gap-2 text-[12.5px] text-muted"><Icon name="clock" className="mt-0.5 size-[15px]" /> Every prepare, execute, resume, and failure on this action is written to the audit log with its rollback snapshot before Cloudflare is touched.</p>
         {incident && (
-          <a className="button secondary full" href={incident.cloudflareUrl} target="_blank" rel="noreferrer">
+          <ExternalAction href={incident.cloudflareUrl}>
             Open target in Cloudflare <Icon name="external" />
-          </a>
+          </ExternalAction>
         )}
-      </section>
+      </DetailBlock>
 
       {action.kind === "runtime_quarantine" && (
-        <section className="detail-block"><ObjectStopImpact compact /></section>
+        <DetailBlock><ObjectStopImpact compact /></DetailBlock>
       )}
 
-      <section className="detail-block">
-        <h3>Available control</h3>
+      <DetailBlock>
+        <h3 className="mb-2 text-[14.5px]">Available control</h3>
         {canExecute && (
           <>
-            <p>{action.state === "failed" ? "The previous Cloudflare request did not complete conclusively. Retrying reapplies the same desired fuse state; inspect Cloudflare first if the target status is uncertain." : "This action is only prepared. No live service change has happened yet."}</p>
-            <button type="button" className="button danger full" disabled={Boolean(busy)} onClick={() => void run("execute")}>
+            <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{action.state === "failed" ? "The previous Cloudflare request did not complete conclusively. Retrying reapplies the same desired fuse state; inspect Cloudflare first if the target status is uncertain." : "This action is only prepared. No live service change has happened yet."}</p>
+            <Button variant="danger" full disabled={Boolean(busy)} onClick={() => void run("execute")}>
               {busy === "execute" ? "Stopping…" : action.state === "failed" ? "Retry stop" : "Approve and stop service"}
-            </button>
+            </Button>
           </>
         )}
         {canRestore && (
           <>
-            <p>This control is active. Restore the pre-action configuration to return the resource to service.</p>
-            <button type="button" className="button primary full" disabled={Boolean(busy)} onClick={() => void run("resume")}>
+            <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">This control is active. Restore the pre-action configuration to return the resource to service.</p>
+            <Button variant="primary" full disabled={Boolean(busy)} onClick={() => void run("resume")}>
               {busy === "resume" ? "Restoring…" : action.kind === "runtime_quarantine" ? "Release quarantine and resume" : "Restore service from rollback"}
-            </button>
+            </Button>
           </>
         )}
-        {!canExecute && !canRestore && <p>No operator action is needed. This control has already been rolled back or is currently changing state.</p>}
-      </section>
+        {!canExecute && !canRestore && <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">No operator action is needed. This control has already been rolled back or is currently changing state.</p>}
+      </DetailBlock>
 
-      {error && <p className="form-error">{error}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
     </Drawer>
   );
 }

@@ -8,10 +8,15 @@ import type { SpendPoint } from "../types";
 export function SpendChart({ points }: { points: SpendPoint[] }) {
   if (points.length < 2) {
     return (
-      <div className="chart-empty">
-        <div className="chart-placeholder"><span /><span /><span /><span /></div>
+      <div className="grid h-[270px] place-content-center text-center text-muted">
+        <div className="mb-3.5 flex h-[90px] items-end justify-center gap-2">
+          <span className="h-[28px] w-[28px] rounded-t bg-[#e3e7eb] dark:bg-[#343a42]" />
+          <span className="h-[58px] w-[28px] rounded-t bg-[#e3e7eb] dark:bg-[#343a42]" />
+          <span className="h-[42px] w-[28px] rounded-t bg-[#e3e7eb] dark:bg-[#343a42]" />
+          <span className="h-[76px] w-[28px] rounded-t bg-orange-soft" />
+        </div>
         <strong>Building today's trend</strong>
-        <p>The monitor stores one bounded spend aggregate per pass; the chart appears after a few scans.</p>
+        <p className="mt-[5px] mb-0 max-w-[40ch] text-[13px] text-faint">The monitor stores one bounded spend aggregate per pass; the chart appears after a few scans.</p>
       </div>
     );
   }
@@ -27,20 +32,20 @@ export function SpendChart({ points }: { points: SpendPoint[] }) {
   const line = coordinates.map(point => `${point.x},${point.y}`).join(" ");
   const area = `${pad},${height - pad} ${line} ${width - pad},${height - pad}`;
   return (
-    <div className="chart-wrap">
-      <div className="chart-y" aria-hidden="true">
+    <div className="relative min-w-0 pt-3 pr-0 pb-[22px] pl-[46px]">
+      <div className="absolute top-[18px] bottom-10 left-0 flex flex-col justify-between text-[11px] tabular-nums text-faint" aria-hidden="true">
         <span>{money(max)}</span>
         <span>{money(max / 2)}</span>
         <span>$0</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Estimated daily spend trend">
+      <svg className="block h-[230px] w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Estimated daily spend trend">
         <defs>
           <linearGradient id="spend-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stopColor="#f6821f" stopOpacity=".22" />
             <stop offset="1" stopColor="#f6821f" stopOpacity="0" />
           </linearGradient>
         </defs>
-        <line x1={pad} x2={width - pad} y1={height / 2} y2={height / 2} className="chart-gridline" />
+        <line x1={pad} x2={width - pad} y1={height / 2} y2={height / 2} className="stroke-line-soft [stroke-dasharray:5_7]" />
         <polygon points={area} fill="url(#spend-fill)" />
         <polyline points={line} fill="none" stroke="#f6821f" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
         {coordinates.map(point => (
@@ -49,7 +54,7 @@ export function SpendChart({ points }: { points: SpendPoint[] }) {
           </circle>
         ))}
       </svg>
-      <div className="chart-x" aria-hidden="true">
+      <div className="flex justify-between text-[11px] text-faint" aria-hidden="true">
         <span>{dateTime(points[0]?.at ?? 0)}</span>
         <span>Now</span>
       </div>

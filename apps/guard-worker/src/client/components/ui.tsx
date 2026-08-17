@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 import { PRODUCT_ICON } from "../lib/meta";
 import type { NotificationKind } from "../types";
 
@@ -31,9 +31,10 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
   x: <path d="M6 6l12 12M18 6 6 18" />,
 };
 
-export function Icon({ name }: { name: IconName }) {
+/** Inline stroke icon. `className` sets size and color; the default is the 18px body-text size. */
+export function Icon({ name, className = "size-[18px]" }: { name: IconName; className?: string }) {
   return (
-    <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg className={`inline-block flex-none ${className}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {ICON_PATHS[name]}
     </svg>
   );
@@ -48,15 +49,6 @@ export function Umbrella() {
   );
 }
 
-export function Brand({ large = false }: { large?: boolean }) {
-  return (
-    <span className={`brand ${large ? "large" : ""}`}>
-      <span className="brand-mark"><Umbrella /></span>
-      <span>Brolly</span>
-    </span>
-  );
-}
-
 /** Cloudflare brand mark used on actions that hand control to Cloudflare. */
 export function CloudflareLogo() {
   return (
@@ -67,12 +59,21 @@ export function CloudflareLogo() {
   );
 }
 
+export function Brand({ large = false }: { large?: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-[9px] font-[780] tracking-[-.4px] text-ink ${large ? "text-[28px]" : "text-[19px]"}`}>
+      <span className={`grid place-items-center bg-orange text-white ${large ? "size-[46px] rounded-[11px] [&>svg]:size-[33px]" : "size-8 rounded-lg [&>svg]:size-6"}`}><Umbrella /></span>
+      <span>Brolly</span>
+    </span>
+  );
+}
+
 /** Cloudflare product glyph, rendered from the local docs icon set via a mask so it inherits color. */
 export function ProductIcon({ family, tone = "neutral" }: { family: string; tone?: "neutral" | "orange" }) {
   const icon = PRODUCT_ICON[family] ?? "dns";
   return (
     <span
-      className={`product-mark ${tone}`}
+      className={`product-glyph relative inline-block size-[34px] flex-none rounded-[7px] ${tone === "orange" ? "bg-orange-soft text-orange-deep" : "bg-[#edf0f3] text-[#566070] dark:bg-[#252b32] dark:text-[#aab3bd]"}`}
       style={{ "--product-icon": `url(/cloudflare-icons/${icon}.svg)` } as React.CSSProperties}
       aria-hidden="true"
     />
@@ -83,26 +84,69 @@ export function ProductIcon({ family, tone = "neutral" }: { family: string; tone
 export function ChannelLogo({ kind }: { kind: NotificationKind }) {
   if (!["discord", "slack", "twilio"].includes(kind)) {
     const label = kind === "webhook" ? "{}" : kind === "resend" ? "R" : "P";
-    return <span className={`channel-mark ${kind}`} aria-hidden="true"><strong>{label}</strong></span>;
+    return (
+      <span className="grid size-[38px] flex-none place-items-center rounded-lg border border-line-soft bg-white text-[13px] font-extrabold text-[#566070]" aria-hidden="true">
+        <strong>{label}</strong>
+      </span>
+    );
   }
   return (
-    <span className={`channel-mark ${kind}`} aria-hidden="true">
-      <img src={`/brand-icons/${kind}.svg`} alt="" />
+    <span className="grid size-[38px] flex-none place-items-center rounded-lg border border-line-soft bg-white" aria-hidden="true">
+      <img src={`/brand-icons/${kind}.svg`} alt="" className="size-[22px]" />
     </span>
   );
 }
 
-export function InfoTip({ label, align = "left", children }: { label: string; align?: "left" | "right"; children: ReactNode }) {
+/**
+ * Hover/focus tooltip. Hidden panels use `hidden` (display:none, not visibility)
+ * so they never inflate the page's scrollable overflow. `flip` opens the panel
+ * upward (sidebar footer).
+ */
+export function InfoTip({ label, align = "left", flip = false, children }: { label: string; align?: "left" | "right"; flip?: boolean; children: ReactNode }) {
   return (
-    <span className={`info-tip ${align}`}>
-      <button type="button" className="info-tip-trigger" aria-label={label}>i</button>
-      <span className="info-tip-panel" role="tooltip">{children}</span>
+    <span className="group/tip relative z-[5] inline-flex align-middle">
+      <button
+        type="button"
+        className="inline-grid size-[18px] cursor-help place-items-center rounded-full border border-[#aeb6c0] bg-white p-0 text-[11px] font-[850] leading-none text-[#59636f] hover:border-orange hover:text-orange-deep hover:outline-3 hover:outline-[#f6821f24] focus-visible:border-orange focus-visible:text-orange-deep focus-visible:outline-3 focus-visible:outline-[#f6821f24] dark:border-[#626c77] dark:bg-[#20252b] dark:text-chip-ink"
+        aria-label={label}
+      >
+        i
+      </button>
+      <span
+        role="tooltip"
+        className={[
+          "absolute hidden w-[min(390px,calc(100vw-32px))] rounded-panel border border-tip-line bg-tip px-4 py-3.5 text-left text-[12.5px] leading-[1.5] font-normal whitespace-normal text-ink shadow-tip",
+          "opacity-0 -translate-y-1 transition-[opacity,transform] duration-[130ms] starting:opacity-0 starting:-translate-y-1",
+          "group-hover/tip:block group-hover/tip:translate-y-0 group-hover/tip:opacity-100 group-focus-within/tip:block group-focus-within/tip:translate-y-0 group-focus-within/tip:opacity-100",
+          "before:absolute before:size-2.5 before:rotate-45 before:border-t before:border-l before:border-tip-line before:bg-tip before:content-['']",
+          "[&_h4]:mt-2.5 [&_h4]:mb-[3px] [&_h4]:text-[12.5px] [&_h4:first-child]:mt-0 [&_p]:mb-2 [&_p]:text-tip-ink [&_p:last-child]:mb-0",
+          align === "right" ? "-right-2 before:right-3" : "-left-2 before:left-3",
+          flip
+            ? "bottom-[calc(100%+10px)] before:-bottom-1.5 before:rotate-[225deg]"
+            : "top-[calc(100%+10px)] before:-top-1.5",
+        ].join(" ")}
+      >
+        {children}
+      </span>
     </span>
   );
 }
+
+const SEVERITY_COLOR: Record<string, string> = {
+  emergency: "text-[#c22a20]",
+  critical: "text-[#b14d00]",
+  warning: "text-[#96650a]",
+  info: "text-[#49677d]",
+  failed: "text-[#c22a20]",
+};
 
 export function SeverityBadge({ severity }: { severity: string }) {
-  return <span className={`severity ${severity}`}><i />{severity}</span>;
+  return (
+    <span className={`inline-flex w-max items-center gap-1.5 text-[12px] font-[750] capitalize ${SEVERITY_COLOR[severity] ?? "text-muted"}`}>
+      <i className="size-2 rounded-full bg-current" />
+      {severity}
+    </span>
+  );
 }
 
 export function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
@@ -112,18 +156,25 @@ export function Segmented<T extends string>({ value, options, onChange, ariaLabe
   ariaLabel: string;
 }) {
   return (
-    <div className="segmented" role="group" aria-label={ariaLabel}>
-      {options.map(option => (
-        <button
-          key={option.value}
-          type="button"
-          className={value === option.value ? "active" : ""}
-          aria-pressed={value === option.value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
+    <div className="flex w-max max-w-full overflow-x-auto rounded-field bg-[#e7eaee] p-[3px] dark:bg-[#252a31]" role="group" aria-label={ariaLabel}>
+      {options.map(option => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            className={`cursor-pointer whitespace-nowrap rounded border-0 px-[11px] py-1.5 text-[13px] font-semibold capitalize ${
+              active
+                ? "bg-white text-ink shadow-[0_1px_3px_#10182821] dark:bg-[#3a4048] dark:text-white dark:shadow-[0_1px_3px_#0005]"
+                : "bg-transparent text-muted"
+            }`}
+            aria-pressed={active}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -135,10 +186,10 @@ export function EmptyState({ icon = "check", title, children, compact = false }:
   compact?: boolean;
 }) {
   return (
-    <div className={`empty-state ${compact ? "compact" : ""}`}>
-      <Icon name={icon} />
-      <h3>{title}</h3>
-      {children && <p>{children}</p>}
+    <div className={`text-center text-muted ${compact ? "px-4 py-7" : "px-5 py-[46px]"}`}>
+      <Icon name={icon} className="size-9 rounded-full bg-good-bg p-2 text-good" />
+      <h3 className="mt-3 mb-1 text-[15px] text-ink">{title}</h3>
+      {children && <p className="mx-auto max-w-[52ch] text-[13px]">{children}</p>}
     </div>
   );
 }
@@ -168,15 +219,301 @@ export function Drawer({ header, footer, onClose, children, labelledBy }: {
   }, [onClose]);
 
   return (
-    <div className="drawer-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby={labelledBy} ref={panelRef} tabIndex={-1}>
-        <header className="drawer-header">
+    <div className="fixed inset-0 z-50 flex justify-end bg-[#14171b66] backdrop-blur-[2px] dark:bg-[#050608aa]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <aside
+        className="flex h-full w-[min(560px,100vw)] flex-col bg-[#f5f6f8] shadow-drawer outline-none dark:bg-[#111419]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        ref={panelRef}
+        tabIndex={-1}
+      >
+        <header className="flex justify-between gap-3 border-b border-line bg-panel px-[22px] py-5 [&_h2]:mt-2.5 [&_h2]:mb-[3px] [&_h2]:text-[22px] [&_h2]:tracking-[-.02em] [&_p]:m-0 [&_p]:text-[13px] [&_p]:break-words [&_p]:text-muted">
           {header}
-          <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
+          <IconButton className="flex-none" aria-label="Close" onClick={onClose}><Icon name="x" /></IconButton>
         </header>
-        <div className="drawer-body">{children}</div>
-        {footer && <footer className="drawer-footer">{footer}</footer>}
+        <div className="flex flex-col gap-[13px] overflow-auto p-[18px]">{children}</div>
+        {footer && <footer className="mt-auto flex justify-between gap-2.5 border-t border-line bg-panel px-[18px] py-[13px]">{footer}</footer>}
       </aside>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Shared primitives. Every repeated visual composition in the dashboard is a
+   component here; pages compose these and add layout utilities inline.
+--------------------------------------------------------------------------- */
+
+function cx(...parts: Array<string | false | null | undefined>): string {
+  return parts.filter(Boolean).join(" ");
+}
+
+export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
+
+const BUTTON_VARIANT: Record<ButtonVariant, string> = {
+  primary: "border-orange bg-orange text-white not-disabled:hover:border-orange-hover not-disabled:hover:bg-orange-hover",
+  secondary: "border-line-strong bg-panel text-ink not-disabled:hover:border-faint not-disabled:hover:bg-panel-soft dark:not-disabled:hover:bg-[#252a31]",
+  quiet: "border-transparent bg-transparent text-muted not-disabled:hover:bg-[#e8ebee] not-disabled:hover:text-ink dark:not-disabled:hover:bg-[#252a31]",
+  danger: "border-[#c22f2f] bg-[#c22f2f] text-white not-disabled:hover:bg-[#a82121]",
+};
+
+export function Button({ variant = "secondary", size, full = false, className, type = "button", ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: ButtonVariant;
+  size?: "small";
+  full?: boolean;
+}) {
+  return (
+    <button
+      type={type}
+      className={cx(
+        "inline-flex cursor-pointer items-center justify-center gap-[7px] rounded-field border font-[620] transition-[background-color,border-color,box-shadow] duration-[130ms] disabled:cursor-not-allowed disabled:opacity-50 [&>svg]:size-4",
+        size === "small" ? "min-h-[30px] px-2.5 text-[12.5px]" : "min-h-9 px-3.5 text-[13.5px]",
+        BUTTON_VARIANT[variant],
+        full && "w-full",
+        className,
+      )}
+      {...rest}
+    />
+  );
+}
+
+/** Text-only action styled like a link. `inline` flows with surrounding prose. */
+export function LinkButton({ inline = false, className, type = "button", ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { inline?: boolean }) {
+  return (
+    <button
+      type={type}
+      className={cx(
+        "cursor-pointer border-0 bg-transparent p-0 font-[620] text-blue hover:underline",
+        inline ? "inline text-[length:inherit]" : "inline-flex items-center gap-1 text-[13px] [&>svg]:size-3.5",
+        className,
+      )}
+      {...rest}
+    />
+  );
+}
+
+/** Round 34px icon-only button. */
+export function IconButton({ className, type = "button", ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type={type}
+      className={cx("grid size-[34px] cursor-pointer place-items-center rounded-full border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink dark:hover:border-[#69737e]", className)}
+      {...rest}
+    />
+  );
+}
+
+/** Small uppercase label above a heading. */
+export function Eyebrow({ tone = "faint", className, children }: { tone?: "faint" | "orange"; className?: string; children: ReactNode }) {
+  return <p className={cx("mb-1.5 text-[11px] font-[750] uppercase tracking-[.12em]", tone === "orange" ? "text-orange-deep" : "text-faint", className)}>{children}</p>;
+}
+
+/** Bordered card. Most page content lives in one of these. */
+export function Panel({ className, children, ...rest }: React.HTMLAttributes<HTMLElement>) {
+  return <section className={cx("relative mb-[18px] rounded-panel border border-line bg-panel shadow-panel", className)} {...rest}>{children}</section>;
+}
+
+/** Panel heading row: title + optional sub copy on the left, actions on the right. */
+export function PanelHead({ title, sub, actions, eyebrow, level = 2, titleExtra, className }: {
+  title: ReactNode;
+  sub?: ReactNode;
+  actions?: ReactNode;
+  eyebrow?: ReactNode;
+  level?: 2 | 3;
+  /** Rendered inline after the title (info tips, badges). */
+  titleExtra?: ReactNode;
+  className?: string;
+}) {
+  const Heading = level === 2 ? "h2" : "h3";
+  const headingClass = level === 2 ? "m-0 text-[16.5px] tracking-[-.01em]" : "m-0 text-[14.5px]";
+  return (
+    <div className={cx("flex flex-wrap items-start justify-between gap-4 px-5 pt-4 pb-3", className)}>
+      <div className="min-w-0">
+        {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
+        {titleExtra ? <span className="inline-flex items-center gap-[7px]"><Heading className={headingClass}>{title}</Heading>{titleExtra}</span> : <Heading className={headingClass}>{title}</Heading>}
+        {sub && <p className="mt-[3px] max-w-[72ch] text-[13px] text-muted">{sub}</p>}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+/** Small footer line under a panel body. */
+export function PanelFoot({ icon, children, aside }: { icon?: IconName; children: ReactNode; aside?: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 border-t border-line-soft px-5 py-2.5 text-[12px] text-faint">
+      {icon && <Icon name={icon} className="mt-px size-3.5" />}
+      <span className="min-w-0 flex-1">{children}</span>
+      {aside && <span className="ml-auto whitespace-nowrap">{aside}</span>}
+    </div>
+  );
+}
+
+/** Inline status message (form errors, save confirmations). */
+export function Notice({ tone, className, children, ...rest }: React.HTMLAttributes<HTMLDivElement> & { tone: "error" | "success" }) {
+  return (
+    <div
+      className={cx(
+        "rounded-field border px-3 py-[9px] text-[13px]",
+        tone === "error" ? "border-danger-line bg-danger-bg text-danger-ink" : "border-good-line bg-good-bg text-good",
+        className,
+      )}
+      role={tone === "error" ? "alert" : undefined}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+const FIELD = "w-full rounded-field border border-field-line bg-field text-ink focus:border-orange focus:shadow-[0_0_0_3px_#f6821f24] focus:outline-none";
+
+export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cx(FIELD, "min-h-10 px-[11px]", className)} {...rest} />;
+}
+
+export function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className={cx(FIELD, "min-h-10 px-[11px]", className)} {...rest} />;
+}
+
+/** Stacked label + control + optional hint. */
+export function Field({ label, hint, className, children }: { label: ReactNode; hint?: ReactNode; className?: string; children: ReactNode }) {
+  return (
+    <label className={cx("my-[13px] flex flex-col gap-1.5 text-[13px] font-[680]", className)}>
+      {label}
+      {hint && <small className="font-[450] leading-[1.5] text-muted">{hint}</small>}
+      {children}
+    </label>
+  );
+}
+
+export type Tone = "neutral" | "good" | "warn" | "danger" | "blue" | "purple" | "orange";
+
+const TONE_FILL: Record<Tone, string> = {
+  neutral: "bg-chip text-chip-ink",
+  good: "bg-good-bg text-good",
+  warn: "bg-warn-bg text-warn",
+  danger: "bg-danger-bg text-danger",
+  blue: "bg-blue-bg text-blue-ink",
+  purple: "bg-purple-bg text-purple-ink",
+  orange: "bg-orange-soft text-orange-deep",
+};
+
+/** Filled status pill / badge. `shape="tag"` gives the square uppercase variant used for action states and tiers. */
+export function Pill({ tone = "neutral", shape = "pill", dot = false, className, children }: {
+  tone?: Tone;
+  shape?: "pill" | "tag";
+  dot?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={cx(
+        "inline-flex w-max items-center gap-1.5 whitespace-nowrap font-[750]",
+        shape === "pill" ? "rounded-full px-[9px] py-1 text-[11px]" : "rounded px-[7px] py-1 text-[10.5px] uppercase tracking-[.04em]",
+        TONE_FILL[tone],
+        className,
+      )}
+    >
+      {dot && <i className="size-[7px] rounded-full bg-current" />}
+      {children}
+    </span>
+  );
+}
+
+/** Table primitives. Put <Tr> around rows so the last row drops its bottom border. */
+export function TableScroll({ children }: { children: ReactNode }) {
+  // position:relative keeps absolutely-positioned descendants inside the clip.
+  return <div className="relative overflow-x-auto">{children}</div>;
+}
+export function Table({ className, ...rest }: React.TableHTMLAttributes<HTMLTableElement>) {
+  return <table className={cx("w-full border-collapse text-[13.5px]", className)} {...rest} />;
+}
+export function Th({ className, ...rest }: React.ThHTMLAttributes<HTMLTableCellElement>) {
+  return <th className={cx("whitespace-nowrap border-y border-line-soft bg-panel-soft px-3.5 py-2 text-left text-[11px] font-[750] uppercase tracking-[.07em] text-faint first:pl-5 last:pr-5", className)} {...rest} />;
+}
+export function Tr({ clickable = false, className, ...rest }: React.HTMLAttributes<HTMLTableRowElement> & { clickable?: boolean }) {
+  return <tr className={cx("group/row", clickable && "cursor-pointer hover:bg-hover", className)} {...rest} />;
+}
+export function Td({ numeric = false, className, ...rest }: React.TdHTMLAttributes<HTMLTableCellElement> & { numeric?: boolean }) {
+  return <td className={cx("border-b border-line-soft px-3.5 py-[11px] align-middle first:pl-5 last:pr-5 group-last/row:border-b-0", numeric && "whitespace-nowrap tabular-nums", className)} {...rest} />;
+}
+
+/** Definition list of label/value rows. */
+export function KeyValueList({ rows, labelWidth = "150px", className }: { rows: Array<[ReactNode, ReactNode]>; labelWidth?: string; className?: string }) {
+  return (
+    <dl className={cx("m-0", className)}>
+      {rows.map(([label, value], index) => (
+        <div key={index} className="grid gap-2.5 border-t border-line-soft py-2 text-[13px] first:border-t-0" style={{ gridTemplateColumns: `${labelWidth} 1fr` }}>
+          <dt className="text-faint">{label}</dt>
+          <dd className="m-0 min-w-0 break-all">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Numbered step marker (control flow, install guides). */
+export function StepNumber({ children, size = 26 }: { children: ReactNode; size?: 24 | 26 }) {
+  return (
+    <span className={cx("grid flex-none place-items-center rounded-full bg-orange-soft font-extrabold text-orange-deep", size === 24 ? "size-6 text-[12px]" : "size-[26px] text-[13px]")}>
+      {children}
+    </span>
+  );
+}
+
+/** Bordered card that groups one titled section of drawer or detail content. */
+export function DetailBlock({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <section className="rounded-panel border border-line bg-panel p-[18px]">
+      {title && <h3 className="mt-0 mb-2 text-[14.5px]">{title}</h3>}
+      {children}
+    </section>
+  );
+}
+
+/** Full-width secondary-button-styled anchor for links that leave the app (opens Cloudflare). */
+export function ExternalAction({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <a
+      className="inline-flex min-h-9 w-full cursor-pointer items-center justify-center gap-[7px] rounded-field border border-line-strong bg-panel px-3.5 text-[13.5px] font-[620] text-ink transition-[background-color,border-color,box-shadow] duration-[130ms] hover:border-faint hover:bg-panel-soft dark:hover:bg-[#252a31] [&>svg]:size-4"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+    >
+      {children}
+    </a>
+  );
+}
+
+/** Rounded count badge used in panel headings. */
+export function CountBadge({ tone = "neutral", children }: { tone?: "neutral" | "warning"; children: ReactNode }) {
+  return (
+    <span className={cx("inline-block whitespace-nowrap rounded-full px-2.5 py-1.5 text-[12px] font-bold", tone === "warning" ? "bg-warn-bg text-warn" : "bg-chip text-ink dark:text-chip-ink")}>
+      {children}
+    </span>
+  );
+}
+
+const ACTION_STATE_TONE: Record<string, Tone> = {
+  succeeded: "good",
+  failed: "danger",
+  prepared: "warn",
+  rolled_back: "blue",
+};
+
+/** Uppercase tag for a control action's lifecycle state. */
+export function ActionStatePill({ state, className }: { state: string; className?: string }) {
+  return <Pill tone={ACTION_STATE_TONE[state] ?? "neutral"} shape="tag" className={className}>{state.replaceAll("_", " ")}</Pill>;
+}
+
+/** Two-line table cell: bold title over a faint caption. */
+export function CellStack({ title, sub, titleClassName = "max-w-[46ch] truncate" }: { title: ReactNode; sub: ReactNode; titleClassName?: string }) {
+  return (
+    <span className="flex min-w-0 flex-col gap-[3px]">
+      <strong className={titleClassName}>{title}</strong>
+      <small className="text-[12px] text-faint">{sub}</small>
+    </span>
   );
 }

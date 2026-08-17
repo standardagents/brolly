@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { ActionDrawer, actionKindLabel } from "../components/ActionDrawer";
 import { IncidentDrawer } from "../components/IncidentDrawer";
-import { EmptyState, Icon, InfoTip, Segmented, SeverityBadge } from "../components/ui";
+import { ActionStatePill, EmptyState, Icon, InfoTip, LinkButton, Panel, PanelHead, Pill, Segmented, SeverityBadge, Table, TableScroll, Td, Th, Tr, type Tone } from "../components/ui";
 import { compactId, measurement, money, number, relativeTime } from "../format";
 import type { ControlActionRow, DashboardData, Incident } from "../types";
 
 type StatusFilter = "open" | "acknowledged" | "all";
+
+const MODE_TONE: Record<string, Tone> = {
+  approval: "warn",
+  automatic: "danger",
+};
 
 export function IncidentsPage({ data, token, onRefresh, focusIncidentId, onFocusHandled }: {
   data: DashboardData;
@@ -33,123 +38,127 @@ export function IncidentsPage({ data, token, onRefresh, focusIncidentId, onFocus
 
   return (
     <>
-      <section className="panel" aria-label="Usage incidents">
-        <div className="panel-head">
-          <div>
-            <h2 className="heading-with-info">
-              Usage incidents
-              <InfoTip label="What counts as an incident?">
-                <h4>A limit or anomaly needs review</h4>
-                <p>Incidents represent observed usage that crossed a configured warning, critical, or emergency boundary. They are separate from connection and telemetry failures, which are tracked as coverage gaps on the Configuration page.</p>
-                <p>Open incidents still need review. Acknowledging an incident removes it from the active queue but does not change limits or stop the resource.</p>
-              </InfoTip>
-            </h2>
-            <p className="panel-sub">Spend or activity crossed a limit. Open a row to inspect the measurement and respond.</p>
-          </div>
-          <Segmented
-            ariaLabel="Filter incidents by status"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: "open", label: "Open" },
-              { value: "acknowledged", label: "Acknowledged" },
-              { value: "all", label: `All ${data.incidents.length}` },
-            ]}
-          />
-        </div>
+      <Panel aria-label="Usage incidents">
+        <PanelHead
+          title="Usage incidents"
+          titleExtra={
+            <InfoTip label="What counts as an incident?">
+              <h4>A limit or anomaly needs review</h4>
+              <p>Incidents represent observed usage that crossed a configured warning, critical, or emergency boundary. They are separate from connection and telemetry failures, which are tracked as coverage gaps on the Configuration page.</p>
+              <p>Open incidents still need review. Acknowledging an incident removes it from the active queue but does not change limits or stop the resource.</p>
+            </InfoTip>
+          }
+          sub="Spend or activity crossed a limit. Open a row to inspect the measurement and respond."
+          actions={
+            <Segmented
+              ariaLabel="Filter incidents by status"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: "open", label: "Open" },
+                { value: "acknowledged", label: "Acknowledged" },
+                { value: "all", label: `All ${data.incidents.length}` },
+              ]}
+            />
+          }
+        />
         {incidents.length ? (
-          <div className="table-scroll">
-            <table className="data-table incident-table">
+          <TableScroll>
+            <Table>
               <thead>
                 <tr>
-                  <th scope="col">Severity</th>
-                  <th scope="col">Asset</th>
-                  <th scope="col">Observed</th>
-                  <th scope="col">Limit</th>
-                  <th scope="col">Last detected</th>
-                  <th scope="col"><span className="visually-hidden">Open</span></th>
+                  <Th scope="col">Severity</Th>
+                  <Th scope="col">Asset</Th>
+                  <Th scope="col">Observed</Th>
+                  <Th scope="col">Limit</Th>
+                  <Th scope="col">Last detected</Th>
+                  <Th scope="col"><span className="sr-only">Open</span></Th>
                 </tr>
               </thead>
               <tbody>
                 {incidents.map(incident => (
-                  <tr key={incident.id} className="clickable" onClick={() => setSelected(incident)}>
-                    <td><SeverityBadge severity={incident.severity} /></td>
-                    <td>
-                      <span className="cell-main">
-                        <strong>{incident.familyLabel} / {incident.assetName ?? compactId(incident.assetId)}</strong>
-                        <small>{incident.metricLabel}{incident.status === "acknowledged" ? " · acknowledged" : ""}</small>
+                  <Tr key={incident.id} clickable onClick={() => setSelected(incident)}>
+                    <Td><SeverityBadge severity={incident.severity} /></Td>
+                    <Td>
+                      <span className="flex min-w-0 flex-col gap-[3px]">
+                        <strong className="max-w-[46ch] truncate">{incident.familyLabel} / {incident.assetName ?? compactId(incident.assetId)}</strong>
+                        <small className="text-[12px] text-faint">{incident.metricLabel}{incident.status === "acknowledged" ? " · acknowledged" : ""}</small>
                       </span>
-                    </td>
-                    <td className="numeric">{measurement(incident.observed, incident.unit, incident.windowMs)}</td>
-                    <td className="numeric">{incident.threshold == null ? "Anomaly vs. baseline" : incident.unit === "usd" ? money(incident.threshold) : number(incident.threshold)}</td>
-                    <td>{relativeTime(incident.lastSeen)}</td>
-                    <td className="row-open">
-                      <button type="button" className="link-button" onClick={event => { event.stopPropagation(); setSelected(incident); }}>
+                    </Td>
+                    <Td numeric>{measurement(incident.observed, incident.unit, incident.windowMs)}</Td>
+                    <Td numeric>{incident.threshold == null ? "Anomaly vs. baseline" : incident.unit === "usd" ? money(incident.threshold) : number(incident.threshold)}</Td>
+                    <Td>{relativeTime(incident.lastSeen)}</Td>
+                    <Td className="whitespace-nowrap text-right">
+                      <LinkButton onClick={event => { event.stopPropagation(); setSelected(incident); }}>
                         Review <Icon name="arrow" />
-                      </button>
-                    </td>
-                  </tr>
+                      </LinkButton>
+                    </Td>
+                  </Tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+            </Table>
+          </TableScroll>
         ) : (
           <EmptyState title="No incidents in this view">
             Telemetry coverage gaps are tracked separately on the Configuration page so missing data never hides here.
           </EmptyState>
         )}
-      </section>
+      </Panel>
 
-      <section className="panel" aria-label="Control actions">
-        <div className="panel-head">
-          <div>
-            <h2 className="heading-with-info">
-              Control actions
-              <InfoTip label="What is recorded here?">
-                <h4>Every stage of enforcement</h4>
-                <p>Prepared means Brolly computed a safe action but has not changed service. Succeeded means the stop was applied. Rolled back means the stored pre-change configuration was restored. Failed actions retain their error and audit record.</p>
-                <p>Rollback state is snapshotted to the database and audited before Brolly touches Cloudflare.</p>
-              </InfoTip>
-            </h2>
-            <p className="panel-sub">Open an action to inspect its impact, execute a prepared control, or restore service.</p>
-          </div>
-          <span className={`mode-pill ${data.policy.mode}`}>{data.policy.mode} mode</span>
-        </div>
+      <Panel aria-label="Control actions">
+        <PanelHead
+          title="Control actions"
+          titleExtra={
+            <InfoTip label="What is recorded here?">
+              <h4>Every stage of enforcement</h4>
+              <p>Prepared means Brolly computed a safe action but has not changed service. Succeeded means the stop was applied. Rolled back means the stored pre-change configuration was restored. Failed actions retain their error and audit record.</p>
+              <p>Rollback state is snapshotted to the database and audited before Brolly touches Cloudflare.</p>
+            </InfoTip>
+          }
+          sub="Open an action to inspect its impact, execute a prepared control, or restore service."
+          actions={
+            <Pill tone={MODE_TONE[data.policy.mode] ?? "neutral"} className="px-2.5 py-1.5 text-[12px] font-bold capitalize">
+              {data.policy.mode} mode
+            </Pill>
+          }
+        />
         {data.actions.length ? (
-          <div className="table-scroll">
-            <table className="data-table">
+          <TableScroll>
+            <Table>
               <thead>
                 <tr>
-                  <th scope="col">State</th>
-                  <th scope="col">Control</th>
-                  <th scope="col">Target</th>
-                  <th scope="col">Last change</th>
-                  <th scope="col"><span className="visually-hidden">Open</span></th>
+                  <Th scope="col">State</Th>
+                  <Th scope="col">Control</Th>
+                  <Th scope="col">Target</Th>
+                  <Th scope="col">Last change</Th>
+                  <Th scope="col"><span className="sr-only">Open</span></Th>
                 </tr>
               </thead>
               <tbody>
                 {data.actions.map(action => (
-                  <tr key={action.id} className="clickable" onClick={() => setSelectedAction(action)}>
-                    <td><span className={`action-state ${action.state}`}>{action.state.replaceAll("_", " ")}</span></td>
-                    <td><strong>{actionKindLabel(action.kind)}</strong></td>
-                    <td><code className="soft-code">{action.family}/{compactId(action.assetId)}</code></td>
-                    <td>{relativeTime(action.updatedAt)}</td>
-                    <td className="row-open">
-                      <button type="button" className="link-button" onClick={event => { event.stopPropagation(); setSelectedAction(action); }}>
+                  <Tr key={action.id} clickable onClick={() => setSelectedAction(action)}>
+                    <Td>
+                      <ActionStatePill state={action.state} className="font-[780]" />
+                    </Td>
+                    <Td><strong>{actionKindLabel(action.kind)}</strong></Td>
+                    <Td><code className="text-muted">{action.family}/{compactId(action.assetId)}</code></Td>
+                    <Td>{relativeTime(action.updatedAt)}</Td>
+                    <Td className="whitespace-nowrap text-right">
+                      <LinkButton onClick={event => { event.stopPropagation(); setSelectedAction(action); }}>
                         Inspect <Icon name="arrow" />
-                      </button>
-                    </td>
-                  </tr>
+                      </LinkButton>
+                    </Td>
+                  </Tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+            </Table>
+          </TableScroll>
         ) : (
           <EmptyState icon="shield" title="No control actions yet">
             Emergency incidents can prepare reversible actions after the asset is classified.
           </EmptyState>
         )}
-      </section>
+      </Panel>
 
       {selected && (
         <IncidentDrawer

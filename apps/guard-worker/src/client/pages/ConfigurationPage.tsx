@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { useNotificationTargets } from "../components/notifications";
-import { ChannelLogo, EmptyState, Icon, InfoTip, ProductIcon } from "../components/ui";
+import { Button, CellStack, ChannelLogo, CountBadge, EmptyState, Icon, InfoTip, KeyValueList, Notice, Panel, PanelFoot, PanelHead, Pill, ProductIcon, Segmented } from "../components/ui";
 import { dateTime, metricTitle, relativeTime, shortId } from "../format";
 import { coverageGuidance, type ConnectionHealth } from "../lib/health";
 import type { Route } from "../router";
 import type { ConfigurationCheck, ConfigurationData, ConfigurationStatus, DashboardData } from "../types";
+
+/** Collapsible row shell shared by the coverage families and the runtime rows. */
+const SUMMARY_BASE = "grid cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden";
+const CHEVRON = "size-[15px] text-faint transition-transform duration-[130ms] group-open:rotate-180";
 
 export function ConfigurationPage({ data, connection, token, onNavigate, onEditInstall }: {
   data: DashboardData;
@@ -59,47 +63,65 @@ export function ConfigurationPage({ data, connection, token, onNavigate, onEditI
   );
 }
 
+/** Cloudflare connection state pill (outlined, with a colored status dot). */
+function StatusPill({ connection }: { connection: ConnectionHealth }) {
+  const dot = connection.kind === "connected"
+    ? "bg-[#18a35d] shadow-[0_0_0_3px_#18a35d22]"
+    : connection.kind === "local"
+      ? "bg-[#7f8ca0] dark:bg-[#87929f]"
+      : connection.kind === "disconnected"
+        ? "bg-danger"
+        : "bg-faint";
+  return (
+    <span className={`inline-flex items-center gap-[7px] rounded-full border bg-panel px-[11px] py-1.5 text-[12.5px] font-[680] ${
+      connection.kind === "disconnected" ? "border-danger-line text-danger" : "border-line"
+    }`}>
+      <i className={`size-2 rounded-full ${dot}`} />
+      {connection.label}
+    </span>
+  );
+}
+
 function ConnectionSection({ data, connection }: { data: DashboardData; connection: ConnectionHealth }) {
   return (
-    <section className="panel" aria-label="Cloudflare connection">
-      <div className="panel-head">
+    <Panel aria-label="Cloudflare connection">
+      <PanelHead
+        title="Cloudflare connection"
+        sub="The account credential every collector and control depends on."
+        actions={<StatusPill connection={connection} />}
+      />
+      <div className="grid grid-cols-[minmax(280px,380px)_1fr] gap-[22px] px-5 pt-1 pb-4 max-xl:grid-cols-1">
+        <KeyValueList
+          rows={[
+            ["Account", connection.kind === "local" ? "Placeholder (not installed)" : <code className="font-mono text-[.92em] break-all">{shortId(data.account.id)}</code>],
+            ["Timezone", data.account.timezone],
+            ["Last monitor pass", data.summary.lastCheckAt ? `${dateTime(data.summary.lastCheckAt)} (${relativeTime(data.summary.lastCheckAt)})` : "Never"],
+            ["Control mode", metricTitle(data.policy.mode)],
+          ]}
+        />
         <div>
-          <h2>Cloudflare connection</h2>
-          <p className="panel-sub">The account credential every collector and control depends on.</p>
-        </div>
-        <span className={`status-pill ${connection.kind}`}><i />{connection.label}</span>
-      </div>
-      <div className="connection-grid">
-        <dl className="kv-list">
-          <div><dt>Account</dt><dd>{connection.kind === "local" ? "Placeholder (not installed)" : <code>{shortId(data.account.id)}</code>}</dd></div>
-          <div><dt>Timezone</dt><dd>{data.account.timezone}</dd></div>
-          <div><dt>Last monitor pass</dt><dd>{data.summary.lastCheckAt ? `${dateTime(data.summary.lastCheckAt)} (${relativeTime(data.summary.lastCheckAt)})` : "Never"}</dd></div>
-          <div><dt>Control mode</dt><dd>{metricTitle(data.policy.mode)}</dd></div>
-        </dl>
-        <div className="connection-copy">
-          <p>{connection.detail}</p>
+          <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{connection.detail}</p>
           {connection.errors.length > 0 && (
-            <ul className="local-preview-errors">
-              {[...new Set(connection.errors)].slice(0, 3).map(message => <li key={message}>{message}</li>)}
+            <ul className="mx-5 mt-2 mb-1 list-disc pl-[18px] text-[12.5px] text-muted">
+              {[...new Set(connection.errors)].slice(0, 3).map(message => (
+                <li key={message} className="mb-[3px] [overflow-wrap:anywhere]">{message}</li>
+              ))}
             </ul>
           )}
           {connection.kind !== "connected" && (
-            <p className="recovery-note">
-              <strong>To repair:</strong> {connection.kind === "local"
+            <p className="mb-2.5 border-l-[3px] border-orange py-0.5 pl-3 text-[13px] leading-[1.55] text-muted">
+              <strong className="text-ink">To repair:</strong> {connection.kind === "local"
                 ? <>deploy Brolly, open its URL, and choose <em>Login with Cloudflare</em> to authorize exactly one account, then scan.</>
                 : "reconnect the Cloudflare account or replace the expired/revoked credential, then run an account scan."}
             </p>
           )}
         </div>
       </div>
-      <footer className="panel-foot">
-        <Icon name="clock" />
-        <span>
-          Bounded monitor: every minute, ~13 API calls for a one-page account, hard caps of 150 API calls / 25,000 D1 rows /
-          20,000 samples / 45 s per pass. A 15-minute rolling-24h query and an optional daily Billing reconciliation are added on top.
-        </span>
-      </footer>
-    </section>
+      <PanelFoot icon="clock">
+        Bounded monitor: every minute, ~13 API calls for a one-page account, hard caps of 150 API calls / 25,000 D1 rows /
+        20,000 samples / 45 s per pass. A 15-minute rolling-24h query and an optional daily Billing reconciliation are added on top.
+      </PanelFoot>
+    </Panel>
   );
 }
 
@@ -120,68 +142,75 @@ function TelemetrySection({ data }: { data: DashboardData }) {
   }, [data.coverage.all, data.assets.families]);
 
   return (
-    <section className="panel" aria-label="Telemetry collectors">
-      <div className="panel-head">
-        <div>
-          <h2 className="heading-with-info">
-            Telemetry collectors
-            <InfoTip label="What is a coverage gap?">
-              <h4>Missing evidence, not excess spend</h4>
-              <p>A gap means Brolly lacks a current, trustworthy signal for one billable meter. It does not mean the meter is zero, and it does not count as a usage incident.</p>
-              <p><strong>Permission needed</strong> means Cloudflare rejected the credential or account scope. <strong>Collector pending</strong> means the product is cataloged but Brolly does not yet have a reliable fast collector for that meter.</p>
-            </InfoTip>
-          </h2>
-          <p className="panel-sub">Every cataloged billing meter and whether Brolly currently trusts its signal.</p>
-        </div>
-        <span className={`count-badge ${data.summary.coverageGaps ? "warning" : ""}`}>
-          {data.summary.coverageGaps ? `${data.summary.coverageGaps} gaps` : "All healthy"}
-        </span>
-      </div>
+    <Panel aria-label="Telemetry collectors">
+      <PanelHead
+        title="Telemetry collectors"
+        titleExtra={
+          <InfoTip label="What is a coverage gap?">
+            <h4>Missing evidence, not excess spend</h4>
+            <p>A gap means Brolly lacks a current, trustworthy signal for one billable meter. It does not mean the meter is zero, and it does not count as a usage incident.</p>
+            <p><strong>Permission needed</strong> means Cloudflare rejected the credential or account scope. <strong>Collector pending</strong> means the product is cataloged but Brolly does not yet have a reliable fast collector for that meter.</p>
+          </InfoTip>
+        }
+        sub="Every cataloged billing meter and whether Brolly currently trusts its signal."
+        actions={
+          <CountBadge tone={data.summary.coverageGaps ? "warning" : "neutral"}>
+            {data.summary.coverageGaps ? `${data.summary.coverageGaps} gaps` : "All healthy"}
+          </CountBadge>
+        }
+      />
       {families.length === 0 ? (
         <EmptyState icon="radar" title="No collector results yet">
           Coverage states appear after the first monitor pass.
         </EmptyState>
       ) : (
-        <div className="coverage-grid">
-          {families.map(group => (
-            <details key={group.family} className="coverage-family" open={group.gaps.length > 0}>
-              <summary>
-                <ProductIcon family={group.family} />
-                <span className="cell-main">
-                  <strong>{group.label}</strong>
-                  <small>
-                    {group.items.length - group.gaps.length}/{group.items.length} meters healthy
-                  </small>
-                </span>
-                <span className={`coverage-state ${group.gaps.length === 0 ? "healthy" : group.gaps.some(item => item.state === "permission_denied") ? "denied" : "pending"}`}>
-                  {group.gaps.length === 0 ? "Healthy" : group.gaps.some(item => item.state === "permission_denied") ? "Permission needed" : "Collector pending"}
-                </span>
-                <Icon name="chevron" />
-              </summary>
-              <div className="coverage-details">
-                {group.items.map(item => {
-                  const guidance = item.state === "healthy" ? null : coverageGuidance(item);
-                  return (
-                    <div key={`${item.family}:${item.metric}`}>
-                      <span>
-                        <strong>
-                          <i className={`coverage-dot ${item.state === "healthy" ? "active" : "gap"}`} aria-hidden="true" />
-                          {metricTitle(item.metric)}
-                          <em className="scope-tag">{item.scope.replaceAll("_", " ")} scope</em>
-                        </strong>
-                        {guidance && <small>{guidance.summary}</small>}
-                        {guidance?.fix && <small className="coverage-fix"><b>How to fix:</b> {guidance.fix}</small>}
-                      </span>
-                      <time>{relativeTime(item.checkedAt)}</time>
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
-          ))}
+        <div className="grid grid-cols-2 gap-2.5 px-5 pt-1 pb-4 max-xl:grid-cols-1">
+          {families.map(group => {
+            const denied = group.gaps.some(item => item.state === "permission_denied");
+            const state = group.gaps.length === 0 ? "healthy" : denied ? "denied" : "pending";
+            return (
+              <details key={group.family} className="group overflow-hidden rounded-field border border-line bg-panel" open={group.gaps.length > 0}>
+                <summary className={`${SUMMARY_BASE} grid-cols-[34px_minmax(0,1fr)_auto_16px] gap-[11px] px-[13px] py-[11px]`}>
+                  <ProductIcon family={group.family} />
+                  <CellStack title={group.label} sub={`${group.items.length - group.gaps.length}/${group.items.length} meters healthy`} />
+                  <span className={`whitespace-nowrap rounded-full px-2 py-1 text-[10.5px] font-[750] ${
+                    state === "healthy" ? "bg-good-bg text-good" : state === "denied" ? "bg-danger-bg text-danger" : "bg-warn-bg text-warn"
+                  }`}>
+                    {state === "healthy" ? "Healthy" : state === "denied" ? "Permission needed" : "Collector pending"}
+                  </span>
+                  <Icon name="chevron" className={CHEVRON} />
+                </summary>
+                <div className="border-t border-line-soft bg-panel-soft px-[13px] py-0.5">
+                  {group.items.map(item => {
+                    const guidance = item.state === "healthy" ? null : coverageGuidance(item);
+                    return (
+                      <div key={`${item.family}:${item.metric}`} className="flex justify-between gap-[18px] border-t border-line-soft py-2.5 first:border-t-0">
+                        <span className="flex min-w-0 flex-col gap-[3px]">
+                          <strong className="inline-flex flex-wrap items-center gap-[7px] text-[13px]">
+                            <i className={`inline-block size-2 flex-none rounded-full ${item.state === "healthy" ? "bg-[#1b9e5a]" : "bg-[#e79021]"}`} aria-hidden="true" />
+                            {metricTitle(item.metric)}
+                            <em className="rounded-[3px] bg-[#edf0f3] px-1.5 py-px text-[10px] font-bold tracking-[.04em] text-muted uppercase not-italic dark:bg-[#252b32] dark:text-[#aab3bd]">
+                              {item.scope.replaceAll("_", " ")} scope
+                            </em>
+                          </strong>
+                          {guidance && <small className="text-[12px] break-words text-muted">{guidance.summary}</small>}
+                          {guidance?.fix && (
+                            <small className="text-[12px] leading-[1.45] break-words text-[#56616d] dark:text-[#b5bdc6]">
+                              <b className="text-ink">How to fix:</b> {guidance.fix}
+                            </small>
+                          )}
+                        </span>
+                        <time className="text-[11px] whitespace-nowrap text-faint">{relativeTime(item.checkedAt)}</time>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            );
+          })}
         </div>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -205,98 +234,110 @@ function RuntimeSection({ config, busy, error, onRefresh, onEditInstall }: {
   const allScripts = config?.workers.map(worker => worker.id) ?? [];
 
   return (
-    <section className="panel" aria-label="Runtime protection readiness">
-      <div className="panel-head">
-        <div>
-          <h2 className="heading-with-info">
-            Runtime protection readiness
-            <InfoTip label="What does configuration refresh check?">
-              <h4>Bounded live verification</h4>
-              <p>For each selected Worker, Brolly checks Cloudflare API access, the BROLLY_FUSE secret, the active deployment, and a marker in the deployed bundle.</p>
-              <p>It does not invoke the Worker, wake a Durable Object, deploy code, read object storage, or apply a quarantine. Results are cached until you refresh again, and refresh is never part of the automatic minute monitor.</p>
-            </InfoTip>
-          </h2>
-          <p className="panel-sub">Each Worker and namespace is verified independently — installing Brolly on one script never makes others look protected.</p>
-        </div>
-        <div className="panel-actions">
-          <button type="button" className="button quiet" onClick={onEditInstall}><Icon name="shield" /> Edit install declarations</button>
-          <button
-            type="button"
-            className="button secondary"
-            disabled={!config?.connected || !allScripts.length || busy.length > 0}
-            onClick={() => void onRefresh(allScripts)}
-          >
-            <Icon name="refresh" /> {busy.length > 1 ? "Refreshing all…" : "Refresh all statuses"}
-          </button>
-        </div>
-      </div>
+    <Panel aria-label="Runtime protection readiness">
+      <PanelHead
+        title="Runtime protection readiness"
+        titleExtra={
+          <InfoTip label="What does configuration refresh check?">
+            <h4>Bounded live verification</h4>
+            <p>For each selected Worker, Brolly checks Cloudflare API access, the BROLLY_FUSE secret, the active deployment, and a marker in the deployed bundle.</p>
+            <p>It does not invoke the Worker, wake a Durable Object, deploy code, read object storage, or apply a quarantine. Results are cached until you refresh again, and refresh is never part of the automatic minute monitor.</p>
+          </InfoTip>
+        }
+        sub="Each Worker and namespace is verified independently — installing Brolly on one script never makes others look protected."
+        actions={
+          <>
+            <Button variant="quiet" onClick={onEditInstall}><Icon name="shield" /> Edit install declarations</Button>
+            <Button
+              variant="secondary"
+              disabled={!config?.connected || !allScripts.length || busy.length > 0}
+              onClick={() => void onRefresh(allScripts)}
+            >
+              <Icon name="refresh" /> {busy.length > 1 ? "Refreshing all…" : "Refresh all statuses"}
+            </Button>
+          </>
+        }
+      />
 
       {config && !config.connected && (
-        <div className="inline-note">
-          <Icon name="info" />
+        <div className="mx-5 mb-3 flex items-start gap-[9px] rounded-field border border-line bg-panel-soft px-3 py-2.5 text-[12.5px] text-muted">
+          <Icon name="info" className="mt-px size-[15px]" />
           <span>Live verification is unavailable in local preview. Inventory declarations are shown; refresh unlocks once real Cloudflare credentials are installed.</span>
         </div>
       )}
-      {error && <p className="form-error page-error">{error}</p>}
+      {error && <Notice tone="error" className="mb-3.5 [overflow-wrap:anywhere]">{error}</Notice>}
 
       {!config ? (
-        <p className="loading-inline">Loading configuration inventory…</p>
+        <p className="py-2.5 text-[13px] text-muted">Loading configuration inventory…</p>
       ) : (
         <>
-          <div className="configuration-summary">
+          <div className="grid grid-cols-4 gap-2.5 px-5 pt-1 pb-3 max-xl:grid-cols-2 max-md:grid-cols-1">
             <ConfigurationStat label="Workers configured" value={`${config.summary.configuredWorkers} / ${config.summary.workers}`} tone={config.summary.configuredWorkers === config.summary.workers && config.summary.workers > 0 ? "good" : "warning"} />
             <ConfigurationStat label="Namespaces configured" value={`${config.summary.configuredNamespaces} / ${config.summary.namespaces}`} tone={config.summary.configuredNamespaces === config.summary.namespaces && config.summary.namespaces > 0 ? "good" : "warning"} />
             <ConfigurationStat label="Partial installs" value={String(config.summary.partial)} tone={config.summary.partial ? "warning" : "good"} />
             <ConfigurationStat label="Needs attention" value={String(config.summary.needsAttention)} tone={config.summary.needsAttention ? "danger" : "good"} />
           </div>
 
-          <div className="configuration-toolbar">
-            <label className="search-field">
-              <Icon name="search" />
-              <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search Worker, namespace, or class" aria-label="Search runtime resources" />
+          <div className="flex flex-wrap items-center gap-3 px-5 pb-3">
+            <label className="flex min-h-9 items-center gap-[7px] rounded-field border border-field-line bg-panel px-2.5 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1f]">
+              <Icon name="search" className="size-[15px] text-faint" />
+              <input
+                type="search"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Search Worker, namespace, or class"
+                aria-label="Search runtime resources"
+                className="min-w-[190px] border-0 bg-transparent text-[13px] outline-0"
+              />
             </label>
-            <div className="segmented" role="group" aria-label="Filter by readiness">
-              {(["all", "configured", "partial", "not_configured", "error"] as const).map(value => (
-                <button key={value} type="button" className={filter === value ? "active" : ""} aria-pressed={filter === value} onClick={() => setFilter(value)}>
-                  {value === "all" ? "All" : value === "not_configured" ? "Not configured" : value === "error" ? "Needs attention" : metricTitle(value)}
-                </button>
-              ))}
-            </div>
-            <span className="toolbar-meta">Last live verification: {config.summary.lastVerifiedAt ? relativeTime(config.summary.lastVerifiedAt) : "never"}</span>
+            <Segmented
+              ariaLabel="Filter by readiness"
+              value={filter}
+              onChange={setFilter}
+              options={(["all", "configured", "partial", "not_configured", "error"] as const).map(value => ({
+                value,
+                label: value === "all" ? "All" : value === "not_configured" ? "Not configured" : value === "error" ? "Needs attention" : metricTitle(value),
+              }))}
+            />
+            <span className="ml-auto text-[12px] whitespace-nowrap text-faint max-md:ml-0">
+              Last live verification: {config.summary.lastVerifiedAt ? relativeTime(config.summary.lastVerifiedAt) : "never"}
+            </span>
           </div>
 
           <ConfigurationGroup title="Worker scripts" description="Each Worker independently carries its own fuse secret and deployment evidence." count={visibleWorkers.length}>
             {visibleWorkers.length ? visibleWorkers.map(worker => (
-              <details className={`configuration-row ${worker.status}`} key={worker.id}>
-                <summary>
+              <details className={`group rounded-field border bg-panel ${ROW_BORDER[worker.status]}`} key={worker.id}>
+                <summary className={`${SUMMARY_BASE} grid-cols-[34px_minmax(180px,1.4fr)_auto_minmax(0,1fr)_auto_16px] gap-3 px-[13px] py-2.5 max-xl:grid-cols-[34px_minmax(0,1fr)_auto_16px]`}>
                   <ProductIcon family="workers" tone="orange" />
-                  <span className="cell-main">
-                    <strong>{worker.name}</strong>
-                    <small>{worker.namespaceCount} mapped namespace{worker.namespaceCount === 1 ? "" : "s"} · inventory {relativeTime(worker.seenAt)}</small>
-                  </span>
+                  <CellStack
+                    title={worker.name}
+                    sub={<>{worker.namespaceCount} mapped namespace{worker.namespaceCount === 1 ? "" : "s"} · inventory {relativeTime(worker.seenAt)}</>}
+                  />
                   <ConfigurationBadge status={worker.status} />
-                  <span className="configuration-check-preview">
+                  <span className="flex flex-wrap justify-end gap-1.5 max-xl:hidden">
                     <MiniCheck check={worker.checks.fuseSecret} />
                     <MiniCheck check={worker.checks.runtimeBundle} />
                   </span>
-                  <button
-                    type="button"
-                    className="button secondary small"
+                  <Button
+                    variant="secondary"
+                    size="small"
                     disabled={!config.connected || busy.includes(worker.id)}
                     onClick={event => { event.preventDefault(); event.stopPropagation(); void onRefresh([worker.id]); }}
                   >
                     <Icon name="refresh" /> {busy.includes(worker.id) ? "Checking…" : "Refresh"}
-                  </button>
-                  <Icon name="chevron" />
+                  </Button>
+                  <Icon name="chevron" className={CHEVRON} />
                 </summary>
-                <div className="configuration-details">
+                <div className="grid gap-3.5 border-t border-line-soft bg-panel-soft p-3.5">
                   <CheckGrid checks={worker.checks} />
-                  <dl className="kv-list">
-                    <div><dt>Worker script</dt><dd><code>{worker.id}</code></dd></div>
-                    <div><dt>Active deployment</dt><dd>{worker.deploymentId ? <code>{worker.deploymentId}</code> : "Not verified"}</dd></div>
-                    <div><dt>Active version</dt><dd>{worker.versionId ? <code>{worker.versionId}</code> : "Not verified"}</dd></div>
-                    <div><dt>Last checked</dt><dd>{worker.checkedAt ? dateTime(worker.checkedAt) : "Never"}</dd></div>
-                  </dl>
+                  <KeyValueList
+                    rows={[
+                      ["Worker script", <code className="font-mono text-[.92em] break-all">{worker.id}</code>],
+                      ["Active deployment", worker.deploymentId ? <code className="font-mono text-[.92em] break-all">{worker.deploymentId}</code> : "Not verified"],
+                      ["Active version", worker.versionId ? <code className="font-mono text-[.92em] break-all">{worker.versionId}</code> : "Not verified"],
+                      ["Last checked", worker.checkedAt ? dateTime(worker.checkedAt) : "Never"],
+                    ]}
+                  />
                   <ConfigurationGuidance status={worker.status} kind="worker" onEdit={onEditInstall} />
                 </div>
               </details>
@@ -305,113 +346,122 @@ function RuntimeSection({ config, busy, error, onRefresh, onEditInstall }: {
 
           <ConfigurationGroup title="Durable Object namespaces" description="A namespace is configured only when its constructor guard is confirmed and its own owning Worker has current successful evidence." count={visibleNamespaces.length}>
             {visibleNamespaces.length ? visibleNamespaces.map(namespace => (
-              <details className={`configuration-row ${namespace.status}`} key={namespace.id}>
-                <summary>
+              <details className={`group rounded-field border bg-panel ${ROW_BORDER[namespace.status]}`} key={namespace.id}>
+                <summary className={`${SUMMARY_BASE} grid-cols-[34px_minmax(180px,1.4fr)_auto_minmax(0,1fr)_auto_16px] gap-3 px-[13px] py-2.5 max-xl:grid-cols-[34px_minmax(0,1fr)_auto_16px]`}>
                   <ProductIcon family="durable_objects" tone="orange" />
-                  <span className="cell-main">
-                    <strong>{namespace.name}</strong>
-                    <small>{namespace.className ?? "Class unavailable"} · {namespace.storage ?? "storage type unavailable"}</small>
-                  </span>
+                  <CellStack
+                    title={namespace.name}
+                    sub={<>{namespace.className ?? "Class unavailable"} · {namespace.storage ?? "storage type unavailable"}</>}
+                  />
                   <ConfigurationBadge status={namespace.status} />
-                  <span className="configuration-owner">
-                    <small>Owning Worker</small>
-                    <strong>{namespace.ownerWorker ?? "Not mapped"}</strong>
+                  <span className="flex min-w-0 flex-col gap-px max-xl:hidden">
+                    <small className="text-[10.5px] font-bold tracking-[.05em] text-faint uppercase">Owning Worker</small>
+                    <strong className="overflow-hidden text-[12.5px] text-ellipsis whitespace-nowrap">{namespace.ownerWorker ?? "Not mapped"}</strong>
                   </span>
                   {namespace.ownerWorker ? (
-                    <button
-                      type="button"
-                      className="button secondary small"
+                    <Button
+                      variant="secondary"
+                      size="small"
                       disabled={!config.connected || busy.includes(namespace.ownerWorker)}
                       onClick={event => { event.preventDefault(); event.stopPropagation(); void onRefresh([namespace.ownerWorker!]); }}
                     >
                       <Icon name="refresh" /> {busy.includes(namespace.ownerWorker) ? "Checking…" : "Refresh owner"}
-                    </button>
+                    </Button>
                   ) : (
-                    <button type="button" className="button secondary small" onClick={event => { event.preventDefault(); event.stopPropagation(); onEditInstall(); }}>
+                    <Button variant="secondary" size="small" onClick={event => { event.preventDefault(); event.stopPropagation(); onEditInstall(); }}>
                       Map owner
-                    </button>
+                    </Button>
                   )}
-                  <Icon name="chevron" />
+                  <Icon name="chevron" className={CHEVRON} />
                 </summary>
-                <div className="configuration-details">
+                <div className="grid gap-3.5 border-t border-line-soft bg-panel-soft p-3.5">
                   <CheckGrid checks={namespace.checks} />
-                  <dl className="kv-list">
-                    <div><dt>Namespace ID</dt><dd><code>{namespace.id}</code></dd></div>
-                    <div><dt>Cloudflare owner</dt><dd>{namespace.discoveredOwner ?? "Not returned"}</dd></div>
-                    <div><dt>Configured owner</dt><dd>{namespace.declaredOwner ?? "Inherited from Cloudflare"}</dd></div>
-                    <div><dt>Protection tier</dt><dd>{metricTitle(namespace.tier)}</dd></div>
-                  </dl>
+                  <KeyValueList
+                    rows={[
+                      ["Namespace ID", <code className="font-mono text-[.92em] break-all">{namespace.id}</code>],
+                      ["Cloudflare owner", namespace.discoveredOwner ?? "Not returned"],
+                      ["Configured owner", namespace.declaredOwner ?? "Inherited from Cloudflare"],
+                      ["Protection tier", metricTitle(namespace.tier)],
+                    ]}
+                  />
                   <ConfigurationGuidance status={namespace.status} kind="namespace" onEdit={onEditInstall} />
                 </div>
               </details>
             )) : <ConfigurationEmpty search={search} />}
           </ConfigurationGroup>
 
-          <div className="trust-note">
-            <Icon name="shield" />
+          <div className="mx-5 mt-1 mb-2 flex gap-[11px] rounded-field border border-line bg-panel-soft px-[15px] py-[13px]">
+            <Icon name="shield" className="mt-px size-[19px] text-muted" />
             <div>
-              <strong>What "configured" means here</strong>
-              <p>Brolly found the resource, the installation was explicitly confirmed, and the owning Worker passed the latest passive Cloudflare checks. This is not a destructive shutdown drill: Brolly does not claim that an exact constructor path was exercised unless a future canary test says so.</p>
+              <strong className="text-[13px]">What "configured" means here</strong>
+              <p className="mt-[3px] text-[12.5px] leading-[1.5] text-muted">Brolly found the resource, the installation was explicitly confirmed, and the owning Worker passed the latest passive Cloudflare checks. This is not a destructive shutdown drill: Brolly does not claim that an exact constructor path was exercised unless a future canary test says so.</p>
             </div>
           </div>
         </>
       )}
-    </section>
+    </Panel>
   );
 }
 
 function NotificationStatusSection({ token, onNavigate }: { token: string; onNavigate: (route: Route) => void }) {
   const { targets, credentialStorageReady, loading } = useNotificationTargets(token);
   return (
-    <section className="panel" aria-label="Notification channels">
-      <div className="panel-head">
-        <div>
-          <h2>Notification channels</h2>
-          <p className="panel-sub">Where incident alerts and the daily summary are delivered.</p>
-        </div>
-        <button type="button" className="button secondary" onClick={() => onNavigate("settings")}>Manage in Settings</button>
-      </div>
+    <Panel aria-label="Notification channels">
+      <PanelHead
+        title="Notification channels"
+        sub="Where incident alerts and the daily summary are delivered."
+        actions={<Button variant="secondary" onClick={() => onNavigate("settings")}>Manage in Settings</Button>}
+      />
       {loading ? (
-        <p className="loading-inline">Loading destinations…</p>
+        <p className="py-2.5 text-[13px] text-muted">Loading destinations…</p>
       ) : targets.length === 0 ? (
-        <div className="inline-note warning">
-          <Icon name="bell" />
+        <div className="mx-5 mb-3 flex items-start gap-[9px] rounded-field border border-warn-line bg-warn-bg px-3 py-2.5 text-[12.5px] text-warn-ink">
+          <Icon name="bell" className="mt-px size-[15px]" />
           <span>
             No notification destinations are configured{credentialStorageReady ? "" : " and automatic credential-key setup did not complete"}.
             Without one, incidents are only visible in this dashboard and the CLI.
           </span>
         </div>
       ) : (
-        <ul className="channel-status-list">
+        <ul className="m-0 list-none p-0 pb-2">
           {targets.map(target => (
-            <li key={target.id}>
+            <li key={target.id} className="flex items-center gap-3 border-t border-line-soft px-5 py-2.5">
               <ChannelLogo kind={target.kind} />
-              <span className="cell-main">
-                <strong>{metricTitle(target.kind)}</strong>
-                <small>
+              <CellStack
+                title={metricTitle(target.kind)}
+                sub={<>
                   Notifies at {target.minimumSeverity} and above ·{" "}
                   {target.lastDeliveryAt
                     ? `${target.lastDeliveryOk ? "delivered" : "delivery failed"} ${relativeTime(target.lastDeliveryAt)}`
                     : "no delivery attempts yet"}
-                </small>
-              </span>
-              <span className={`target-status ${target.enabled ? "active" : "inactive"}`}>{target.enabled ? "Active" : "Paused"}</span>
+                </>}
+              />
+              <Pill tone={target.enabled ? "good" : "neutral"} className="ml-auto">{target.enabled ? "Active" : "Paused"}</Pill>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }
 
 function ConfigurationStat({ label, value, tone }: { label: string; value: string; tone: "good" | "warning" | "danger" }) {
   return (
-    <article className={`configuration-stat ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <article className={`flex flex-col gap-[3px] rounded-field border border-line px-[13px] py-[11px] ${
+      tone === "warning" ? "border-l-[3px] border-l-[#e0a53a]" : tone === "danger" ? "border-l-[3px] border-l-danger" : ""
+    }`}>
+      <span className="text-[11.5px] font-[650] text-muted">{label}</span>
+      <strong className={`text-[19px] tabular-nums ${tone === "good" ? "text-good" : tone === "danger" ? "text-danger" : ""}`}>{value}</strong>
     </article>
   );
 }
+
+const ROW_BORDER: Record<ConfigurationStatus, string> = {
+  configured: "border-good-line",
+  partial: "border-line",
+  not_configured: "border-line",
+  error: "border-danger-line",
+};
 
 function ConfigurationGroup({ title, description, count, children }: {
   title: string;
@@ -420,18 +470,25 @@ function ConfigurationGroup({ title, description, count, children }: {
   children: React.ReactNode;
 }) {
   return (
-    <div className="configuration-group">
-      <div className="configuration-group-head">
+    <div className="px-5 pt-1 pb-3.5">
+      <div className="flex items-start justify-between gap-3 py-2">
         <div>
-          <h3>{title}</h3>
-          <p>{description}</p>
+          <h3 className="m-0 text-[14.5px]">{title}</h3>
+          <p className="mt-[3px] max-w-[76ch] text-[12.5px] text-muted">{description}</p>
         </div>
-        <span className="count-badge">{count}</span>
+        <CountBadge>{count}</CountBadge>
       </div>
-      <div className="configuration-list">{children}</div>
+      <div className="flex flex-col gap-2">{children}</div>
     </div>
   );
 }
+
+const BADGE_TONE = {
+  configured: "good",
+  partial: "warn",
+  not_configured: "neutral",
+  error: "danger",
+} as const;
 
 function ConfigurationBadge({ status }: { status: ConfigurationStatus }) {
   const labels: Record<ConfigurationStatus, string> = {
@@ -440,22 +497,33 @@ function ConfigurationBadge({ status }: { status: ConfigurationStatus }) {
     not_configured: "Not configured",
     error: "Needs attention",
   };
-  return <span className={`configuration-badge ${status}`}><i />{labels[status]}</span>;
+  return <Pill tone={BADGE_TONE[status]} dot>{labels[status]}</Pill>;
 }
 
 function MiniCheck({ check }: { check: ConfigurationCheck }) {
-  return <span className={`mini-check ${check.state}`} title={check.detail}><i />{check.label}</span>;
+  const dot = check.state === "pass" ? "bg-[#1b9e5a]" : check.state === "fail" || check.state === "error" ? "bg-danger" : "bg-faint";
+  return (
+    <span className="inline-flex items-center gap-[5px] rounded border border-line-soft bg-panel-soft px-[7px] py-[3px] text-[11px] whitespace-nowrap text-muted" title={check.detail}>
+      <i className={`size-1.5 rounded-full ${dot}`} />{check.label}
+    </span>
+  );
 }
 
 function CheckGrid({ checks }: { checks: Record<string, ConfigurationCheck> }) {
   return (
-    <div className="configuration-check-grid">
+    <div className="grid grid-cols-2 gap-2 max-xl:grid-cols-1">
       {Object.entries(checks).map(([key, check]) => (
-        <article className={check.state} key={key}>
-          <span>{check.state === "pass" ? "✓" : check.state === "unknown" ? "?" : "!"}</span>
+        <article className="flex gap-[9px] rounded-field border border-line-soft bg-panel p-2.5" key={key}>
+          <span className={`grid size-5 flex-none place-items-center rounded-full text-[11px] font-[850] ${
+            check.state === "pass" ? "bg-good-bg text-good"
+              : check.state === "fail" || check.state === "error" ? "bg-danger-bg text-danger"
+                : "bg-chip text-muted dark:text-chip-ink"
+          }`}>
+            {check.state === "pass" ? "✓" : check.state === "unknown" ? "?" : "!"}
+          </span>
           <div>
-            <strong>{check.label}</strong>
-            <p>{check.detail}</p>
+            <strong className="block text-[12.5px]">{check.label}</strong>
+            <p className="mt-0.5 text-[12px] leading-[1.45] text-muted">{check.detail}</p>
           </div>
         </article>
       ))}
@@ -466,23 +534,23 @@ function CheckGrid({ checks }: { checks: Record<string, ConfigurationCheck> }) {
 function ConfigurationGuidance({ status, kind, onEdit }: { status: ConfigurationStatus; kind: "worker" | "namespace"; onEdit: () => void }) {
   if (status === "configured") {
     return (
-      <div className="configuration-guidance good">
-        <strong>Ready for precise protection</strong>
-        <p>{kind === "worker"
+      <div className="rounded-field border border-good-line bg-good-bg px-[13px] py-[11px] dark:text-warn">
+        <strong className="text-[13px]">Ready for precise protection</strong>
+        <p className="mt-0.5 text-[12.5px] text-muted">{kind === "worker"
           ? "This Worker can receive whole-script fuse generations."
           : "Objects in this namespace inherit the verified owning Worker and are eligible for exact-ID quarantine when policy permits."}</p>
       </div>
     );
   }
   return (
-    <div className="configuration-guidance">
+    <div className="flex items-center justify-between gap-3.5 rounded-field border border-warn-line bg-warn-soft px-[13px] py-[11px] max-md:flex-col max-md:items-start dark:text-warn">
       <div>
-        <strong>{status === "error" ? "Resolve the failed check" : "Finish this installation"}</strong>
-        <p>{kind === "worker"
+        <strong className="text-[13px]">{status === "error" ? "Resolve the failed check" : "Finish this installation"}</strong>
+        <p className="mt-0.5 text-[12.5px] text-muted">{kind === "worker"
           ? "Install and confirm the ingress guard, initialize BROLLY_FUSE, then refresh live status."
           : "Confirm the constructor guard and correct owning Worker, then refresh that Worker."}</p>
       </div>
-      <button type="button" className="button secondary small" onClick={onEdit}>Edit declaration</button>
+      <Button variant="secondary" size="small" onClick={onEdit}>Edit declaration</Button>
     </div>
   );
 }

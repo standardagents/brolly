@@ -1,12 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import { Drawer, EmptyState, Icon, InfoTip, ProductIcon } from "../components/ui";
+import { Button, DetailBlock, Drawer, EmptyState, ExternalAction, Icon, InfoTip, LinkButton, Notice, Panel, PanelHead, Pill, ProductIcon, Select, Table, TableScroll, Td, Th, Tr, type Tone } from "../components/ui";
 import { compactId, dateTime, money, relativeTime } from "../format";
 import { tierDescription, tierLabel } from "../lib/meta";
 import type { Route } from "../router";
 import type { Asset, AssetTier, DashboardData } from "../types";
 
 const TIER_OPTIONS: AssetTier[] = ["unclassified", "control_plane", "critical", "standard", "disposable"];
+
+const TIER_TONE: Record<string, Tone> = {
+  control_plane: "blue",
+  critical: "danger",
+  standard: "good",
+  disposable: "purple",
+  unclassified: "warn",
+};
+
+/** Protection-tier badge: the square tag shape in sentence case at the old 11px size. */
+function TierBadge({ tier }: { tier: AssetTier }) {
+  return (
+    <Pill tone={TIER_TONE[tier] ?? "neutral"} shape="tag" className="text-[11px] font-[720] tracking-normal normal-case">
+      {tierLabel(tier)}
+    </Pill>
+  );
+}
 
 function assetBudgetKey(asset: Pick<Asset, "family" | "scope" | "id">): string {
   return `${asset.family}:${asset.scope}:${asset.id}`;
@@ -49,110 +66,129 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
 
   return (
     <>
-      <section className="family-strip" aria-label="Discovered products">
-        {data.assets.families.map(item => (
-          <button
-            type="button"
-            key={item.family}
-            className={`family-chip ${family === item.family ? "active" : ""}`}
-            onClick={() => setFamily(family === item.family ? "" : item.family)}
-            aria-pressed={family === item.family}
-          >
-            <ProductIcon family={item.family} tone={family === item.family ? "orange" : "neutral"} />
-            <span>
-              <strong>{item.label}</strong>
-              <small>{item.assets} discovered{item.gaps ? ` · ${item.gaps} coverage gap${item.gaps === 1 ? "" : "s"}` : ""}</small>
-            </span>
-            <b>{item.assets}</b>
-          </button>
-        ))}
+      <section className="mb-4 grid grid-cols-[repeat(auto-fill,minmax(252px,1fr))] gap-2.5" aria-label="Discovered products">
+        {data.assets.families.map(item => {
+          const active = family === item.family;
+          return (
+            <button
+              type="button"
+              key={item.family}
+              className={`flex cursor-pointer items-center gap-2.5 rounded-panel border bg-panel px-3 py-2.5 text-left transition-[border-color] duration-[130ms] ${
+                active
+                  ? "border-orange shadow-[0_0_0_1px_var(--orange)]"
+                  : "border-line hover:border-[#b9c1ca] dark:hover:border-[#59626d]"
+              }`}
+              onClick={() => setFamily(active ? "" : item.family)}
+              aria-pressed={active}
+            >
+              <ProductIcon family={item.family} tone={active ? "orange" : "neutral"} />
+              <span className="flex min-w-0 flex-1 flex-col gap-px">
+                <strong className="truncate text-[13px]">{item.label}</strong>
+                <small className="truncate text-[11.5px] text-faint">{item.assets} discovered{item.gaps ? ` · ${item.gaps} coverage gap${item.gaps === 1 ? "" : "s"}` : ""}</small>
+              </span>
+              <b className="text-[17px] tabular-nums">{item.assets}</b>
+            </button>
+          );
+        })}
       </section>
 
-      <section className="panel" aria-label="Asset inventory">
-        <div className="panel-head">
-          <div>
-            <h2 className="heading-with-info">
-              Inventory
-              <InfoTip label="How does asset inventory work?">
-                <h4>One bounded account inventory</h4>
-                <p>Brolly asks Cloudflare's control-plane APIs for resource lists; it does not invoke every Worker or wake individual Durable Objects.</p>
-                <p>Rows are discovered resources, not billable usage. Classification here decides which stops Brolly may ever prepare: control-plane and critical assets only alert.</p>
-              </InfoTip>
-            </h2>
-            <p className="panel-sub">
+      <Panel aria-label="Asset inventory">
+        <PanelHead
+          title="Inventory"
+          titleExtra={
+            <InfoTip label="How does asset inventory work?">
+              <h4>One bounded account inventory</h4>
+              <p>Brolly asks Cloudflare's control-plane APIs for resource lists; it does not invoke every Worker or wake individual Durable Objects.</p>
+              <p>Rows are discovered resources, not billable usage. Classification here decides which stops Brolly may ever prepare: control-plane and critical assets only alert.</p>
+            </InfoTip>
+          }
+          sub={
+            <>
               {data.summary.assets} discovered resources.
-              {unclassified > 0 && <> <button type="button" className="link-button inline" onClick={() => setTier("unclassified")}>{unclassified} need classification</button>.</>}
-            </p>
-          </div>
-          <div className="asset-toolbar">
-            <label className="search-field">
-              <Icon name="search" />
-              <input
-                type="search"
-                value={search}
-                onChange={event => setSearch(event.target.value)}
-                placeholder="Search name or ID"
-                aria-label="Search assets"
-              />
-            </label>
-            <select value={tier} onChange={event => setTier(event.target.value)} aria-label="Filter by protection tier">
-              <option value="">All tiers</option>
-              {TIER_OPTIONS.map(option => <option key={option} value={option}>{tierLabel(option)}</option>)}
-            </select>
-          </div>
-        </div>
+              {unclassified > 0 && <> <LinkButton inline onClick={() => setTier("unclassified")}>{unclassified} need classification</LinkButton>.</>}
+            </>
+          }
+          actions={
+            <>
+              <label className="flex min-h-9 items-center gap-[7px] rounded-field border border-field-line bg-panel px-2.5 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1f]">
+                <Icon name="search" className="size-[15px] text-faint" />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={event => setSearch(event.target.value)}
+                  placeholder="Search name or ID"
+                  aria-label="Search assets"
+                  className="min-w-[190px] border-0 bg-transparent text-[13px] outline-none"
+                />
+              </label>
+              <select
+                value={tier}
+                onChange={event => setTier(event.target.value)}
+                aria-label="Filter by protection tier"
+                className="min-h-9 rounded-field border border-field-line bg-panel px-2.5 text-[13px] text-ink"
+              >
+                <option value="">All tiers</option>
+                {TIER_OPTIONS.map(option => <option key={option} value={option}>{tierLabel(option)}</option>)}
+              </select>
+            </>
+          }
+        />
 
-        {error && <p className="form-error page-error">{error}</p>}
+        {error && <Notice tone="error" className="mx-5 mb-3.5 [overflow-wrap:anywhere]">{error}</Notice>}
         {!assets ? (
-          <p className="loading-inline">Loading inventory…</p>
+          <p className="px-5 py-2.5 text-[13px] text-muted">Loading inventory…</p>
         ) : assets.length ? (
-          <div className="table-scroll">
-            <table className="data-table">
+          <TableScroll>
+            <Table>
               <thead>
                 <tr>
-                  <th scope="col">Asset</th>
-                  <th scope="col">Tier</th>
-                  <th scope="col">Daily budget</th>
-                  <th scope="col">Open incidents</th>
-                  <th scope="col">Last signal</th>
-                  <th scope="col"><span className="visually-hidden">Open</span></th>
+                  <Th scope="col">Asset</Th>
+                  <Th scope="col">Tier</Th>
+                  <Th scope="col">Daily budget</Th>
+                  <Th scope="col">Open incidents</Th>
+                  <Th scope="col">Last signal</Th>
+                  <Th scope="col"><span className="sr-only">Open</span></Th>
                 </tr>
               </thead>
               <tbody>
                 {assets.map(asset => {
                   const budget = data.policy.assetDailySpend[assetBudgetKey(asset)];
                   return (
-                    <tr key={`${asset.family}:${asset.id}`} className="clickable" onClick={() => setSelected(asset)}>
-                      <td>
-                        <span className="cell-with-icon">
+                    <Tr key={`${asset.family}:${asset.id}`} clickable onClick={() => setSelected(asset)}>
+                      <Td>
+                        <span className="flex min-w-0 items-center gap-[11px]">
                           <ProductIcon family={asset.family} />
-                          <span className="cell-main">
-                            <strong>{asset.name ?? compactId(asset.id)}</strong>
-                            <small>{scopeLabel(asset)}</small>
+                          <span className="flex min-w-0 flex-col gap-[3px]">
+                            <strong className="max-w-[46ch] truncate">{asset.name ?? compactId(asset.id)}</strong>
+                            <small className="text-[12px] text-faint">{scopeLabel(asset)}</small>
                           </span>
                         </span>
-                      </td>
-                      <td><span className={`tier-badge ${asset.tier}`}>{tierLabel(asset.tier)}</span></td>
-                      <td className="numeric">{budget ? `${money(budget.emergency)} emergency` : "Product default"}</td>
-                      <td className="numeric">{asset.incidentCount ? <span className="incident-count">{asset.incidentCount}</span> : "0"}</td>
-                      <td>{asset.lastSignalAt ? relativeTime(asset.lastSignalAt) : "No samples yet"}</td>
-                      <td className="row-open">
-                        <button type="button" className="link-button" onClick={event => { event.stopPropagation(); setSelected(asset); }}>
+                      </Td>
+                      <Td><TierBadge tier={asset.tier} /></Td>
+                      <Td numeric>{budget ? `${money(budget.emergency)} emergency` : "Product default"}</Td>
+                      <Td numeric>
+                        {asset.incidentCount
+                          ? <span className="inline-block min-w-[22px] rounded-full bg-danger-bg px-[7px] py-0.5 text-center font-[750] text-danger">{asset.incidentCount}</span>
+                          : "0"}
+                      </Td>
+                      <Td>{asset.lastSignalAt ? relativeTime(asset.lastSignalAt) : "No samples yet"}</Td>
+                      <Td className="whitespace-nowrap text-right">
+                        <LinkButton onClick={event => { event.stopPropagation(); setSelected(asset); }}>
                           Details <Icon name="arrow" />
-                        </button>
-                      </td>
-                    </tr>
+                        </LinkButton>
+                      </Td>
+                    </Tr>
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+            </Table>
+          </TableScroll>
         ) : (
           <EmptyState icon="search" title="No matching assets">
             {search || family || tier ? "Try a different search or filter." : "Run an account scan to discover resources."}
           </EmptyState>
         )}
-      </section>
+      </Panel>
 
       {selected && (
         <AssetDrawer
@@ -199,6 +235,8 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
   const fuseCapable = asset.family === "durable_objects" || asset.family === "workers";
   const effectiveBudget = budget ?? familyBudget;
 
+  const detailRow = "grid grid-cols-[125px_1fr] gap-2.5 border-t border-line-soft py-2 text-[12.5px]";
+
   async function save() {
     setBusy(true);
     setError("");
@@ -224,72 +262,75 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
       labelledBy="asset-drawer-title"
       header={
         <div>
-          <span className={`tier-badge ${asset.tier}`}>{tierLabel(asset.tier)}</span>
+          <TierBadge tier={asset.tier} />
           <h2 id="asset-drawer-title">{asset.name ?? compactId(asset.id)}</h2>
           <p>{scopeLabel(asset)}</p>
         </div>
       }
-      footer={<button type="button" className="button secondary" onClick={onClose}>Done</button>}
+      footer={<Button variant="secondary" onClick={onClose}>Done</Button>}
     >
-      <section className="detail-block">
-        <h3>Details</h3>
-        <dl>
-          <div><dt>Resource ID</dt><dd><code>{asset.id}</code></dd></div>
-          {asset.parentId && <div><dt>Parent</dt><dd><code>{asset.parentId}</code></dd></div>}
-          <div><dt>Discovered</dt><dd>{dateTime(asset.discoveredAt)}</dd></div>
-          <div><dt>Last inventoried</dt><dd>{dateTime(asset.seenAt)}</dd></div>
-          <div><dt>Last telemetry</dt><dd>{asset.lastSignalAt ? dateTime(asset.lastSignalAt) : "No samples recorded"}</dd></div>
-          <div><dt>Open incidents</dt><dd>{asset.incidentCount}</dd></div>
+      <DetailBlock title="Details">
+        <dl className="my-3">
+          <div className={detailRow}><dt className="text-faint">Resource ID</dt><dd className="m-0 min-w-0 break-all"><code>{asset.id}</code></dd></div>
+          {asset.parentId && <div className={detailRow}><dt className="text-faint">Parent</dt><dd className="m-0 min-w-0 break-all"><code>{asset.parentId}</code></dd></div>}
+          <div className={detailRow}><dt className="text-faint">Discovered</dt><dd className="m-0 min-w-0 break-all">{dateTime(asset.discoveredAt)}</dd></div>
+          <div className={detailRow}><dt className="text-faint">Last inventoried</dt><dd className="m-0 min-w-0 break-all">{dateTime(asset.seenAt)}</dd></div>
+          <div className={detailRow}><dt className="text-faint">Last telemetry</dt><dd className="m-0 min-w-0 break-all">{asset.lastSignalAt ? dateTime(asset.lastSignalAt) : "No samples recorded"}</dd></div>
+          <div className={detailRow}><dt className="text-faint">Open incidents</dt><dd className="m-0 min-w-0 break-all">{asset.incidentCount}</dd></div>
         </dl>
         {cloudflareUrl && (
-          <a className="button secondary full" href={cloudflareUrl} target="_blank" rel="noreferrer">
+          <ExternalAction href={cloudflareUrl}>
             Open in Cloudflare <Icon name="external" />
-          </a>
+          </ExternalAction>
         )}
-      </section>
+      </DetailBlock>
 
-      <section className="detail-block">
-        <h3>Daily budget</h3>
+      <DetailBlock title="Daily budget">
         {effectiveBudget ? (
-          <p>
+          <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted">
             {budget ? "This resource has its own budget: " : "Inherits the product-family budget: "}
             warns at {money(effectiveBudget.warning)}, critical at {money(effectiveBudget.critical)}, emergency at {money(effectiveBudget.emergency)} per rolling day.
           </p>
         ) : (
-          <p>No budget is set for this resource or its product family yet; only account-level limits apply.</p>
+          <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted">No budget is set for this resource or its product family yet; only account-level limits apply.</p>
         )}
-        <button type="button" className="button secondary full" onClick={onBudgets}>Edit budgets</button>
-      </section>
+        <Button variant="secondary" full onClick={onBudgets}>Edit budgets</Button>
+      </DetailBlock>
 
-      <section className="detail-block">
-        <h3>Protection tier</h3>
-        <p>The tier decides which controls Brolly may ever prepare for this asset.</p>
-        <label>
+      <DetailBlock title="Protection tier">
+        <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted">The tier decides which controls Brolly may ever prepare for this asset.</p>
+        <label className="my-[13px] flex flex-col gap-1.5 text-[13px] font-[680]">
           Tier
-          <select value={tier} onChange={event => setTier(event.target.value as AssetTier)}>
+          <Select value={tier} onChange={event => setTier(event.target.value as AssetTier)}>
             {TIER_OPTIONS.map(option => <option key={option} value={option}>{tierLabel(option)}</option>)}
-          </select>
-          <small>{tierDescription(tier)}</small>
+          </Select>
+          <small className="font-[450] leading-[1.5] text-muted">{tierDescription(tier)}</small>
         </label>
         {fuseCapable && (
           <div>
             <strong>Owning Worker</strong>
-            <p><code>{owningWorker || "Not reported by Cloudflare"}</code></p>
-            <label className="runtime-confirm">
-              <input type="checkbox" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed
+            <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted"><code>{owningWorker || "Not reported by Cloudflare"}</code></p>
+            <label className="my-[13px] inline-flex items-center gap-2 text-[12.5px] font-[650] whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={fuseInstalled}
+                disabled={!owningWorker}
+                onChange={event => setFuseInstalled(event.target.checked)}
+                className="size-[15px] accent-orange"
+              /> Runtime fuse installed
             </label>
-            <small>
+            <small className="block text-[12.5px] font-[450] leading-[1.5] text-muted">
               Worker ownership comes from Cloudflare inventory and cannot be typed or overridden. Confirm the fuse only after installing @standardagents/brolly-runtime and BROLLY_FUSE.
-              Verify the installation on the <button type="button" className="link-button inline" onClick={() => { onClose(); onNavigate("configuration"); }}>Configuration page</button>.
+              Verify the installation on the <LinkButton inline onClick={() => { onClose(); onNavigate("configuration"); }}>Configuration page</LinkButton>.
             </small>
           </div>
         )}
-        {error && <p className="form-error">{error}</p>}
-        {saved && <p className="form-success" role="status">Classification saved.</p>}
-        <button type="button" className="button primary full" disabled={busy} onClick={() => void save()}>
+        {error && <Notice tone="error">{error}</Notice>}
+        {saved && <Notice tone="success" role="status">Classification saved.</Notice>}
+        <Button variant="primary" full disabled={busy} onClick={() => void save()}>
           {busy ? "Saving…" : "Save classification"}
-        </button>
-      </section>
+        </Button>
+      </DetailBlock>
     </Drawer>
   );
 }

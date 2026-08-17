@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { Button, Notice } from "../components/ui";
 import type { InitialIngestionCollector, InitialIngestionResponse } from "../types";
+import { StepActions, StepIntro } from "./BudgetSteps";
 
 export function useInitialIngestion(token: string) {
   const [ingestion, setIngestion] = useState<InitialIngestionResponse | null>(null);
@@ -55,15 +57,14 @@ export function ImportHistoryStep({ token, billingConnected, onContinue }: {
 
   return (
     <>
-      <h2>Import history</h2>
-      <p className="section-copy">Brolly imports the last 90 days of available usage and billing history from Cloudflare.</p>
+      <StepIntro title="Import history">Brolly imports the last 90 days of available usage and billing history from Cloudflare.</StepIntro>
       <div className="grid gap-3" aria-live="polite" aria-label="Import progress">
         {collectors.map(collector => <ImportCollectorRow key={collector.collector} collector={collector} paused={isStoragePaused(ingestion?.job?.status)} />)}
       </div>
-      {error && <p className="form-error" role="alert">{error}</p>}
-      <footer className="setup-actions">
-        <button type="button" className="button primary ml-auto shrink-0" onClick={onContinue}>{running ? "Continue in background" : "Continue"}</button>
-      </footer>
+      {error && <Notice tone="error">{error}</Notice>}
+      <StepActions>
+        <Button variant="primary" className="ml-auto shrink-0" onClick={onContinue}>{running ? "Continue in background" : "Continue"}</Button>
+      </StepActions>
     </>
   );
 }
@@ -75,16 +76,16 @@ function ImportCollectorRow({ collector, paused }: { collector: InitialIngestion
   const completeWithoutGaps = finished && failed === 0 && !paused;
   const percentage = collector.total ? Math.min(100, (completed / collector.total) * 100) : 0;
   const status = paused ? "Paused: storage" : !finished ? "Importing" : failed ? `${failed} ${failed === 1 ? "gap" : "gaps"}` : "Complete";
-  const statusTone = paused || failed ? "text-[var(--warn)]" : completeWithoutGaps ? "text-[var(--good)]" : "text-[var(--muted)]";
+  const statusTone = paused || failed ? "text-warn" : completeWithoutGaps ? "text-good" : "text-muted";
 
   return (
-    <article className="grid gap-2 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel)] p-4">
+    <article className="grid gap-2 rounded-panel border border-line bg-panel p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <strong className="text-sm">{collector.label}</strong>
         <span className={`text-xs font-semibold ${statusTone}`}>{status}</span>
       </div>
-      <div className="h-2 min-w-0 overflow-hidden rounded-full bg-[var(--line-soft)]" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.total} aria-valuenow={completed}>
-        <div className={`h-full rounded-full transition-[width] duration-500 ${paused ? "bg-[var(--warn)]" : completeWithoutGaps ? "bg-[var(--good)]" : "bg-[var(--orange)]"}`} style={{ width: `${percentage}%` }} />
+      <div className="h-2 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.total} aria-valuenow={completed}>
+        <div className={`h-full rounded-full transition-[width] duration-500 ${paused ? "bg-warn" : completeWithoutGaps ? "bg-good" : "bg-orange"}`} style={{ width: `${percentage}%` }} />
       </div>
     </article>
   );

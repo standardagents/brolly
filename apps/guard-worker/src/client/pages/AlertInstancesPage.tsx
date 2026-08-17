@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { dateTime, number } from "../format";
 import type { AlertInstanceView, DataQuality } from "../types";
-import { EmptyState, SeverityBadge } from "../components/ui";
+import { Button, CellStack, EmptyState, Notice, Panel, PanelHead, SeverityBadge, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 import { QualityBadge } from "./UsagePage";
 
 export function AlertInstancesPage({ token }: { token: string }) {
@@ -28,43 +28,47 @@ export function AlertInstancesPage({ token }: { token: string }) {
   }
 
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <div>
-          <p className="eyebrow">Threshold periods</p>
-          <h2>Alert instances</h2>
-          <p className="panel-sub">Every line crossing belongs to one local day or Cloudflare billing cycle. Silencing applies to this instance and preserves its rule and future periods.</p>
-        </div>
-        <select className="min-h-9 rounded border border-[var(--line)] bg-white px-3 text-sm" value={status} onChange={event => setStatus(event.target.value)}>
-          <option value="">All states</option>
-          <option value="open">Open</option>
-          <option value="silenced">Silenced</option>
-          <option value="resolved">Resolved</option>
-          <option value="expired">Expired</option>
-        </select>
-      </div>
+    <Panel>
+      <PanelHead
+        eyebrow="Threshold periods"
+        title="Alert instances"
+        sub="Every line crossing belongs to one local day or Cloudflare billing cycle. Silencing applies to this instance and preserves its rule and future periods."
+        actions={
+          <select
+            className="min-h-9 rounded border border-line bg-panel px-3 text-sm text-ink"
+            value={status}
+            onChange={event => setStatus(event.target.value)}
+          >
+            <option value="">All states</option>
+            <option value="open">Open</option>
+            <option value="silenced">Silenced</option>
+            <option value="resolved">Resolved</option>
+            <option value="expired">Expired</option>
+          </select>
+        }
+      />
       {instances.length ? (
-        <div className="table-scroll">
-          <table className="data-table">
-            <thead><tr><th>Line</th><th>Target</th><th>Observed</th><th>Evidence</th><th>Period</th><th>Notifications</th><th /></tr></thead>
+        <TableScroll>
+          <Table>
+            <thead><tr><Th>Line</Th><Th>Target</Th><Th>Observed</Th><Th>Evidence</Th><Th>Period</Th><Th>Notifications</Th><Th /></tr></thead>
             <tbody>
               {instances.map(instance => (
-                <tr key={instance.id}>
-                  <td><span className="cell-main"><strong><SeverityBadge severity={severity(instance.label, instance.priority)} /> {instance.label}</strong><small>{instance.metricDefinitionId}</small></span></td>
-                  <td><span className="cell-main"><strong>{instance.displayName}</strong><small>{instance.productFamily} · {instance.cloudflareId}</small></span></td>
-                  <td className="numeric"><strong>{number(instance.observedValue)}</strong><small className="block text-[var(--faint)]">line {number(instance.thresholdValue)}</small></td>
-                  <td><QualityBadge quality={instance.dataQuality as DataQuality} />{instance.historical ? <small className="ml-2 text-[var(--faint)]">historical</small> : null}</td>
-                  <td><span className="cell-main"><strong>{new Date(instance.periodStartAt).toLocaleDateString()}</strong><small>through {new Date(instance.periodEndAt).toLocaleDateString()}</small></span></td>
-                  <td><span className="cell-main"><strong>{instance.notificationCount}</strong><small>{instance.nextNotificationAt ? `Next ${dateTime(instance.nextNotificationAt)}` : instance.status}</small></span></td>
-                  <td>{instance.status === "open" && <button className="button secondary" type="button" onClick={() => void silence(instance.id)}>Silence period</button>}</td>
-                </tr>
+                <Tr key={instance.id}>
+                  <Td><CellStack title={<><SeverityBadge severity={severity(instance.label, instance.priority)} /> {instance.label}</>} sub={instance.metricDefinitionId} /></Td>
+                  <Td><CellStack title={instance.displayName} sub={<>{instance.productFamily} · {instance.cloudflareId}</>} /></Td>
+                  <Td numeric><strong>{number(instance.observedValue)}</strong><small className="block text-faint">line {number(instance.thresholdValue)}</small></Td>
+                  <Td><QualityBadge quality={instance.dataQuality as DataQuality} />{instance.historical ? <small className="ml-2 text-faint">historical</small> : null}</Td>
+                  <Td><CellStack title={new Date(instance.periodStartAt).toLocaleDateString()} sub={`through ${new Date(instance.periodEndAt).toLocaleDateString()}`} /></Td>
+                  <Td><CellStack title={instance.notificationCount} sub={instance.nextNotificationAt ? `Next ${dateTime(instance.nextNotificationAt)}` : instance.status} /></Td>
+                  <Td>{instance.status === "open" && <Button variant="secondary" onClick={() => void silence(instance.id)}>Silence period</Button>}</Td>
+                </Tr>
               ))}
             </tbody>
-          </table>
-        </div>
+          </Table>
+        </TableScroll>
       ) : <EmptyState icon="bell" title="No alert instances in this view">Threshold crossings appear here with their evidence and notification cadence.</EmptyState>}
-      {error && <p className="form-error m-5" role="alert">{error}</p>}
-    </section>
+      {error && <Notice tone="error" className="m-5">{error}</Notice>}
+    </Panel>
   );
 }
 

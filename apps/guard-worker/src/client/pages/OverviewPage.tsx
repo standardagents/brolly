@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { SpendChart, spendDelta } from "../components/SpendChart";
-import { EmptyState, Icon, InfoTip, ProductIcon, SeverityBadge } from "../components/ui";
+import { ActionStatePill, EmptyState, Icon, InfoTip, LinkButton, Panel, PanelFoot, PanelHead, SeverityBadge } from "../components/ui";
 import { actionKindLabel, actionStateTitle } from "../components/ActionDrawer";
 import { compactId, measurement, money, relativeTime } from "../format";
 import type { ConnectionHealth } from "../lib/health";
@@ -35,118 +35,139 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
     <>
       {connection.kind === "local" && <LocalPreviewPanel connection={connection} scanError={scanError} onNavigate={onNavigate} />}
       {scanError && connection.kind !== "local" && (
-        <p className="form-error page-error" role="alert">Account scan failed: {scanError}</p>
+        <p
+          className="mb-3.5 rounded-field border border-danger-line bg-danger-bg px-3 py-[9px] text-[13px] text-danger-ink [overflow-wrap:anywhere]"
+          role="alert"
+        >
+          Account scan failed: {scanError}
+        </p>
       )}
-      {scanSummary && <p className="inline-note" role="status"><Icon name="check" /><span>{scanSummary}</span></p>}
+      {scanSummary && (
+        <p className="mx-5 mb-3 flex items-start gap-[9px] rounded-field border border-line bg-panel-soft px-3 py-2.5 text-[12.5px] text-muted" role="status">
+          <Icon name="check" className="mt-px size-[15px] flex-none" />
+          <span>{scanSummary}</span>
+        </p>
+      )}
 
-      <section className="stat-row" aria-label="Account status">
+      <section className="mb-[18px] grid grid-cols-[1.3fr_1fr_1fr_1fr] gap-3 max-xl:grid-cols-2 max-md:grid-cols-1" aria-label="Account status">
         <SpendStat data={data} preview={preview} />
-        <button type="button" className={`stat-tile ${data.summary.openIncidents ? (data.summary.emergencyIncidents ? "danger" : "warning") : "good"}`} onClick={() => onNavigate("incidents")}>
-          <span className="stat-label">Open incidents <Icon name="arrow" /></span>
-          <strong>{data.summary.openIncidents}</strong>
-          <small>
-            {data.summary.openIncidents === 0
-              ? "Nothing needs a response"
-              : [data.summary.emergencyIncidents && `${data.summary.emergencyIncidents} emergency`, data.summary.criticalIncidents && `${data.summary.criticalIncidents} critical`]
-                  .filter(Boolean).join(" · ") || "Review the response queue"}
-          </small>
-        </button>
-        <button type="button" className={`stat-tile ${data.summary.coverageGaps ? "warning" : "good"}`} onClick={() => onNavigate("configuration")}>
-          <span className="stat-label">Coverage gaps <Icon name="arrow" /></span>
-          <strong>{data.summary.coverageGaps}</strong>
-          <small>{data.summary.coverageGaps ? "Meters without trustworthy telemetry" : "Every cataloged meter is reporting"}</small>
-        </button>
-        <button type="button" className={`stat-tile ${readiness && readiness.needsAttention ? "danger" : readiness && readiness.configuredWorkers < readiness.workers ? "warning" : "neutral"}`} onClick={() => onNavigate("configuration")}>
-          <span className="stat-label">Runtime protection <Icon name="arrow" /></span>
-          <strong>{readiness ? `${readiness.configuredWorkers}/${readiness.workers}` : "—"}</strong>
-          <small>
-            {readiness
-              ? `Workers fuse-ready · ${readiness.configuredNamespaces}/${readiness.namespaces} namespaces`
-              : "Loading readiness…"}
-          </small>
-        </button>
+        <StatTile
+          tone={data.summary.openIncidents ? (data.summary.emergencyIncidents ? "danger" : "warning") : "good"}
+          label="Open incidents"
+          value={data.summary.openIncidents}
+          onClick={() => onNavigate("incidents")}
+        >
+          {data.summary.openIncidents === 0
+            ? "Nothing needs a response"
+            : [data.summary.emergencyIncidents && `${data.summary.emergencyIncidents} emergency`, data.summary.criticalIncidents && `${data.summary.criticalIncidents} critical`]
+                .filter(Boolean).join(" · ") || "Review the response queue"}
+        </StatTile>
+        <StatTile
+          tone={data.summary.coverageGaps ? "warning" : "good"}
+          label="Coverage gaps"
+          value={data.summary.coverageGaps}
+          onClick={() => onNavigate("configuration")}
+        >
+          {data.summary.coverageGaps ? "Meters without trustworthy telemetry" : "Every cataloged meter is reporting"}
+        </StatTile>
+        <StatTile
+          tone={readiness && readiness.needsAttention ? "danger" : readiness && readiness.configuredWorkers < readiness.workers ? "warning" : "neutral"}
+          label="Runtime protection"
+          value={readiness ? `${readiness.configuredWorkers}/${readiness.workers}` : "—"}
+          onClick={() => onNavigate("configuration")}
+        >
+          {readiness
+            ? `Workers fuse-ready · ${readiness.configuredNamespaces}/${readiness.namespaces} namespaces`
+            : "Loading readiness…"}
+        </StatTile>
       </section>
 
-      <section className="spend-panel panel" aria-label="Spend detail">
-        <div className="panel-head">
-          <div>
-            <h2 className="heading-with-info">
-              {preview ? "Example daily spend — not live" : "Estimated daily spend"}
-              <InfoTip label="How the spend estimate is calculated">
-                <h4>Operational estimate</h4>
-                <p>Brolly stores overlapping five-minute Cloudflare analytics windows in correction-safe daily accumulators. Sealed daily history stays available for charts while live totals continue to update.</p>
-                <p>Hourly Billing Read reconciliation supplies authoritative aggregate charges and billing-cycle boundaries. Granular values remain labeled as modeled estimates or proportional allocations.</p>
-                {preview && <p><strong>This screen is not connected.</strong> Values shown here must not be used as a live account total.</p>}
-              </InfoTip>
-            </h2>
-            <p className="panel-sub">{preview ? "Retained sample/stale data, shown only to preview the dashboard." : data.spend.label}</p>
-          </div>
-          <span className="estimate-pill">Estimate, not invoice</span>
-        </div>
-        <div className="spend-body">
-          <div className="spend-chart-column">
+      <Panel aria-label="Spend detail">
+        <PanelHead
+          title={preview ? "Example daily spend — not live" : "Estimated daily spend"}
+          titleExtra={
+            <InfoTip label="How the spend estimate is calculated">
+              <h4>Operational estimate</h4>
+              <p>Brolly stores overlapping five-minute Cloudflare analytics windows in correction-safe daily accumulators. Sealed daily history stays available for charts while live totals continue to update.</p>
+              <p>Hourly Billing Read reconciliation supplies authoritative aggregate charges and billing-cycle boundaries. Granular values remain labeled as modeled estimates or proportional allocations.</p>
+              {preview && <p><strong>This screen is not connected.</strong> Values shown here must not be used as a live account total.</p>}
+            </InfoTip>
+          }
+          sub={preview ? "Retained sample/stale data, shown only to preview the dashboard." : data.spend.label}
+          actions={
+            <span className="inline-flex flex-none items-center gap-[7px] rounded-full border border-line bg-panel-soft px-[11px] py-1.5 text-[12px] font-[650] text-muted">
+              Estimate, not invoice
+            </span>
+          }
+        />
+        <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-[22px] px-5 pt-1 pb-4 max-xl:grid-cols-[minmax(0,1fr)]">
+          <div className="min-w-0">
             <SpendChart points={data.spend.history} />
           </div>
-          <div className="spend-side">
-            <table className="category-table">
-              <caption className="visually-hidden">Estimated daily spend by product category</caption>
+          <div className="flex flex-col border-l border-line-soft pl-[22px] max-xl:border-l-0 max-xl:pl-0">
+            <table className="w-full border-collapse text-[13px]">
+              <caption className="sr-only">Estimated daily spend by product category</caption>
               <thead>
-                <tr><th scope="col">Category</th><th scope="col">Estimate</th><th scope="col">Daily limit</th></tr>
+                <tr>
+                  <th scope="col" className="px-0 pt-1 pb-2 text-left text-[10.5px] font-[780] uppercase tracking-[.08em] text-faint">Category</th>
+                  <th scope="col" className="px-0 pt-1 pb-2 text-right text-[10.5px] font-[780] uppercase tracking-[.08em] text-faint">Estimate</th>
+                  <th scope="col" className="px-0 pt-1 pb-2 text-right text-[10.5px] font-[780] uppercase tracking-[.08em] text-faint">Daily limit</th>
+                </tr>
               </thead>
               <tbody>
                 {data.spend.categories.length ? data.spend.categories.map(category => {
                   const limits = data.policy.familyDailySpend[category.family];
                   const used = limits ? Math.min(1, category.estimatedUsd / Math.max(limits.emergency, 0.01)) : 0;
-                  const tone = !limits ? "" : category.estimatedUsd >= limits.critical ? "danger" : category.estimatedUsd >= limits.warning ? "warning" : "good";
+                  const tone = !limits ? "neutral" : category.estimatedUsd >= limits.critical ? "danger" : category.estimatedUsd >= limits.warning ? "warning" : "good";
                   return (
                     <tr key={category.family}>
-                      <td>
-                        <span className="category-name">
-                          <i style={{ background: categoryColor(category.family) }} aria-hidden="true" />
+                      <td className="border-t border-line-soft py-2">
+                        <span className="inline-flex items-center gap-2">
+                          <i className="size-[9px] flex-none rounded-[2px]" style={{ background: categoryColor(category.family) }} aria-hidden="true" />
                           {category.label}
-                          {category.coverage !== "healthy" && <em className="partial-tag" title="One or more billing signals for this product lack a collector">partial</em>}
+                          {category.coverage !== "healthy" && (
+                            <em className="rounded-[3px] bg-warn-bg px-[5px] py-px text-[10px] font-[750] uppercase not-italic text-warn" title="One or more billing signals for this product lack a collector">partial</em>
+                          )}
                         </span>
                       </td>
-                      <td className="numeric">{money(category.estimatedUsd)}</td>
-                      <td className="numeric limit-cell">
+                      <td className="border-t border-line-soft py-2 text-right whitespace-nowrap tabular-nums">{money(category.estimatedUsd)}</td>
+                      <td className="min-w-[108px] border-t border-line-soft py-2 text-right whitespace-nowrap tabular-nums">
                         {limits ? (
-                          <span className={`limit-meter ${tone}`}>
+                          <span className="inline-flex flex-col items-end gap-[3px] text-[12px] text-faint">
                             <span>{money(limits.emergency)}</span>
-                            <i aria-hidden="true"><b style={{ width: `${Math.max(3, used * 100)}%` }} /></i>
+                            <i aria-hidden="true" className="block h-1 w-[84px] overflow-hidden rounded-[3px] bg-line-soft">
+                              <b className={`block h-full rounded-[3px] ${METER_FILL[tone]}`} style={{ width: `${Math.max(3, used * 100)}%` }} />
+                            </i>
                           </span>
                         ) : "—"}
                       </td>
                     </tr>
                   );
                 }) : (
-                  <tr><td colSpan={3} className="empty-cell">The first aggregate spend snapshot will appear after the next scan.</td></tr>
+                  <tr><td colSpan={3} className="border-t border-line-soft py-2 text-faint">The first aggregate spend snapshot will appear after the next scan.</td></tr>
                 )}
               </tbody>
             </table>
-            <div className="spend-side-links">
-              <button type="button" className="link-button" onClick={onBudgets}>Adjust daily limits</button>
-              <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>Review collection coverage</button>
+            <div className="mt-auto flex flex-col items-start gap-[7px] pt-3">
+              <LinkButton onClick={onBudgets}>Adjust daily limits</LinkButton>
+              <LinkButton onClick={() => onNavigate("configuration")}>Review collection coverage</LinkButton>
             </div>
           </div>
         </div>
-        <footer className="panel-foot">
-          <Icon name="info" />
-          <span>{data.spend.note}</span>
-          <span>{data.spend.updatedAt ? `Updated ${relativeTime(data.spend.updatedAt)}` : "Snapshot pending"}</span>
-        </footer>
-      </section>
+        <PanelFoot icon="info" aside={data.spend.updatedAt ? `Updated ${relativeTime(data.spend.updatedAt)}` : "Snapshot pending"}>
+          {data.spend.note}
+        </PanelFoot>
+      </Panel>
 
-      <div className="overview-columns">
-        <section className="panel" aria-label="Needs attention">
-          <div className="panel-head">
-            <div>
-              <h2>Needs attention</h2>
-              <p className="panel-sub">Usage incidents and failed controls, most urgent first.</p>
-            </div>
-            {attention.incidents.length > 0 && (
-              <button type="button" className="link-button" onClick={() => onNavigate("incidents")}>All incidents <Icon name="arrow" /></button>
-            )}
-          </div>
+      <div className="grid grid-cols-[1.35fr_1fr] items-start gap-3 max-xl:grid-cols-[minmax(0,1fr)]">
+        <Panel aria-label="Needs attention">
+          <PanelHead
+            title="Needs attention"
+            sub="Usage incidents and failed controls, most urgent first."
+            actions={attention.incidents.length > 0
+              ? <LinkButton onClick={() => onNavigate("incidents")}>All incidents <Icon name="arrow" /></LinkButton>
+              : undefined}
+          />
           {attention.incidents.length === 0 && attention.failedActions.length === 0 ? (
             <EmptyState title="All quiet" compact>
               {[
@@ -156,55 +177,47 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
               ].filter(Boolean).join(". ") + "."}
             </EmptyState>
           ) : (
-            <ul className="attention-list">
+            <ul className="m-0 list-none p-0 pb-1.5">
               {attention.failedActions.map(action => (
                 <li key={action.id}>
-                  <button type="button" className="attention-row" onClick={() => onNavigate("incidents")}>
-                    <span className="severity failed"><i />failed</span>
-                    <span className="attention-main">
-                      <strong>{actionKindLabel(action.kind)} — {actionStateTitle(action.state)}</strong>
-                      <small>{action.family} / {compactId(action.assetId)} · review and roll back if live state changed</small>
-                    </span>
-                    <Icon name="arrow" />
-                  </button>
+                  <AttentionRow
+                    lead={<SeverityBadge severity="failed" />}
+                    title={`${actionKindLabel(action.kind)} — ${actionStateTitle(action.state)}`}
+                    detail={`${action.family} / ${compactId(action.assetId)} · review and roll back if live state changed`}
+                    onClick={() => onNavigate("incidents")}
+                  />
                 </li>
               ))}
               {attention.incidents.map(incident => (
                 <li key={incident.id}>
-                  <button type="button" className="attention-row" onClick={() => onOpenIncident(incident)}>
-                    <SeverityBadge severity={incident.severity} />
-                    <span className="attention-main">
-                      <strong>{incident.familyLabel} / {incident.assetName ?? compactId(incident.assetId)}</strong>
-                      <small>{incident.metricLabel} · {measurement(incident.observed, incident.unit, incident.windowMs)} · {relativeTime(incident.lastSeen)}</small>
-                    </span>
-                    <Icon name="arrow" />
-                  </button>
+                  <AttentionRow
+                    lead={<SeverityBadge severity={incident.severity} />}
+                    title={`${incident.familyLabel} / ${incident.assetName ?? compactId(incident.assetId)}`}
+                    detail={`${incident.metricLabel} · ${measurement(incident.observed, incident.unit, incident.windowMs)} · ${relativeTime(incident.lastSeen)}`}
+                    onClick={() => onOpenIncident(incident)}
+                  />
                 </li>
               ))}
             </ul>
           )}
-        </section>
+        </Panel>
 
-        <section className="panel" aria-label="Recent control actions">
-          <div className="panel-head">
-            <div>
-              <h2>Recent actions</h2>
-              <p className="panel-sub">Reversible controls and their audit state.</p>
-            </div>
-            <button type="button" className="link-button" onClick={() => onNavigate("incidents")}>All actions <Icon name="arrow" /></button>
-          </div>
+        <Panel aria-label="Recent control actions">
+          <PanelHead
+            title="Recent actions"
+            sub="Reversible controls and their audit state."
+            actions={<LinkButton onClick={() => onNavigate("incidents")}>All actions <Icon name="arrow" /></LinkButton>}
+          />
           {data.actions.length ? (
-            <ul className="attention-list">
+            <ul className="m-0 list-none p-0 pb-1.5">
               {data.actions.slice(0, 5).map(action => (
                 <li key={action.id}>
-                  <button type="button" className="attention-row" onClick={() => onNavigate("incidents")}>
-                    <span className={`action-state ${action.state}`}>{action.state.replaceAll("_", " ")}</span>
-                    <span className="attention-main">
-                      <strong>{actionKindLabel(action.kind)}</strong>
-                      <small>{action.family} / {compactId(action.assetId)} · {relativeTime(action.updatedAt)}</small>
-                    </span>
-                    <Icon name="arrow" />
-                  </button>
+                  <AttentionRow
+                    lead={<ActionStatePill state={action.state} />}
+                    title={actionKindLabel(action.kind)}
+                    detail={`${action.family} / ${compactId(action.assetId)} · ${relativeTime(action.updatedAt)}`}
+                    onClick={() => onNavigate("incidents")}
+                  />
                 </li>
               ))}
             </ul>
@@ -213,19 +226,91 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
               Emergency incidents can prepare reversible actions after the asset is classified.
             </EmptyState>
           )}
-        </section>
+        </Panel>
       </div>
 
-      <section className="panel monitor-note" aria-label="Monitoring cadence">
-        <Icon name="clock" />
-        <p>
+      <Panel className="flex items-start gap-2.5 px-5 py-[13px]" aria-label="Monitoring cadence">
+        <Icon name="clock" className="mt-0.5 size-[17px] flex-none text-faint" />
+        <p className="m-0 flex-1 text-[12.5px] text-muted">
           The bounded monitor runs every minute (~13 Cloudflare API calls for a one-page account), adds one rolling-24-hour
           Durable Objects query every 15 minutes, and reconciles the Billing API daily when a Billing Read token is installed.
           {data.summary.lastCheckAt ? ` Last pass ${relativeTime(data.summary.lastCheckAt)}.` : " No pass has completed yet."}
         </p>
-        <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>Monitoring details</button>
-      </section>
+        <LinkButton className="mt-0.5 whitespace-nowrap" onClick={() => onNavigate("configuration")}>Monitoring details</LinkButton>
+      </Panel>
     </>
+  );
+}
+
+type StatTone = "hero" | "good" | "warning" | "danger" | "neutral";
+
+const TILE_BASE = "flex min-h-[104px] flex-col items-start gap-1 rounded-panel border border-line bg-panel px-4 py-3.5 text-left shadow-panel";
+const TILE_ACCENT: Record<StatTone, string> = {
+  hero: "border-l-[3px] border-l-orange",
+  good: "",
+  warning: "border-l-[3px] border-l-[#e0a53a]",
+  danger: "border-l-[3px] border-l-danger",
+  neutral: "",
+};
+const TILE_VALUE: Record<StatTone, string> = {
+  hero: "",
+  good: "text-good",
+  warning: "text-warn",
+  danger: "text-danger",
+  neutral: "",
+};
+const METER_FILL: Record<"neutral" | "good" | "warning" | "danger", string> = {
+  neutral: "bg-[#9aa4b0] dark:bg-[#7c8793]",
+  good: "bg-[#24a468]",
+  warning: "bg-[#e0a53a]",
+  danger: "bg-danger",
+};
+/** Stat label line: muted caption plus the faint affordance arrow. */
+function StatLabel({ children, arrow = true }: { children: ReactNode; arrow?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-[5px] text-[12px] font-[680] text-muted">
+      {children}
+      {arrow && <Icon name="arrow" className="size-[13px] text-faint" />}
+    </span>
+  );
+}
+
+/** Clickable summary tile in the account status row. */
+function StatTile({ tone, label, value, children, onClick }: {
+  tone: StatTone;
+  label: string;
+  value: ReactNode;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${TILE_BASE} ${TILE_ACCENT[tone]} cursor-pointer transition-[border-color,box-shadow] duration-[130ms] hover:border-[#b9c1ca] hover:shadow-[0_6px_18px_#10182812] dark:hover:border-[#59626d]`}
+      onClick={onClick}
+    >
+      <StatLabel>{label}</StatLabel>
+      <strong className={`text-[27px] leading-[1.1] tracking-[-.02em] tabular-nums ${TILE_VALUE[tone]}`}>{value}</strong>
+      <small className="inline-flex items-center gap-[5px] text-[12px] text-faint">{children}</small>
+    </button>
+  );
+}
+
+/** One row in the attention / recent actions lists. */
+function AttentionRow({ lead, title, detail, onClick }: { lead: ReactNode; title: string; detail: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="grid w-full cursor-pointer grid-cols-[92px_minmax(0,1fr)_16px] items-center gap-3 border-0 border-t border-line-soft bg-transparent px-5 py-[11px] text-left [font:inherit] hover:bg-hover"
+      onClick={onClick}
+    >
+      {lead}
+      <span className="flex min-w-0 flex-col gap-[3px]">
+        <strong className="overflow-hidden text-ellipsis whitespace-nowrap text-[13.5px]">{title}</strong>
+        <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-faint">{detail}</small>
+      </span>
+      <Icon name="arrow" className="size-[15px] text-faint" />
+    </button>
   );
 }
 
@@ -233,15 +318,15 @@ function SpendStat({ data, preview }: { data: DashboardData; preview: boolean })
   const delta = spendDelta(data.spend.history);
   const hours = delta ? Math.max(1, Math.round(delta.sinceMs / 3_600_000)) : 0;
   return (
-    <div className="stat-tile hero">
-      <span className="stat-label">{preview ? "Example spend (not live)" : "Estimated spend · rolling 24 h"}</span>
-      <strong>{data.spend.updatedAt ? money(data.spend.estimatedTotalUsd) : "—"}</strong>
+    <div className={`${TILE_BASE} ${TILE_ACCENT.hero} cursor-default`}>
+      <StatLabel arrow={false}>{preview ? "Example spend (not live)" : "Estimated spend · rolling 24 h"}</StatLabel>
+      <strong className="text-[27px] leading-[1.1] tracking-[-.02em] tabular-nums">{data.spend.updatedAt ? money(data.spend.estimatedTotalUsd) : "—"}</strong>
       {delta && Math.abs(delta.deltaUsd) >= 0.01 ? (
-        <small className={delta.deltaUsd > 0 ? "trend-up" : "trend-down"}>
-          <Icon name="trend" /> {delta.deltaUsd > 0 ? "+" : "−"}{money(Math.abs(delta.deltaUsd))} vs {hours} h ago
+        <small className={`inline-flex items-center gap-[5px] text-[12px] font-[680] ${delta.deltaUsd > 0 ? "text-danger" : "text-good [&>svg]:-scale-y-100"}`}>
+          <Icon name="trend" className="size-[13px]" /> {delta.deltaUsd > 0 ? "+" : "−"}{money(Math.abs(delta.deltaUsd))} vs {hours} h ago
         </small>
       ) : (
-        <small>{data.spend.updatedAt ? "Rate is steady across recent scans" : "Waiting for the first snapshot"}</small>
+        <small className="inline-flex items-center gap-[5px] text-[12px] text-faint">{data.spend.updatedAt ? "Rate is steady across recent scans" : "Waiting for the first snapshot"}</small>
       )}
     </div>
   );
@@ -253,32 +338,34 @@ function LocalPreviewPanel({ connection, scanError, onNavigate }: {
   onNavigate: (route: Route) => void;
 }) {
   return (
-    <section className="local-preview panel" aria-label="Local preview status">
-      <div className="local-preview-head">
-        <span className="local-pill">Local preview</span>
-        <p>{connection.detail}</p>
+    <Panel className="pb-3.5" aria-label="Local preview status">
+      <div className="flex flex-wrap items-start gap-3 px-5 pt-4 pb-1">
+        <span className="flex-none rounded-full border border-dashed border-[#aab3bd] bg-[#eceff2] px-[11px] py-[5px] text-[12px] font-[750] text-[#4d5560] dark:border-[#59626d] dark:bg-[#252a31] dark:text-chip-ink">Local preview</span>
+        <p className="mt-0.5 max-w-[84ch] text-[13px] text-muted">{connection.detail}</p>
       </div>
-      <div className="local-preview-grid">
+      <div className="grid grid-cols-3 gap-3 px-5 pt-3 pb-1 max-md:grid-cols-1">
         <div>
-          <strong>Works now</strong>
-          <p>Explore the sample UI, set budgets, configure encrypted notification targets, and read the control runbooks.</p>
+          <strong className="mb-[3px] block text-[12.5px]">Works now</strong>
+          <p className="m-0 text-[12.5px] leading-[1.55] text-muted">Explore the sample UI, set budgets, configure encrypted notification targets, and read the control runbooks.</p>
         </div>
         <div>
-          <strong>Needs a connected account</strong>
-          <p>Live inventory, spend estimates, incident detection, Cloudflare shutdown actions, and alert delivery for new incidents.</p>
+          <strong className="mb-[3px] block text-[12.5px]">Needs a connected account</strong>
+          <p className="m-0 text-[12.5px] leading-[1.55] text-muted">Live inventory, spend estimates, incident detection, Cloudflare shutdown actions, and alert delivery for new incidents.</p>
         </div>
         <div>
-          <strong>To connect</strong>
-          <p>Deploy Brolly, open its URL, and choose <em>Login with Cloudflare</em> to authorize exactly one account, then use <em>Scan now</em>.</p>
+          <strong className="mb-[3px] block text-[12.5px]">To connect</strong>
+          <p className="m-0 text-[12.5px] leading-[1.55] text-muted">Deploy Brolly, open its URL, and choose <em>Login with Cloudflare</em> to authorize exactly one account, then use <em>Scan now</em>.</p>
         </div>
       </div>
       {(connection.errors.length > 0 || scanError) && (
-        <ul className="local-preview-errors">
-          {[...new Set([...connection.errors, scanError].filter(Boolean))].slice(0, 3).map(message => <li key={message}>{message}</li>)}
+        <ul className="mx-5 mt-2 mb-1 list-disc pl-[18px] text-[12.5px] text-muted">
+          {[...new Set([...connection.errors, scanError].filter(Boolean))].slice(0, 3).map(message => (
+            <li key={message} className="mb-[3px] [overflow-wrap:anywhere]">{message}</li>
+          ))}
         </ul>
       )}
-      <button type="button" className="link-button" onClick={() => onNavigate("configuration")}>Review connection details <Icon name="arrow" /></button>
-    </section>
+      <LinkButton className="mt-2 mb-1 ml-5" onClick={() => onNavigate("configuration")}>Review connection details <Icon name="arrow" /></LinkButton>
+    </Panel>
   );
 }
 

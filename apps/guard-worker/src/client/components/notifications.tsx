@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 import { api } from "../api";
 import { relativeTime } from "../format";
 import type { NotificationKind, NotificationTarget, Severity } from "../types";
-import { ChannelLogo, Icon, InfoTip } from "./ui";
+import { Button, ChannelLogo, CountBadge, Icon, InfoTip, Notice, Panel, PanelHead, Pill } from "./ui";
 
 export const NOTIFICATION_CHANNELS: Array<{ kind: NotificationKind; label: string; description: string }> = [
   { kind: "discord", label: "Discord", description: "Post structured incident messages to a Discord channel webhook." },
@@ -42,6 +42,34 @@ export function useNotificationTargets(token: string) {
   return { targets, credentialStorageReady, loading, error, setError, load };
 }
 
+/** Credential field inside a notification form: stacked label + text input. */
+function TextField({ label, ...rest }: InputHTMLAttributes<HTMLInputElement> & { label: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-[5px] text-[12.5px] font-[680]">
+      {label}
+      <input
+        className="min-h-[38px] w-full rounded-field border border-field-line bg-field px-2.5 text-[13px] text-ink focus:border-orange focus:shadow-[0_0_0_3px_#f6821f1f] focus:outline-none"
+        {...rest}
+      />
+    </label>
+  );
+}
+
+/** Severity picker inside a notification form: stacked label + select. */
+function SelectField({ label, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { label: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-[5px] text-[12.5px] font-[680]">
+      {label}
+      <select
+        className="min-h-[38px] w-full rounded-field border border-field-line bg-field px-2.5 text-[13px] text-ink focus:border-orange focus:shadow-[0_0_0_3px_#f6821f1f] focus:outline-none"
+        {...rest}
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
 export function NotificationSection({ token }: { token: string }) {
   const { targets, credentialStorageReady, loading, error, setError, load } = useNotificationTargets(token);
   const [saved, setSaved] = useState("");
@@ -66,34 +94,34 @@ export function NotificationSection({ token }: { token: string }) {
     }
   }
 
-  return (
-    <section id="notifications" className="panel-section notification-section">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Escalation</p>
-          <h2 className="heading-with-info">
-            Incident notifications
-            <InfoTip label="When does Brolly send a notification?">
-              <h4>Only new or materially escalated incidents</h4>
-              <p>The minute monitor deduplicates repeated detections. Each target receives at most 20 deliveries per hour; Twilio also has a five-SMS-per-day safety cap.</p>
-              <h4>Daily summaries</h4>
-              <p>The configured daily summary hour is separate from immediate incident delivery. Coverage gaps are reported explicitly so missing telemetry cannot look like zero spend.</p>
-              <h4>No test blast</h4>
-              <p>Saving a target does not send a test message; delivery is only attempted for a qualifying incident.</p>
-            </InfoTip>
-          </h2>
-          <p>Route warnings and emergencies to the people who can respond.</p>
-        </div>
-        <span className={`count-badge ${targets.some(target => target.enabled) ? "" : "warning"}`}>
-          {targets.filter(target => target.enabled).length} active
-        </span>
-      </div>
+  const active = targets.filter(target => target.enabled).length;
 
-      <div className={`credential-callout ${credentialStorageReady ? "ready" : "missing"}`}>
-        <Icon name={credentialStorageReady ? "shield" : "alert"} />
+  return (
+    <Panel id="notifications" className="pb-4">
+      <PanelHead
+        eyebrow="Escalation"
+        title="Incident notifications"
+        titleExtra={
+          <InfoTip label="When does Brolly send a notification?">
+            <h4>Only new or materially escalated incidents</h4>
+            <p>The minute monitor deduplicates repeated detections. Each target receives at most 20 deliveries per hour; Twilio also has a five-SMS-per-day safety cap.</p>
+            <h4>Daily summaries</h4>
+            <p>The configured daily summary hour is separate from immediate incident delivery. Coverage gaps are reported explicitly so missing telemetry cannot look like zero spend.</p>
+            <h4>No test blast</h4>
+            <p>Saving a target does not send a test message; delivery is only attempted for a qualifying incident.</p>
+          </InfoTip>
+        }
+        sub="Route warnings and emergencies to the people who can respond."
+        actions={<CountBadge tone={active ? "neutral" : "warning"}>{active} active</CountBadge>}
+      />
+
+      <div className={`mx-5 mt-1 mb-3 flex gap-[11px] rounded-field border px-3.5 py-3 ${
+        credentialStorageReady ? "border-good-line bg-good-bg" : "border-danger-line bg-danger-bg"
+      }`}>
+        <Icon name={credentialStorageReady ? "shield" : "alert"} className="mt-px size-[18px]" />
         <div>
-          <strong>{credentialStorageReady ? "Credentials are encrypted at rest" : "Credential encryption is not configured"}</strong>
-          <p>
+          <strong className="text-[13px]">{credentialStorageReady ? "Credentials are encrypted at rest" : "Credential encryption is not configured"}</strong>
+          <p className="mt-0.5 text-[12.5px] text-muted">
             {credentialStorageReady
               ? "Webhook URLs and Twilio secrets are sealed before D1 storage and are never returned to the browser."
               : "Set BROLLY_CREDENTIAL_KEY before saving a destination. Brolly refuses to store notification credentials in plaintext."}
@@ -101,39 +129,45 @@ export function NotificationSection({ token }: { token: string }) {
         </div>
       </div>
 
-      {error && <p className="form-error notification-error">{error}</p>}
-      {saved && <p className="form-success" role="status">{saved}</p>}
+      {error && <Notice tone="error" className="mx-5 mb-3">{error}</Notice>}
+      {saved && <Notice tone="success" className="mx-5 mb-3" role="status">{saved}</Notice>}
 
-      <div className="notification-grid">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-2.5 px-5 pb-2 max-xl:grid-cols-1">
         {NOTIFICATION_CHANNELS.map(channel => {
           const target = targets.find(item => item.kind === channel.kind);
           return (
-            <article key={channel.kind} className="notification-card">
-              <header>
+            <article key={channel.kind} className="flex flex-col gap-2.5 rounded-panel border border-line p-3.5">
+              <header className="flex items-start gap-2.5">
                 <ChannelLogo kind={channel.kind} />
-                <div>
-                  <strong>{channel.label}</strong>
-                  <p>{channel.description}</p>
+                <div className="min-w-0 flex-1">
+                  <strong className="block text-[13.5px]">{channel.label}</strong>
+                  <p className="mt-0.5 text-[12px] leading-[1.45] text-muted">{channel.description}</p>
                 </div>
-                <span className={`target-status ${target?.enabled ? "active" : "inactive"}`}>
+                <Pill tone={target?.enabled ? "good" : "neutral"} className="ml-auto">
                   {target?.enabled ? "Active" : target ? "Paused" : "Not configured"}
-                </span>
+                </Pill>
               </header>
               {target && (
-                <div className="target-controls">
-                  <label>
+                <div className="grid grid-cols-[1fr_auto] items-end gap-2 border-t border-line-soft pt-2.5">
+                  <label className="flex flex-col gap-1 text-[11.5px] font-bold text-muted">
                     Notify at
-                    <select value={target.minimumSeverity} onChange={event => void severity(target, event.target.value as Severity)}>
+                    <select
+                      value={target.minimumSeverity}
+                      onChange={event => void severity(target, event.target.value as Severity)}
+                      className="min-h-[34px] w-full rounded-field border border-field-line bg-field px-2 text-[12.5px] text-ink"
+                    >
                       <option value="info">Info and above</option>
                       <option value="warning">Warning and above</option>
                       <option value="critical">Critical and emergency</option>
                       <option value="emergency">Emergency only</option>
                     </select>
                   </label>
-                  <button type="button" className="button secondary" onClick={() => void toggle(target)}>
+                  <Button variant="secondary" onClick={() => void toggle(target)}>
                     {target.enabled ? "Pause" : "Enable"}
-                  </button>
-                  <small>{target.lastDeliveryAt ? `${target.lastDeliveryOk ? "Delivered" : "Failed"} ${relativeTime(target.lastDeliveryAt)}` : "No delivery attempts yet"}</small>
+                  </Button>
+                  <small className="col-span-full text-[11.5px] text-faint">
+                    {target.lastDeliveryAt ? `${target.lastDeliveryOk ? "Delivered" : "Failed"} ${relativeTime(target.lastDeliveryAt)}` : "No delivery attempts yet"}
+                  </small>
                 </div>
               )}
               <NotificationForm
@@ -150,8 +184,8 @@ export function NotificationSection({ token }: { token: string }) {
           );
         })}
       </div>
-      {loading && <p className="loading-inline">Loading notification destinations…</p>}
-    </section>
+      {loading && <p className="py-2.5 text-[13px] text-muted">Loading notification destinations…</p>}
+    </Panel>
   );
 }
 
@@ -197,32 +231,36 @@ function NotificationForm({ channel, token, existing, disabled, onSaved }: {
   }
 
   return (
-    <div className="notification-form-wrap">
-      <button type="button" className="configure-link" disabled={disabled} onClick={() => setOpen(!open)}>
+    <div className="mt-auto border-t border-line-soft pt-2">
+      <button
+        type="button"
+        className="inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent px-0 py-0.5 text-[13px] font-[650] text-blue disabled:cursor-not-allowed disabled:text-faint [&>svg]:size-3.5"
+        disabled={disabled}
+        onClick={() => setOpen(!open)}
+      >
         {existing ? "Replace credentials" : "Configure channel"} <Icon name="chevron" />
       </button>
       {open && (
-        <form className="notification-form" onSubmit={submit}>
+        <form className="mt-2.5 flex flex-col gap-2.5" onSubmit={submit}>
           {channel.kind === "twilio" ? (
             <>
-              <label>Account SID<input required autoComplete="off" value={fields.accountSid ?? ""} onChange={event => set("accountSid", event.target.value)} placeholder="AC…" /></label>
-              <label>Auth token<input required type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} /></label>
-              <div className="field-pair">
-                <label>From number<input required value={fields.from ?? ""} onChange={event => set("from", event.target.value)} placeholder="+15551234567" /></label>
-                <label>Destination number<input required value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="+15557654321" /></label>
+              <TextField label="Account SID" required autoComplete="off" value={fields.accountSid ?? ""} onChange={event => set("accountSid", event.target.value)} placeholder="AC…" />
+              <TextField label="Auth token" required type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} />
+              <div className="grid grid-cols-2 gap-2 max-md:grid-cols-1">
+                <TextField label="From number" required value={fields.from ?? ""} onChange={event => set("from", event.target.value)} placeholder="+15551234567" />
+                <TextField label="Destination number" required value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="+15557654321" />
               </div>
             </>
           ) : channel.kind === "resend" || channel.kind === "postmark" ? (
             <>
-              <label>API token<input required type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} /></label>
-              <label>From address<input required type="email" value={fields.from ?? ""} onChange={event => set("from", event.target.value)} placeholder="alerts@example.com" /></label>
-              <label>Destination address<input required type="email" value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="operator@example.com" /></label>
+              <TextField label="API token" required type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} />
+              <TextField label="From address" required type="email" value={fields.from ?? ""} onChange={event => set("from", event.target.value)} placeholder="alerts@example.com" />
+              <TextField label="Destination address" required type="email" value={fields.to ?? ""} onChange={event => set("to", event.target.value)} placeholder="operator@example.com" />
             </>
           ) : (
             <>
-            <label>
-              {channel.label} webhook URL
-              <input
+              <TextField
+                label={`${channel.label} webhook URL`}
                 required
                 type="url"
                 autoComplete="off"
@@ -230,24 +268,22 @@ function NotificationForm({ channel, token, existing, disabled, onSaved }: {
                 onChange={event => set("url", event.target.value)}
                 placeholder={channel.kind === "discord" ? "https://discord.com/api/webhooks/…" : channel.kind === "slack" ? "https://hooks.slack.com/services/…" : "https://alerts.example.com/brolly"}
               />
-            </label>
-            {channel.kind === "webhook" && (
-              <label>Bearer token (optional)<input type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} /></label>
-            )}
+              {channel.kind === "webhook" && (
+                <TextField label="Bearer token (optional)" type="password" autoComplete="new-password" value={fields.token ?? ""} onChange={event => set("token", event.target.value)} />
+              )}
             </>
           )}
-          <label>
-            Minimum severity
-            <select value={minimumSeverity} onChange={event => setMinimumSeverity(event.target.value as Severity)}>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="critical">Critical</option>
-              <option value="emergency">Emergency only</option>
-            </select>
-          </label>
-          <p className="secret-note"><Icon name="shield" /> Brolly stores this secret encrypted and never displays it again.</p>
-          {error && <p className="form-error">{error}</p>}
-          <button className="button primary full" disabled={busy}>{busy ? "Encrypting and saving…" : "Save notification channel"}</button>
+          <SelectField label="Minimum severity" value={minimumSeverity} onChange={event => setMinimumSeverity(event.target.value as Severity)}>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="critical">Critical</option>
+            <option value="emergency">Emergency only</option>
+          </SelectField>
+          <p className="m-0 flex items-center gap-[7px] text-[12px] text-muted">
+            <Icon name="shield" className="size-3.5" /> Brolly stores this secret encrypted and never displays it again.
+          </p>
+          {error && <Notice tone="error">{error}</Notice>}
+          <Button type="submit" variant="primary" full disabled={busy}>{busy ? "Encrypting and saving…" : "Save notification channel"}</Button>
         </form>
       )}
     </div>

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api";
 import { compactId, dateTime, measurement, metricTitle } from "../format";
 import { tierDescription } from "../lib/meta";
 import type { AssetTier, Incident } from "../types";
 import { ObjectStopImpact } from "./protection";
-import { Drawer, Icon, SeverityBadge } from "./ui";
+import { Button, DetailBlock, Drawer, ExternalAction, Icon, KeyValueList, Notice, Select, SeverityBadge } from "./ui";
 
 /** Backend reasons embed the raw metric key (e.g. "rows_written crossed…"); swap in the readable label. */
 export function humanizeReason(reason: string, metric: string, metricLabel: string): string {
@@ -94,6 +94,17 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
   const runtimeRequired = incident.family === "durable_objects";
   const classified = tier === "standard" || tier === "disposable";
 
+  const whatHappenedRows: Array<[ReactNode, ReactNode]> = [
+    ["First detected", dateTime(incident.firstSeen)],
+    ["Last detected", dateTime(incident.lastSeen)],
+    ["Occurrences", incident.occurrences],
+    [
+      incident.scope === "object" ? "Object ID" : "Resource ID",
+      <code className="font-mono text-[.92em] break-all">{incident.assetId}</code>,
+    ],
+  ];
+  if (incident.parentId) whatHappenedRows.push(["Namespace", <code className="font-mono text-[.92em] break-all">{incident.parentId}</code>]);
+
   return (
     <Drawer
       onClose={onClose}
@@ -107,104 +118,103 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
       }
       footer={
         <>
-          <button
-            type="button"
-            className="button quiet"
+          <Button
+            variant="quiet"
             disabled={incident.status === "acknowledged" || Boolean(busy)}
             onClick={() => void act("ack", () => api(`/api/incidents/${incident.id}/ack`, token, { method: "POST" }))}
           >
             {incident.status === "acknowledged" ? "Acknowledged" : busy === "ack" ? "Acknowledging…" : "Acknowledge incident"}
-          </button>
-          <button type="button" className="button secondary" onClick={onClose}>Done</button>
+          </Button>
+          <Button onClick={onClose}>Done</Button>
         </>
       }
     >
-      <section className="measurement-card">
-        <span>Detected activity</span>
-        <strong>{measurement(incident.observed, incident.unit, incident.windowMs)}</strong>
-        <div>
+      <section className="rounded-panel bg-[#181b1f] p-5 text-white">
+        <span className="text-[12px] text-[#aab2bc]">Detected activity</span>
+        <strong className="mt-1.5 mb-4 block text-[24px] tracking-[-.01em]">{measurement(incident.observed, incident.unit, incident.windowMs)}</strong>
+        <div className="flex justify-between gap-3.5 border-t border-[#383c42] pt-3 text-[13px] text-[#bfc6ce]">
           <span>{incident.threshold == null ? "Trigger" : "Configured limit"}</span>
           <b>{incident.threshold == null ? "Dynamic anomaly vs. baseline" : measurement(incident.threshold, incident.unit, incident.windowMs)}</b>
         </div>
       </section>
 
-      <section className="detail-block">
-        <h3>What happened</h3>
-        <p>{humanizeReason(incident.reason, incident.metric, incident.metricLabel)}.</p>
-        <dl>
-          <div><dt>First detected</dt><dd>{dateTime(incident.firstSeen)}</dd></div>
-          <div><dt>Last detected</dt><dd>{dateTime(incident.lastSeen)}</dd></div>
-          <div><dt>Occurrences</dt><dd>{incident.occurrences}</dd></div>
-          <div><dt>{incident.scope === "object" ? "Object ID" : "Resource ID"}</dt><dd><code>{incident.assetId}</code></dd></div>
-          {incident.parentId && <div><dt>Namespace</dt><dd><code>{incident.parentId}</code></dd></div>}
-        </dl>
-        <a className="button secondary full" href={incident.cloudflareUrl} target="_blank" rel="noreferrer">
+      <DetailBlock>
+        <h3 className="mb-2 text-[14.5px]">What happened</h3>
+        <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{humanizeReason(incident.reason, incident.metric, incident.metricLabel)}.</p>
+        <KeyValueList
+          labelWidth="125px"
+          className="my-3 [&>div]:text-[12.5px] [&>div:first-child]:border-t"
+          rows={whatHappenedRows}
+        />
+        <ExternalAction href={incident.cloudflareUrl}>
           Open in Cloudflare <Icon name="external" />
-        </a>
-      </section>
+        </ExternalAction>
+      </DetailBlock>
 
-      <section className="detail-block">
-        <h3>Response controls</h3>
-        <p>Classification prevents control-plane or critical assets from being stopped accidentally.</p>
+      <DetailBlock>
+        <h3 className="mb-2 text-[14.5px]">Response controls</h3>
+        <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">Classification prevents control-plane or critical assets from being stopped accidentally.</p>
         {runtimeRequired && <ObjectStopImpact compact />}
-        <label>
+        <label className="my-[13px] flex flex-col gap-1.5 text-[13px] font-[680]">
           Asset protection tier
-          <select value={tier} onChange={event => setTier(event.target.value as AssetTier)}>
+          <Select value={tier} onChange={event => setTier(event.target.value as AssetTier)}>
             <option value="unclassified">Unclassified — alert only</option>
             <option value="critical">Critical — alert only</option>
             <option value="standard">Standard — allow approved stop</option>
             <option value="disposable">Disposable — allow approved stop</option>
             <option value="control_plane">Control plane — never stop</option>
-          </select>
-          <small>{tierDescription(tier)}</small>
+          </Select>
+          <small className="font-[450] leading-[1.5] text-muted">{tierDescription(tier)}</small>
         </label>
         {fuseCapable && (
           <div>
             <strong>Owning Worker</strong>
-            <p><code>{owningWorker || "Not reported by Cloudflare"}</code></p>
-            <label className="runtime-confirm"><input type="checkbox" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed</label>
+            <p><code className="font-mono text-[.92em] break-all">{owningWorker || "Not reported by Cloudflare"}</code></p>
+            <label className="inline-flex items-center gap-2 text-[12.5px] font-[650] whitespace-nowrap">
+              <input type="checkbox" className="size-[15px] accent-orange" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed
+            </label>
             <small>Brolly accepts only the ownership mapping returned by Cloudflare. Confirm this after installing the runtime and verify it on the Configuration page.</small>
           </div>
         )}
-        <button type="button" className="button secondary full" disabled={busy === "classify"} onClick={() => void classify()}>
+        <Button full disabled={busy === "classify"} onClick={() => void classify()}>
           {busy === "classify" ? "Saving…" : "Save classification"}
-        </button>
+        </Button>
 
         {supported && incident.severity === "emergency" && (
-          <div className="control-zone">
-            <div>
+          <div className="mt-4 rounded-field border border-warn-line bg-warn-soft p-3.5 dark:text-warn">
+            <div className="mb-3 flex gap-2.5 text-[#9d4c06] dark:text-warn">
               <Icon name="shield" />
-              <span>
+              <span className="flex flex-col gap-[3px]">
                 <strong>Emergency control</strong>
-                <small>{proposedControlText(incident)}</small>
+                <small className="font-[450] text-[#7c5b40] dark:text-warn">{proposedControlText(incident)}</small>
               </span>
             </div>
             {!incident.action && (
-              <button
-                type="button"
-                className="button primary full"
+              <Button
+                variant="primary"
+                full
                 disabled={!classified || (fuseCapable && (!owningWorker || !fuseInstalled)) || Boolean(busy)}
                 onClick={() => void prepare()}
               >
                 {busy === "prepare" ? "Preparing…" : "Prepare reversible stop"}
-              </button>
+              </Button>
             )}
             {incident.action?.state === "prepared" && (
-              <button type="button" className="button danger full" disabled={Boolean(busy)} onClick={() => void execute()}>
+              <Button variant="danger" full disabled={Boolean(busy)} onClick={() => void execute()}>
                 {busy === "execute" ? "Executing…" : "Approve and stop"}
-              </button>
+              </Button>
             )}
             {incident.action?.state === "succeeded" && (
-              <button type="button" className="button primary full" disabled={Boolean(busy)} onClick={() => void resume()}>
+              <Button variant="primary" full disabled={Boolean(busy)} onClick={() => void resume()}>
                 {busy === "resume" ? "Resuming…" : "Resume from rollback"}
-              </button>
+              </Button>
             )}
-            {!classified && <small className="control-hint">Set the tier to Standard or Disposable to enable a stop; control-plane and critical assets only alert.</small>}
+            {!classified && <small className="mt-[9px] block text-[12px] text-[#7c5b40] dark:text-warn">Set the tier to Standard or Disposable to enable a stop; control-plane and critical assets only alert.</small>}
           </div>
         )}
-      </section>
+      </DetailBlock>
 
-      {error && <p className="form-error">{error}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
     </Drawer>
   );
 }

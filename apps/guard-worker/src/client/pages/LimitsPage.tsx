@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { dateTime } from "../format";
 import type { AlertLineView, AlertRuleView, LedgerMetricDefinition, LedgerResource } from "../types";
-import { EmptyState, Icon } from "../components/ui";
+import { Button, EmptyState, Icon, LinkButton, Notice, Panel, PanelHead, Table, TableScroll, Td, Th, Tr } from "../components/ui";
+
+/**
+ * Compact editable cells fill the limit tables, so they use a shorter field
+ * than the standard <Input>; every one shares this box.
+ */
+const COMPACT_FIELD = "rounded-field border border-field-line bg-field px-2 text-ink focus:border-orange focus:shadow-[0_0_0_3px_#f6821f24] focus:outline-none";
 
 export function LimitsPage({ token }: { token: string }) {
   const [rules, setRules] = useState<AlertRuleView[]>([]);
@@ -48,17 +54,15 @@ export function LimitsPage({ token }: { token: string }) {
 
   return (
     <div className="grid gap-4">
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <p className="eyebrow">Period rules</p>
-            <h2>Usage and cost limits</h2>
-            <p className="panel-sub">Each rule targets a resource or selector and supports any number of named threshold lines. Daily periods follow the account timezone; billing-cycle periods follow reconciled Cloudflare boundaries.</p>
-          </div>
-          <button className="button primary" type="button" onClick={() => setCreating(!creating)}><Icon name={creating ? "x" : "wallet"} />{creating ? "Close" : "New limit"}</button>
-        </div>
+      <Panel>
+        <PanelHead
+          eyebrow="Period rules"
+          title="Usage and cost limits"
+          sub="Each rule targets a resource or selector and supports any number of named threshold lines. Daily periods follow the account timezone; billing-cycle periods follow reconciled Cloudflare boundaries."
+          actions={<Button variant="primary" onClick={() => setCreating(!creating)}><Icon name={creating ? "x" : "wallet"} />{creating ? "Close" : "New limit"}</Button>}
+        />
         {creating && <CreateRuleForm token={token} resources={resources} metrics={metrics} onCreated={async () => { setCreating(false); await load(); }} />}
-      </section>
+      </Panel>
 
       {rules.length ? rules.map(rule => (
         <RuleCard
@@ -73,9 +77,9 @@ export function LimitsPage({ token }: { token: string }) {
           onDelete={() => removeRule(rule)}
         />
       )) : (
-        <section className="panel"><EmptyState icon="wallet" title="No ledger limits yet">Create a rule with Warning and Emergency lines or complete setup to migrate existing budgets.</EmptyState></section>
+        <Panel><EmptyState icon="wallet" title="No ledger limits yet">Create a rule with Warning and Emergency lines or complete setup to migrate existing budgets.</EmptyState></Panel>
       )}
-      {error && <p className="form-error" role="alert">{error}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
     </div>
   );
 }
@@ -95,28 +99,26 @@ function RuleCard({ rule, targetResource, resourceName, token, onReload, onToggl
   const exactControlTarget = targetType?.endsWith(":resource") || targetType?.endsWith(":object");
   const aggregateControlTarget = Boolean(targetType) && !exactControlTarget;
   return (
-    <section className="panel">
-      <div className="panel-head">
-        <div>
-          <p className="eyebrow">{rule.period.replace("_", " ")} · {rule.measurement.replace("_", " ")}</p>
-          <h2>{resourceName}</h2>
-          <p className="panel-sub">{rule.metricDefinitionId} · Updated {dateTime(rule.updatedAt)}</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="button secondary" type="button" onClick={() => void onToggle(!rule.enabled)}>{rule.enabled ? "Pause rule" : "Enable rule"}</button>
-          <button className="button quiet" type="button" onClick={() => void onDelete()}>Delete</button>
-        </div>
-      </div>
-      <div className="table-scroll">
-        <table className="data-table">
-          <thead><tr><th>Line</th><th>Threshold</th><th>Action</th><th>Repeat</th><th>State</th><th /></tr></thead>
+    <Panel>
+      <PanelHead
+        eyebrow={`${rule.period.replace("_", " ")} · ${rule.measurement.replace("_", " ")}`}
+        title={resourceName}
+        sub={`${rule.metricDefinitionId} · Updated ${dateTime(rule.updatedAt)}`}
+        actions={<>
+          <Button onClick={() => void onToggle(!rule.enabled)}>{rule.enabled ? "Pause rule" : "Enable rule"}</Button>
+          <Button variant="quiet" onClick={() => void onDelete()}>Delete</Button>
+        </>}
+      />
+      <TableScroll>
+        <Table>
+          <thead><tr><Th>Line</Th><Th>Threshold</Th><Th>Action</Th><Th>Repeat</Th><Th>State</Th><Th /></tr></thead>
           <tbody>
             {rule.lines.map(line => <LineRow key={line.id} line={line} token={token} onReload={onReload} />)}
           </tbody>
-        </table>
-      </div>
-      <div className="flex flex-wrap items-start justify-between gap-4 border-t border-[var(--line-soft)] px-5 py-4">
-        <div className="grid gap-2 text-xs text-[var(--muted)]">
+        </Table>
+      </TableScroll>
+      <div className="flex flex-wrap items-start justify-between gap-4 border-t border-line-soft px-5 py-4">
+        <div className="grid gap-2 text-xs text-muted">
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -137,10 +139,10 @@ function RuleCard({ rule, targetResource, resourceName, token, onReload, onToggl
           </label>
           <small>Automatic controls still require complete, fresh, unsampled usage evidence, verified fuses, inherited permission, and rate-limit capacity.</small>
         </div>
-        <button className="button secondary" type="button" onClick={() => setAdding(!adding)}>{adding ? "Close line form" : "Add threshold line"}</button>
+        <Button onClick={() => setAdding(!adding)}>{adding ? "Close line form" : "Add threshold line"}</Button>
       </div>
       {adding && <AddLineForm ruleId={rule.id} token={token} onAdded={async () => { setAdding(false); await onReload(); }} />}
-    </section>
+    </Panel>
   );
 }
 
@@ -174,14 +176,14 @@ function LineRow({ line, token, onReload }: { line: AlertLineView; token: string
   }
 
   return (
-    <tr>
-      <td><span className="flex items-center gap-2"><input aria-label={`${label} color`} className="size-8 rounded border border-[var(--line)]" type="color" value={color} onChange={event => setColor(event.target.value)} /><span className="grid gap-1"><input className="min-h-8 rounded border border-[var(--line)] px-2" value={label} onChange={event => setLabel(event.target.value)} /><label className="flex items-center gap-1 text-[10px] text-[var(--faint)]">Priority<input className="w-16 rounded border border-[var(--line)] px-1" type="number" step="1" value={priority} onChange={event => setPriority(event.target.value)} /></label></span></span></td>
-      <td><input className="min-h-8 w-32 rounded border border-[var(--line)] px-2 text-right" type="number" min="0" step="any" value={value} onChange={event => setValue(event.target.value)} /></td>
-      <td><select className="min-h-8 rounded border border-[var(--line)] px-2" value={action} onChange={event => setAction(event.target.value as typeof action)}><option value="notify">Notify</option><option value="quarantine">Quarantine</option></select></td>
-      <td><label className="flex items-center gap-1"><input className="min-h-8 w-20 rounded border border-[var(--line)] px-2 text-right" type="number" min={1 / 60} step="any" value={repeatHours} onChange={event => setRepeatHours(event.target.value)} placeholder="Once" /><small>hours</small></label></td>
-      <td><label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{enabled ? "Enabled" : "Disabled"}</label></td>
-      <td><span className="flex justify-end gap-2"><button className="link-button" disabled={busy} onClick={() => void save()}>Save</button><button className="link-button text-[var(--danger)]" onClick={() => void remove()}>Remove</button></span></td>
-    </tr>
+    <Tr>
+      <Td><span className="flex items-center gap-2"><input aria-label={`${label} color`} className={`size-8 ${COMPACT_FIELD}`} type="color" value={color} onChange={event => setColor(event.target.value)} /><span className="grid gap-1"><input className={`min-h-8 ${COMPACT_FIELD}`} value={label} onChange={event => setLabel(event.target.value)} /><label className="flex items-center gap-1 text-[10px] text-faint">Priority<input className={`w-16 px-1 ${COMPACT_FIELD}`} type="number" step="1" value={priority} onChange={event => setPriority(event.target.value)} /></label></span></span></Td>
+      <Td><input className={`min-h-8 w-32 text-right ${COMPACT_FIELD}`} type="number" min="0" step="any" value={value} onChange={event => setValue(event.target.value)} /></Td>
+      <Td><select className={`min-h-8 ${COMPACT_FIELD}`} value={action} onChange={event => setAction(event.target.value as typeof action)}><option value="notify">Notify</option><option value="quarantine">Quarantine</option></select></Td>
+      <Td><label className="flex items-center gap-1"><input className={`min-h-8 w-20 text-right ${COMPACT_FIELD}`} type="number" min={1 / 60} step="any" value={repeatHours} onChange={event => setRepeatHours(event.target.value)} placeholder="Once" /><small>hours</small></label></Td>
+      <Td><label className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />{enabled ? "Enabled" : "Disabled"}</label></Td>
+      <Td><span className="flex justify-end gap-2"><LinkButton disabled={busy} onClick={() => void save()}>Save</LinkButton><button type="button" className="inline-flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[13px] font-[620] text-danger hover:underline" onClick={() => void remove()}>Remove</button></span></Td>
+    </Tr>
   );
 }
 
@@ -251,16 +253,16 @@ function CreateRuleForm({ token, resources, metrics, onCreated }: {
   }
 
   return (
-    <form className="grid gap-3 border-t border-[var(--line-soft)] px-5 py-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={event => void create(event)}>
-      <label className="grid gap-1 text-xs font-bold">Find target<input className="min-h-10 rounded border border-[var(--line)] px-2" value={targetSearch} onChange={event => setTargetSearch(event.target.value)} placeholder="Name or exact Cloudflare ID" /></label>
-      <label className="grid gap-1 text-xs font-bold">Target<select required className="min-h-10 rounded border border-[var(--line)] bg-white px-2" value={targetResourceId} onChange={event => setTargetResourceId(event.target.value)}>{targetCandidates.map(item => <option key={item.id} value={item.id}>{item.displayName} · {item.resourceType}</option>)}</select></label>
-      <label className="grid gap-1 text-xs font-bold">Metric<select required className="min-h-10 rounded border border-[var(--line)] bg-white px-2" value={metricDefinitionId} onChange={event => setMetricDefinitionId(event.target.value)}>{compatibleMetrics.map(item => <option key={item.id} value={item.id}>{item.displayName} · {item.productFamily}</option>)}</select></label>
-      <label className="grid gap-1 text-xs font-bold">Measurement<select className="min-h-10 rounded border border-[var(--line)] bg-white px-2" value={measurement} onChange={event => setMeasurement(event.target.value as AlertRuleView["measurement"])}><option value="usage">Usage</option><option value="estimated_cost">Estimated cost</option><option value="billed_cost">Billed cost</option></select></label>
-      <label className="grid gap-1 text-xs font-bold">Period<select className="min-h-10 rounded border border-[var(--line)] bg-white px-2" value={period} onChange={event => setPeriod(event.target.value as AlertRuleView["period"])}><option value="day">Account-local day</option><option value="billing_cycle">Cloudflare billing cycle</option></select></label>
-      <label className="grid gap-1 text-xs font-bold">Warning<input required type="number" min="0" step="any" className="min-h-10 rounded border border-[var(--line)] px-2" value={warning} onChange={event => setWarning(event.target.value)} /></label>
-      <label className="grid gap-1 text-xs font-bold">Emergency<input required type="number" min="0" step="any" className="min-h-10 rounded border border-[var(--line)] px-2" value={emergency} onChange={event => setEmergency(event.target.value)} /></label>
-      <div className="flex items-end"><button className="button primary" type="submit">Create limit</button></div>
-      {error && <p className="form-error md:col-span-2 xl:col-span-4">{error}</p>}
+    <form className="grid gap-3 border-t border-line-soft px-5 py-4 md:grid-cols-2 xl:grid-cols-4" onSubmit={event => void create(event)}>
+      <label className="grid gap-1 text-xs font-bold">Find target<input className={`min-h-10 ${COMPACT_FIELD}`} value={targetSearch} onChange={event => setTargetSearch(event.target.value)} placeholder="Name or exact Cloudflare ID" /></label>
+      <label className="grid gap-1 text-xs font-bold">Target<select required className={`min-h-10 ${COMPACT_FIELD}`} value={targetResourceId} onChange={event => setTargetResourceId(event.target.value)}>{targetCandidates.map(item => <option key={item.id} value={item.id}>{item.displayName} · {item.resourceType}</option>)}</select></label>
+      <label className="grid gap-1 text-xs font-bold">Metric<select required className={`min-h-10 ${COMPACT_FIELD}`} value={metricDefinitionId} onChange={event => setMetricDefinitionId(event.target.value)}>{compatibleMetrics.map(item => <option key={item.id} value={item.id}>{item.displayName} · {item.productFamily}</option>)}</select></label>
+      <label className="grid gap-1 text-xs font-bold">Measurement<select className={`min-h-10 ${COMPACT_FIELD}`} value={measurement} onChange={event => setMeasurement(event.target.value as AlertRuleView["measurement"])}><option value="usage">Usage</option><option value="estimated_cost">Estimated cost</option><option value="billed_cost">Billed cost</option></select></label>
+      <label className="grid gap-1 text-xs font-bold">Period<select className={`min-h-10 ${COMPACT_FIELD}`} value={period} onChange={event => setPeriod(event.target.value as AlertRuleView["period"])}><option value="day">Account-local day</option><option value="billing_cycle">Cloudflare billing cycle</option></select></label>
+      <label className="grid gap-1 text-xs font-bold">Warning<input required type="number" min="0" step="any" className={`min-h-10 ${COMPACT_FIELD}`} value={warning} onChange={event => setWarning(event.target.value)} /></label>
+      <label className="grid gap-1 text-xs font-bold">Emergency<input required type="number" min="0" step="any" className={`min-h-10 ${COMPACT_FIELD}`} value={emergency} onChange={event => setEmergency(event.target.value)} /></label>
+      <div className="flex items-end"><Button variant="primary" type="submit">Create limit</Button></div>
+      {error && <Notice tone="error" className="md:col-span-2 xl:col-span-4">{error}</Notice>}
     </form>
   );
 }
@@ -271,18 +273,18 @@ function AddLineForm({ ruleId, token, onAdded }: { ruleId: string; token: string
   const [color, setColor] = useState("#dc6b24");
   const [priority, setPriority] = useState("75");
   return (
-    <form className="flex flex-wrap items-end gap-3 border-t border-[var(--line-soft)] px-5 py-4" onSubmit={event => {
+    <form className="flex flex-wrap items-end gap-3 border-t border-line-soft px-5 py-4" onSubmit={event => {
       event.preventDefault();
       void api(`/api/alert-rules/${encodeURIComponent(ruleId)}/lines`, token, {
         method: "POST",
         body: JSON.stringify({ label, thresholdValue: Number(thresholdValue), color, priority: Number(priority), action: "notify", repeatIntervalMs: null, enabled: true }),
       }).then(onAdded);
     }}>
-      <label className="grid gap-1 text-xs font-bold">Label<input required className="min-h-9 rounded border border-[var(--line)] px-2" value={label} onChange={event => setLabel(event.target.value)} /></label>
-      <label className="grid gap-1 text-xs font-bold">Threshold<input required type="number" min="0" step="any" className="min-h-9 rounded border border-[var(--line)] px-2" value={thresholdValue} onChange={event => setThresholdValue(event.target.value)} /></label>
-      <label className="grid gap-1 text-xs font-bold">Priority<input required type="number" min="0" className="min-h-9 w-24 rounded border border-[var(--line)] px-2" value={priority} onChange={event => setPriority(event.target.value)} /></label>
-      <label className="grid gap-1 text-xs font-bold">Color<input type="color" className="h-9 w-16 rounded border border-[var(--line)]" value={color} onChange={event => setColor(event.target.value)} /></label>
-      <button className="button primary" type="submit">Add line</button>
+      <label className="grid gap-1 text-xs font-bold">Label<input required className={`min-h-9 ${COMPACT_FIELD}`} value={label} onChange={event => setLabel(event.target.value)} /></label>
+      <label className="grid gap-1 text-xs font-bold">Threshold<input required type="number" min="0" step="any" className={`min-h-9 ${COMPACT_FIELD}`} value={thresholdValue} onChange={event => setThresholdValue(event.target.value)} /></label>
+      <label className="grid gap-1 text-xs font-bold">Priority<input required type="number" min="0" className={`min-h-9 w-24 ${COMPACT_FIELD}`} value={priority} onChange={event => setPriority(event.target.value)} /></label>
+      <label className="grid gap-1 text-xs font-bold">Color<input type="color" className={`h-9 w-16 ${COMPACT_FIELD}`} value={color} onChange={event => setColor(event.target.value)} /></label>
+      <Button variant="primary" type="submit">Add line</Button>
     </form>
   );
 }

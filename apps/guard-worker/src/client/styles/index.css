@@ -1,13 +1,210 @@
+/* ---------------------------------------------------------------------------
+   Brolly dashboard: Tailwind 4 entry.
+
+   The visual language borrows from the Cloudflare dashboard: restrained
+   neutral surfaces, Cloudflare orange as the single accent, compact
+   operational density, 1px borders, and explicit status semantics.
+
+   Every color the UI uses is a token below. Light values live on :root, dark
+   values swap them under prefers-color-scheme, and `@theme inline` maps them
+   to Tailwind utilities (text-ink, bg-panel, border-line, ...). Components use
+   utility classes only; the few `@utility` blocks at the bottom cover the
+   cases utilities cannot express (masked product glyph, loader animation).
+--------------------------------------------------------------------------- */
 @import "tailwindcss";
-@import "./base.css";
-@import "./shell.css";
-@import "./pages.css";
-@import "./wizard.css";
-@import "./themes.css";
 
 @source "../**/*.{ts,tsx}";
 @source "../../auth.ts";
 
-@theme {
+:root {
+  color-scheme: light;
+  --orange: #f6821f;
+  --orange-hover: #e06d0c;
+  --orange-soft: #fdeedd;
+  --orange-deep: #a34d05;
+  --ink: #1d1f21;
+  --muted: #5b6472;
+  --faint: #8a93a0;
+  --bg: #f2f4f6;
+  --panel: #fff;
+  --panel-soft: #f8f9fa;
+  --line: #d9dee4;
+  --line-soft: #e9edf0;
+  --line-strong: #c3cad2;
+  --hover: #fafbfc;
+  --field: #fff;
+  --field-line: #c3cad2;
+  --chip: #e8ebef;
+  --chip-ink: #4d5560;
+  --blue: #0051c3;
+  --blue-bg: #e3edf8;
+  --blue-ink: #23538e;
+  --purple-bg: #eee9fb;
+  --purple-ink: #5d3fae;
+  --good: #12784a;
+  --good-bg: #e4f3ea;
+  --good-line: #b5dcc5;
+  --warn: #8a5700;
+  --warn-bg: #fcf0da;
+  --warn-line: #ecd4a4;
+  --warn-soft: #fff8ee;
+  --warn-ink: #6e4a08;
+  --danger: #b62525;
+  --danger-bg: #fbe9e8;
+  --danger-line: #f1bcba;
+  --danger-ink: #92201c;
+  --tip: #fff;
+  --tip-line: #cdd3da;
+  --tip-ink: #59636f;
+  --code-bg: #14171b;
+  --code-line: #14171b;
+  --code-ink: #e8ecf1;
+  --dark-surface: #16191d;
+  --shadow-panel: 0 1px 2px #10182808, 0 4px 14px #1018280a;
+  --shadow-drawer: -18px 0 60px #10182835;
+  --shadow-tip: 0 14px 38px #1018282e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --orange-hover: #ff9138;
+    --orange-soft: #342114;
+    --orange-deep: #ffad68;
+    --ink: #f2f4f6;
+    --muted: #a8b0ba;
+    --faint: #7f8995;
+    --bg: #0f1115;
+    --panel: #171a1f;
+    --panel-soft: #1d2127;
+    --line: #343a42;
+    --line-soft: #292f36;
+    --line-strong: #505862;
+    --hover: #1e2329;
+    --field: #111419;
+    --field-line: #505862;
+    --chip: #292f36;
+    --chip-ink: #c6cdd5;
+    --blue: #79b7ff;
+    --blue-bg: #20344c;
+    --blue-ink: #9bc8ff;
+    --purple-bg: #342b4c;
+    --purple-ink: #c7b1ff;
+    --good: #75d9a3;
+    --good-bg: #183629;
+    --good-line: #285940;
+    --warn: #f0c879;
+    --warn-bg: #362a17;
+    --warn-line: #66502b;
+    --warn-soft: #2d2418;
+    --warn-ink: #f0c879;
+    --danger: #ff9690;
+    --danger-bg: #3b2020;
+    --danger-line: #6c3533;
+    --danger-ink: #ffb5b0;
+    --tip: #20242a;
+    --tip-line: #4a525c;
+    --tip-ink: #a8b0ba;
+    --code-bg: #0c0e11;
+    --code-line: #30363d;
+    --code-ink: #e8ecf1;
+    --dark-surface: #0d0f12;
+    --shadow-panel: 0 1px 2px #0004, 0 8px 24px #0003;
+    --shadow-drawer: -18px 0 60px #0009;
+    --shadow-tip: 0 14px 38px #0008;
+  }
+}
+
+@theme inline {
+  --font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+
+  --color-orange: var(--orange);
+  --color-orange-hover: var(--orange-hover);
+  --color-orange-soft: var(--orange-soft);
+  --color-orange-deep: var(--orange-deep);
   --color-cloudflare: #f6821f;
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-soft: var(--panel-soft);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+  --color-hover: var(--hover);
+  --color-field: var(--field);
+  --color-field-line: var(--field-line);
+  --color-chip: var(--chip);
+  --color-chip-ink: var(--chip-ink);
+  --color-blue: var(--blue);
+  --color-blue-bg: var(--blue-bg);
+  --color-blue-ink: var(--blue-ink);
+  --color-purple-bg: var(--purple-bg);
+  --color-purple-ink: var(--purple-ink);
+  --color-good: var(--good);
+  --color-good-bg: var(--good-bg);
+  --color-good-line: var(--good-line);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-line: var(--warn-line);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-ink: var(--warn-ink);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-line: var(--danger-line);
+  --color-danger-ink: var(--danger-ink);
+  --color-tip: var(--tip);
+  --color-tip-line: var(--tip-line);
+  --color-tip-ink: var(--tip-ink);
+  --color-code-bg: var(--code-bg);
+  --color-code-line: var(--code-line);
+  --color-code-ink: var(--code-ink);
+  --color-dark-surface: var(--dark-surface);
+
+  --radius-panel: 8px;
+  --radius-field: 6px;
+
+  --shadow-panel: var(--shadow-panel);
+  --shadow-drawer: var(--shadow-drawer);
+  --shadow-tip: var(--shadow-tip);
+
+  --animate-loader-dot: loader-dot 0.8s infinite alternate;
+  @keyframes loader-dot {
+    to { transform: translateY(-8px); }
+  }
+  /* Access-check cards: each status pops in place as its card resolves. */
+  --animate-access-resolve: access-resolve 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  @keyframes access-resolve {
+    from { opacity: 0; transform: scale(0.5); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@layer base {
+  html { scroll-behavior: smooth; }
+  body {
+    min-width: 320px;
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.45;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+  button, a { touch-action: manipulation; }
+  :focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 3px; }
+}
+
+/* Cloudflare product glyph: the icon is a CSS mask so it inherits currentColor. */
+@utility product-glyph {
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 6px;
+    background: currentColor;
+    -webkit-mask: var(--product-icon) center / contain no-repeat;
+    mask: var(--product-icon) center / contain no-repeat;
+  }
 }
