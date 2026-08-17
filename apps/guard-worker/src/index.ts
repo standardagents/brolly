@@ -11,7 +11,7 @@ import { releaseStatus, saveUpdateRepository } from "./updates.js";
 import { ledgerApiRoute } from "./ledger-api.js";
 import { LedgerStore } from "./ledger-store.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
-import { ensureOnboardingBackfill } from "./backfill.js";
+import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, runInitialIngestion } from "./initial-ingestion.js";
 import { notificationWebhookUrl } from "@standardagents/brolly-notifiers";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
 
@@ -23,7 +23,7 @@ export default {
     })());
   },
 
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return Response.json({ ok: true, service: "brolly-guard" });
     const authResponse = await authRoute(request, env);
@@ -77,6 +77,24 @@ export default {
 
     if (url.pathname === "/api/onboarding" && request.method === "GET") {
       return Response.json(await onboardingData(env));
+    }
+
+    if (url.pathname === "/api/onboarding/ingest" && request.method === "GET") {
+      return Response.json(await initialIngestionProgress(env.DB, env.BROLLY_ACCOUNT_ID), {
+        headers: { "cache-control": "no-store" },
+      });
+    }
+
+    if (url.pathname === "/api/onboarding/ingest" && request.method === "POST") {
+      const job = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, {
+        billingAvailable: await billingIngestionAvailable(env),
+      });
+      if (job.created || job.status === "pending" || job.status === "running") {
+        const work = runInitialIngestion(env, job.id).catch(() => undefined);
+        if (ctx) ctx.waitUntil(work);
+        else void work;
+      }
+      return Response.json({ ok: true, job }, { status: job.created ? 202 : 200, headers: { "cache-control": "no-store" } });
     }
 
     if (url.pathname === "/api/onboarding/estimates" && request.method === "POST") {
@@ -148,9 +166,16 @@ export default {
       const ledger = new LedgerStore(env.DB);
       await ledger.syncMetricCatalog();
       await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, body.policy, true);
-      const backfill = await ensureOnboardingBackfill(env.DB, env.BROLLY_ACCOUNT_ID, now);
+      const initialIngestion = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, {
+        billingAvailable: await billingIngestionAvailable(env), now,
+      });
+      if (initialIngestion.created || initialIngestion.status === "pending" || initialIngestion.status === "running") {
+        const work = runInitialIngestion(env, initialIngestion.id, now).catch(() => undefined);
+        if (ctx) ctx.waitUntil(work);
+        else void work;
+      }
       await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { mode: body.policy.mode, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, runtimeIntegrations: body.integrations?.filter(item => item.installed).length ?? 0, thresholds: body.policy.thresholds.length });
-      return Response.json({ ok: true, policy: body.policy, backfill });
+      return Response.json({ ok: true, policy: body.policy, initialIngestion });
     }
 
     if (url.pathname === "/api/status" && request.method === "GET") {

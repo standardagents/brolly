@@ -189,7 +189,7 @@ export default function App() {
       connection={connection}
       scanning={scanning}
       onScan={() => void scan()}
-      onBudgets={() => void openWizard(1)}
+      onBudgets={() => void openWizard(2)}
       onLogout={() => void logout()}
       release={release}
     >
@@ -202,7 +202,7 @@ export default function App() {
           scanSummary={scanSummary}
           onNavigate={navigate}
           onOpenIncident={openIncident}
-          onBudgets={() => void openWizard(1)}
+          onBudgets={() => void openWizard(2)}
         />
       )}
       {route === "usage" && <UsagePage token={token} />}
@@ -226,7 +226,7 @@ export default function App() {
           connection={connection}
           token={token}
           onNavigate={navigate}
-          onEditInstall={() => void openWizard(5)}
+          onEditInstall={() => void openWizard(6)}
         />
       )}
       {route === "notifications" && <NotificationsPage token={token} />}
@@ -238,7 +238,7 @@ export default function App() {
           connection={connection}
           token={token}
           onNavigate={navigate}
-          onBudgets={() => void openWizard(1)}
+          onBudgets={() => void openWizard(2)}
           onLogout={logout}
           release={release}
           onReleaseRefresh={() => void loadRelease()}

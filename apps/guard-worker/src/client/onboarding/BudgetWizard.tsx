@@ -13,9 +13,11 @@ import { preparePolicy, prepareRuntimeIntegrations } from "./model";
 import { useBudgetEstimates } from "./useBudgetEstimates";
 import { useOnboardingSave } from "./useOnboardingSave";
 import { useWizardNavigation } from "./useWizardNavigation";
+import { ImportHistoryStep } from "./ingest";
 
 const STEPS = [
   { label: "Confirm account access", preview: "Confirm which Cloudflare usage APIs Brolly can read." },
+  { label: "Import history", preview: "Pull the last 90 days of usage and billing." },
   { label: "Account budget", preview: "One daily dollar limit for the whole account." },
   { label: "Product budgets", preview: "A daily limit for each Cloudflare product." },
   { label: "Resource budgets", preview: "A daily limit for each Worker and Durable Object namespace." },
@@ -51,6 +53,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       onVerify={() => void estimates.verifyAccess()}
       onVerified={estimates.acceptBillingAccess}
     />,
+    <ImportHistoryStep token={token} billingConnected={billingConnected} onContinue={navigation.advance} />,
     <AccountBudgetStep
       data={data}
       estimates={estimates.estimates}
@@ -89,8 +92,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               >
                 <p className="eyebrow orange">Step {index + 1} of {STEPS.length}</p>
                 {bodies[index]}
-                {index === navigation.unlocked && index === 1 && estimates.suggestionError && <p className="form-error">{estimates.suggestionError}</p>}
-                {index === navigation.unlocked && index < STEPS.length - 1 && (index !== 0 || estimates.estimates) && (
+                {index === navigation.unlocked && index === 2 && estimates.suggestionError && <p className="form-error">{estimates.suggestionError}</p>}
+                {index === navigation.unlocked && index < STEPS.length - 1 && index !== 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}
                     busy={save.busy || (index === 0 && estimates.busy)}
@@ -169,7 +172,7 @@ function ContinueFooter({ billingConnected, busy, firstStep, onContinue }: {
   firstStep: boolean;
   onContinue: () => void;
 }) {
-  const label = firstStep ? billingConnected ? "Continue to limits" : "Continue without billing access" : "Continue";
+  const label = firstStep ? billingConnected ? "Continue to import" : "Continue without billing access" : "Continue";
   return (
     <footer className="setup-actions">
       <span className="flex w-full flex-wrap items-center justify-between gap-4">

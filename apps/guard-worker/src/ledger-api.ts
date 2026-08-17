@@ -256,7 +256,7 @@ async function createBackfill(request: Request, db: D1Database, accountId: strin
   const body = await request.json<{ startsAt?: number; endsAt?: number }>();
   const endsAt = finiteTimestamp(body.endsAt) ?? Date.now();
   const startsAt = finiteTimestamp(body.startsAt) ?? endsAt - 30 * 86_400_000;
-  if (startsAt >= endsAt || endsAt - startsAt > 730 * 86_400_000) return Response.json({ error: "Backfill range must be between one day and 730 days" }, { status: 400 });
+  if (startsAt >= endsAt || endsAt - startsAt > 90 * 86_400_000) return Response.json({ error: "Backfill range must be between one day and 90 days" }, { status: 400 });
   const capabilities = await db.prepare(
     `SELECT DISTINCT collector_key FROM collector_capabilities WHERE account_id=?1 AND available=1 AND collector_key LIKE 'graphql:%' LIMIT 50`,
   ).bind(accountId).all<{ collector_key: string }>();

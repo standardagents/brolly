@@ -93,7 +93,8 @@ is due every five minutes. Hot watch can run each minute while a current alert
 instance is open and the aligned Cloudflare watermark has advanced. Inventory,
 billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
-budget left after active safeguards.
+budget left after active safeguards. First-run initial ingestion has a separate
+bounded request budget and leaves unfinished slices for the cron scheduler.
 
 Active telemetry uses one fixed completed five-minute window and a fixed pass
 over the preceding window for correction. Continuations retain those original
@@ -113,10 +114,19 @@ usage_daily rows, with account, product, namespace, and individual history
 retained for up to 730 days under D1 capacity safeguards.
 
 Billing Read reconciliation runs hourly. Cloudflare billing data defines
-authoritative aggregate charges and actual cycle boundaries. Detailed resource
+authoritative aggregate charges and actual cycle boundaries. Requests align to
+the account billing-cycle start so reconciliation includes every available
+cycle row. Detailed resource
 cost remains modeled; a product/day charge is proportionally allocated only
 where granular usage provides a defensible weighting. Unmapped billing products
 remain visible through account/product catchalls and explicit coverage gaps.
+
+Setup offers a one-shot import of Cloudflare's available 90-day history. Usage
+collectors split the window into at most three 32-day slices, and Billing Read
+uses one cycle-aligned slice. This ingestion path writes normalized ledger data
+without entering alert, notification, or control evaluation. Daily collection
+extends the stored history after setup, subject to the 730-day D1 retention
+ceiling.
 
 The implementation details, API surface, cost labels, and retention policy are
 maintained in [usage-ledger.md](usage-ledger.md).
@@ -162,7 +172,7 @@ OAuth invalidates the 15-minute access cache. A Billing Read token submitted in
 setup is tested against the bound account before its AES-GCM envelope is stored
 under `billing_credentials` in D1; it is never returned to the client. A Worker
 secret with the same purpose takes precedence. Only the explicit historical
-usage action on the following account-budget screen copies suggestions into
+usage action on the later account-budget screen copies suggestions into
 the editable policy draft.
 
 Scoped budgets take precedence over family defaults. Per-object Durable Object

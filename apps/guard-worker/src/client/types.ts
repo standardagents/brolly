@@ -48,6 +48,27 @@ export interface OnboardingBudgetEstimates {
   }>;
 }
 
+export interface InitialIngestionJob {
+  id: string;
+  status: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export interface InitialIngestionCollector {
+  collector: string;
+  label: string;
+  total: number;
+  complete: number;
+  failed: number;
+  oldestCompleteAt: string | number | null;
+}
+
+export interface InitialIngestionResponse {
+  job: InitialIngestionJob | null;
+  collectors: InitialIngestionCollector[];
+}
+
 export interface BillingAccessStatus {
   configured: boolean;
   source: "worker_secret" | "encrypted_database" | "none";

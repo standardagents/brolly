@@ -7,6 +7,13 @@ while a current alert is open and Cloudflare's completed ingestion watermark
 has advanced. Newest-first backfill consumes only budget left after active
 protection work.
 
+The first-run **Import history** step starts a one-shot 90-day ingestion job.
+Each usage collector receives at most three 32-day slices. Billing Read adds
+one cycle-aligned slice. The job uses a separate budget of 40 GraphQL queries,
+five REST requests, and 25 seconds. Setup can continue while the cron scheduler
+finishes eligible slices. The progress view reports stored slice counts and
+dates.
+
 One run has default limits of 300 GraphQL dataset queries, 50 REST requests,
 100,000 D1 rows read, 50,000 D1 rows written, 30 dataset pages, four backfill
 slices, and 45 seconds. Configurable values remain under hard maxima. Budget
@@ -29,6 +36,12 @@ the installation's D1 database for 15 minutes, concurrent checks are refused,
 and no incidents, notifications, controls, or policy changes are created. The
 browser applies returned suggestions only to its editable draft; setup must be
 finished before any suggested limit is saved.
+
+Initial and manual historical ingestion update ledger coverage and daily
+history without evaluating alert rules. A failed slice retries after 30
+seconds, two minutes, and eight minutes. Exhausted retries record missing
+coverage and allow the remaining job to complete. Cloudflare rate-limit
+responses honor one `Retry-After` delay before slice retry handling resumes.
 
 One fixed completed window and one fixed preceding correction window update
 correction-safe local-day and billing-cycle accumulators. Persisted continuations
@@ -146,7 +159,7 @@ Connected rows explicitly require no action.
 Operators may continue onboarding without Billing Read, but the access-step
 footer labels that choice explicitly and recommends adding the token because
 invoice-aligned account totals materially improve protection. Once Billing
-Read is verified, the normal **Continue to limits** action is restored.
+Read is verified, the normal **Continue to import** action is restored.
 The same account-scoped token generator, paste-and-verify form, connection
 status, and replacement workflow remain available under **Settings → Daily
 billing access** after onboarding. Skipping the first-run prompt therefore
@@ -169,7 +182,8 @@ to the Billing Read-compatible PayGo `/billable-usage` endpoint. The response
 supplies authoritative aggregate charges and actual billing-cycle boundaries.
 Enterprise accounts continue with bounded Analytics estimates and explicit
 billing coverage state when an invoice-aligned result is unavailable.
-The next account-budget screen can apply the cached historical suggestions.
+The account-budget screen can apply the cached historical suggestions after
+the history import step.
 Brolly OAuth access is renewable: the publisher client enables refresh tokens,
 the authorization request includes `offline_access`, and each installation
 refreshes its encrypted grant five minutes before expiry. An installation that

@@ -59,7 +59,7 @@ or the instance is replaced. Later sign-ins must authorize the same account; any
 Cloudflare member able to grant Brolly's requested scopes for that account may
 sign in. Brolly encrypts the latest revocable OAuth grant in your own D1 database
 and asks for limits for every discovered product, Worker, and namespace. The
-first setup step verifies monitoring access. The following budget step can read
+first setup step verifies monitoring access. A later budget step can read
 the previous rolling 24 hours and prefill
 suggested limits with 25%, 75%, and 150% headroom. It uses at most two bounded
 Analytics requests plus one Billing request when Billing Read is configured,
@@ -75,8 +75,10 @@ denied Analytics scope, or guided Billing Read setup when billing is missing.
 The billing guide provides a copyable least-privilege token recipe. A token
 entered there is verified before
 it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
-the installation's D1. The following account-budget screen has the historical
-usage button; verifying access alone never changes a limit. An operator may
+the installation's D1. The next step imports Cloudflare's available 90-day
+usage and billing history with exact per-collector progress. Setup can continue
+while that bounded job runs in the background. The account-budget screen then
+offers historical usage suggestions for the editable draft. An operator may
 instead continue supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which
 takes precedence over the D1 credential.
 

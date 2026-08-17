@@ -27,6 +27,7 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import type { InitialIngestionResponse } from "./src/client/types.ts";
 
 const now = Date.now();
 const HOUR = 3_600_000;
@@ -213,6 +214,30 @@ const onboarding = {
       : discoveredAssets.map(asset => ({ ...asset, protection: "coverage_gap" }))
     : discoveredAssets,
 };
+
+const initialIngestion: InitialIngestionResponse = {
+  job: { id: "initial-demo", status: "running", startedAt: now, updatedAt: now },
+  collectors: [
+    { collector: "graphql:workers", label: "Workers", total: 3, complete: 0, failed: 0, oldestCompleteAt: null },
+    { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 0, failed: 0, oldestCompleteAt: null },
+    { collector: "billing", label: "Billing", total: 1, complete: 0, failed: 0, oldestCompleteAt: null },
+  ],
+};
+let initialIngestionPolls = 0;
+
+function advanceInitialIngestion(): InitialIngestionResponse {
+  initialIngestionPolls += 1;
+  const workers = Math.min(3, initialIngestionPolls);
+  const durableObjects = Math.min(3, Math.max(0, initialIngestionPolls - 1));
+  const billing = initialIngestionPolls >= 4 ? 1 : 0;
+  initialIngestion.collectors = initialIngestion.collectors.map(item => {
+    const complete = item.collector === "graphql:workers" ? workers : item.collector === "graphql:durable_objects" ? durableObjects : billing;
+    return { ...item, complete, oldestCompleteAt: complete ? "2026-05-19" : null };
+  });
+  const done = initialIngestion.collectors.every(item => item.complete + item.failed >= item.total);
+  initialIngestion.job = { ...initialIngestion.job!, status: done ? "complete" : "running", updatedAt: Date.now() };
+  return initialIngestion;
+}
 
 const incidents = [
   {
@@ -573,6 +598,8 @@ function demoApi(): Plugin {
         const billingRoute = url.pathname === "/api/billing-access" || url.pathname === "/api/onboarding/billing-access";
         if (url.pathname === "/api/auth/session") return send(session);
         if (url.pathname === "/api/onboarding" && get) return send(onboarding);
+        if (url.pathname === "/api/onboarding/ingest" && get) return send(advanceInitialIngestion());
+        if (url.pathname === "/api/onboarding/ingest" && req.method === "POST") return send({ ok: true });
         if (billingRoute && get) return send(billingAccess);
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);

@@ -1,8 +1,8 @@
 import { type DurableObjectUsageCursor, CloudflareClient } from "./cloudflare.js";
-import { evaluateUsageAlerts } from "./alert-engine.js";
 import type { Env } from "./env.js";
-import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
+import { LedgerStore } from "./ledger-store.js";
 import type { LedgerRunBudget } from "@standardagents/brolly-core";
+import { ingestWindow, type UsageCollector } from "./ingest.js";
 
 interface SliceRow {
   id: string;
@@ -11,55 +11,7 @@ interface SliceRow {
   starts_at: number;
   ends_at: number;
   cursor_json: string | null;
-}
-
-export async function ensureOnboardingBackfill(
-  db: D1Database,
-  accountId: string,
-  now = Date.now(),
-): Promise<{ jobs: number; slices: number }> {
-  const existing = await db.prepare(
-    `SELECT 1 AS present FROM backfill_jobs WHERE account_id=?1 LIMIT 1`,
-  ).bind(accountId).first<{ present: number }>();
-  if (existing) return { jobs: 0, slices: 0 };
-  const capabilityRows = await db.prepare(
-    `SELECT DISTINCT collector_key FROM collector_capabilities
-     WHERE account_id=?1 AND available=1 AND collector_key LIKE 'graphql:%' LIMIT 50`,
-  ).bind(accountId).all<{ collector_key: string }>();
-  const collectors = capabilityRows.results.length
-    ? capabilityRows.results.map(row => row.collector_key)
-    : ["graphql:durable-objects", "graphql:workers"];
-  const monthStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
-  const phases = [
-    { startsAt: now - 86_400_000, endsAt: now },
-    { startsAt: monthStart, endsAt: now - 86_400_000 },
-    { startsAt: now - 730 * 86_400_000, endsAt: monthStart },
-  ].filter(phase => phase.startsAt < phase.endsAt);
-  let slices = 0;
-  const statements: D1PreparedStatement[] = [];
-  for (const phase of phases) {
-    const jobId = crypto.randomUUID();
-    statements.push(db.prepare(
-      `INSERT INTO backfill_jobs(
-         id,account_id,requested_start_at,requested_end_at,newest_first,status,created_at,updated_at
-       ) VALUES(?1,?2,?3,?4,1,'pending',?5,?5)`,
-    ).bind(jobId, accountId, phase.startsAt, phase.endsAt, now));
-    for (let end = phase.endsAt; end > phase.startsAt; end -= 86_400_000) {
-      const start = Math.max(phase.startsAt, end - 86_400_000);
-      for (const collector of collectors) {
-        statements.push(db.prepare(
-          `INSERT INTO backfill_slices(
-             id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at
-           ) VALUES(?1,?2,?3,'',?4,?5,'pending','missing',?6)`,
-        ).bind(crypto.randomUUID(), jobId, collector, start, end, now));
-        slices += 1;
-      }
-    }
-  }
-  for (let offset = 0; offset < statements.length; offset += 100) {
-    await db.batch(statements.slice(offset, offset + 100));
-  }
-  return { jobs: phases.length, slices };
+  retry_count?: number;
 }
 
 export async function runOneBackfillSlice(
@@ -68,17 +20,25 @@ export async function runOneBackfillSlice(
   ledger: LedgerStore,
   budget: LedgerRunBudget,
   timeZone: string,
+  options: { jobId?: string; kind?: string } = {},
 ): Promise<{ worked: boolean; complete: boolean; samples: number }> {
-  if (budget.remaining("graphqlQueries") < 16 || budget.remaining("d1RowsWritten") < 1_000 || budget.remaining("wallMs") < 8_000) {
+  if (budget.remaining("d1RowsWritten") < 1_000 || budget.remaining("wallMs") < 8_000) {
     return { worked: false, complete: false, samples: 0 };
   }
   const slice = await env.DB.prepare(
     `SELECT s.* FROM backfill_slices s JOIN backfill_jobs j ON j.id=s.backfill_job_id
      WHERE s.status='pending' AND j.status IN ('pending','running')
+       AND (?1 IS NULL OR j.id=?1)
+       AND (?2 IS NULL OR j.kind=?2)
+       AND (s.next_eligible_at IS NULL OR s.next_eligible_at<=?3)
      ORDER BY s.ends_at DESC,s.collector_key LIMIT 1`,
-  ).first<SliceRow>();
+  ).bind(options.jobId ?? null, options.kind ?? null, Date.now()).first<SliceRow>();
   budget.charge("d1RowsRead", slice ? 1 : 0);
   if (!slice) return { worked: false, complete: true, samples: 0 };
+  const collector = toUsageCollector(slice.collector_key);
+  if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < 16) {
+    return { worked: false, complete: false, samples: 0 };
+  }
   budget.charge("backfillSlices");
   const claimed = await env.DB.prepare(
     `UPDATE backfill_slices SET status='running',updated_at=?2 WHERE id=?1 AND status='pending'`,
@@ -86,53 +46,43 @@ export async function runOneBackfillSlice(
   budget.charge("d1RowsWritten", Number(claimed.meta.rows_written ?? claimed.meta.changes ?? 0));
   if (Number(claimed.meta.changes ?? 0) !== 1) return { worked: false, complete: false, samples: 0 };
   try {
-    let observations;
-    let complete = true;
-    let cursor: unknown;
-    if (slice.collector_key.includes("durable")) {
-      const result = await client.durableObjectUsagePaged(slice.starts_at, slice.ends_at, {
-        cursor: parseCursor(slice.cursor_json), maxPages: 2,
-      });
-      complete = result.complete;
-      cursor = result.continuation;
-      observations = expandUsageObservations(
-        result.samples, "graphql:durable-objects", "durable-object-usage",
-        result.complete ? "complete" : "partial",
-        { watermarkAt: result.watermarkAt, historical: true },
-      );
-    } else if (slice.collector_key.includes("workers")) {
-      const result = await client.workerUsage(slice.starts_at, slice.ends_at, {
-        cursor: parseWorkerCursor(slice.cursor_json),
-        maxPages: 2,
-      });
-      complete = result.complete;
-      cursor = result.continuation;
-      observations = expandUsageObservations(
-        result.samples, "graphql:workers", "workersInvocationsAdaptive",
-        result.complete ? "complete" : "partial",
-        { watermarkAt: slice.ends_at, historical: true },
-      );
-    } else {
+    if (!collector) {
       await finishSlice(env.DB, budget, slice, "complete", null, "Collector has no historical implementation", "missing");
+      await updateJobStatus(env.DB, budget, slice.backfill_job_id);
       return { worked: true, complete: true, samples: 0 };
     }
-    const changes = await ledger.applyObservations(observations, timeZone);
-    const cycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, slice.ends_at - 1);
-    await evaluateUsageAlerts(env, changes, {
-      timeZone, billingCycleId: cycle.id, billingCycleStart: cycle.startsAt,
-      billingCycleEnd: cycle.endsAt, now: Date.now(), budget,
+    const result = await ingestWindow({
+      env, client, ledger, collector, startsAt: slice.starts_at, endsAt: slice.ends_at,
+      cursor: collector === "graphql:durable-objects" ? parseCursor(slice.cursor_json) : parseWorkerCursor(slice.cursor_json),
+      budget, timeZone, historical: true, maxPages: 2,
     });
+    const unavailable = result.coverage.find(item =>
+      (item.state === "permission_denied" || item.state === "unavailable")
+      && !(collector === "graphql:workers" && item.metric === "cache_requests")
+    );
+    if (unavailable) throw new Error(unavailable.detail ?? `${collector} telemetry is ${unavailable.state}`);
+    const terminal = collector === "billing" || result.complete;
+    const coverage = collector === "billing"
+      ? result.coverage.some(item => item.metric === "initial_import_gaps" && item.state !== "healthy") ? "partial" : "complete"
+      : result.complete ? "complete" : "partial";
     await finishSlice(
-      env.DB, budget, slice, complete ? "complete" : "pending", cursor,
-      complete ? null : "Continuation saved after the bounded page budget", complete ? "complete" : "partial",
+      env.DB, budget, slice, terminal ? "complete" : "pending", result.continuation,
+      terminal ? null : "Continuation saved after the bounded page budget",
+      coverage,
     );
     await updateJobStatus(env.DB, budget, slice.backfill_job_id);
-    return { worked: true, complete, samples: observations.length };
+    return { worked: true, complete: result.complete, samples: result.observations };
   } catch (error) {
+    const previousRetryCount = Math.min(3, Number(slice.retry_count ?? 0));
+    const failed = previousRetryCount >= 3;
+    // Keep retry_count as the number of retries scheduled. A terminal attempt
+    // does not advance it beyond the configured maximum.
+    const retryCount = failed ? 3 : previousRetryCount + 1;
     await finishSlice(
-      env.DB, budget, slice, "pending", parseCursor(slice.cursor_json),
-      error instanceof Error ? error.message : String(error), "missing", true,
+      env.DB, budget, slice, failed ? "failed" : "pending", parseCursor(slice.cursor_json),
+      error instanceof Error ? error.message : String(error), "missing", !failed, retryCount,
     );
+    await updateJobStatus(env.DB, budget, slice.backfill_job_id);
     return { worked: true, complete: false, samples: 0 };
   }
 }
@@ -146,14 +96,18 @@ async function finishSlice(
   error: string | null,
   coverage: string,
   retry = false,
+  retryCount?: number,
 ): Promise<void> {
+  const nextEligibleAt = retry && (retryCount ?? 0) <= 3
+    ? Date.now() + [30_000, 120_000, 480_000][Math.max(0, (retryCount ?? 1) - 1)]!
+    : null;
   const result = await db.prepare(
     `UPDATE backfill_slices SET
        status=?2,cursor_json=?3,error=?4,coverage_status=?5,
-       retry_count=retry_count+?6,updated_at=?7 WHERE id=?1`,
+       retry_count=COALESCE(?6,retry_count),next_eligible_at=?7,updated_at=?8 WHERE id=?1`,
   ).bind(
     slice.id, status, cursor ? JSON.stringify(cursor) : null, error?.slice(0, 2000) ?? null,
-    coverage, retry ? 1 : 0, Date.now(),
+    coverage, retryCount ?? null, nextEligibleAt, Date.now(),
   ).run();
   budget.charge("d1RowsWritten", Number(result.meta.rows_written ?? result.meta.changes ?? 0));
 }
@@ -162,11 +116,18 @@ async function updateJobStatus(db: D1Database, budget: LedgerRunBudget, jobId: s
   const result = await db.prepare(
     `UPDATE backfill_jobs SET
        status=CASE WHEN EXISTS(
-         SELECT 1 FROM backfill_slices WHERE backfill_job_id=?1 AND status!='complete'
+         SELECT 1 FROM backfill_slices WHERE backfill_job_id=?1 AND status IN ('pending','running')
        ) THEN 'running' ELSE 'complete' END,
        updated_at=?2 WHERE id=?1`,
   ).bind(jobId, Date.now()).run();
   budget.charge("d1RowsWritten", Number(result.meta.rows_written ?? result.meta.changes ?? 0));
+}
+
+function toUsageCollector(value: string): UsageCollector | null {
+  if (value === "billing" || value.includes("billing")) return "billing";
+  if (value.includes("durable")) return "graphql:durable-objects";
+  if (value.includes("workers")) return "graphql:workers";
+  return null;
 }
 
 function parseCursor(value: string | null): DurableObjectUsageCursor | undefined {

@@ -229,4 +229,74 @@ describe("Cloudflare billing telemetry", () => {
     ]);
     expect(result?.[0]).toMatchObject({ x_BillableMetricId: "workers_standard_requests", x_ProductFamilyId: "workers" });
   });
+
+  it("retries one 429 response after Retry-After", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return new Response(JSON.stringify({ errors: [{ message: "rate limited" }] }), {
+        status: 429, headers: { "Retry-After": "0" },
+      });
+      return Response.json({ success: true, result: [] });
+    }));
+
+    const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
+    await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(Date.now() - 86_400_000, Date.now());
+    expect(calls).toBe(2);
+  });
+
+  it("aligns a short billing window to the preceding cycle start", async () => {
+    const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      return Response.json({ success: true, result: [{
+        BilledCost: 0.75,
+        ChargePeriodStart: "2026-08-12T00:00:00Z",
+        ChargePeriodEnd: "2026-08-13T00:00:00Z",
+        BillingPeriodStart: "2026-08-09T00:00:00Z",
+        BillingPeriodEnd: "2026-09-09T00:00:00Z",
+        ConsumedQuantity: 1,
+        ConsumedUnit: "Count",
+        x_BillableMetricId: "workers_standard_requests",
+        x_BillableMetricName: "Workers Standard Requests",
+        x_ProductFamilyId: "workers",
+        x_ProductFamilyName: "Workers",
+      }] });
+    }));
+
+    await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(
+      Date.parse("2026-07-17T00:00:00Z"), Date.parse("2026-08-17T00:00:00Z"),
+    );
+    expect(urls).toHaveLength(2);
+    expect(new URL(urls[1]!).searchParams.get("from")).toBe("2026-07-09");
+  });
+
+  it("aligns the Billing Read PayGo fallback to the preceding cycle start", async () => {
+    const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      urls.push(url);
+      if (urls.length === 1) return Response.json({ success: false, errors: [{ message: "restricted" }] }, { status: 403 });
+      return Response.json({ success: true, result: [{
+        BilledCost: 0.75,
+        ChargePeriodStart: "2026-08-12T00:00:00Z",
+        ChargePeriodEnd: "2026-08-13T00:00:00Z",
+        BillingPeriodStart: "2026-08-09T00:00:00Z",
+        BillingPeriodEnd: "2026-09-09T00:00:00Z",
+        ConsumedQuantity: 1,
+        ConsumedUnit: "Count",
+        ServiceName: "Workers Standard Requests",
+        ServiceFamilyName: "Workers",
+      }] });
+    }));
+
+    await new CloudflareClient(billingEnv, new RunBudget()).billingUsage(
+      Date.parse("2026-07-17T00:00:00Z"), Date.parse("2026-08-17T00:00:00Z"),
+    );
+    expect(urls).toHaveLength(3);
+    expect(new URL(urls[1]!).searchParams.get("from")).toBe("2026-07-17");
+    expect(new URL(urls[2]!).searchParams.get("from")).toBe("2026-07-09");
+    expect(new URL(urls[2]!).searchParams.get("to")).toBe("2026-08-17");
+  });
 });

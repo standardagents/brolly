@@ -5,8 +5,8 @@ import type { Env } from "./env.js";
 import { Store } from "./store.js";
 import { openJson } from "./credentials.js";
 import { AutomaticDeploymentLimitError, executeDeploymentFuseBatch } from "./control.js";
-import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
-import { reconcileBilling } from "./billing-ledger.js";
+import { LedgerStore } from "./ledger-store.js";
+import { ingestWindow } from "./ingest.js";
 import { dispatchAlertNotifications, evaluateUsageAlerts } from "./alert-engine.js";
 import { runRetentionMaintenance } from "./retention.js";
 import { runOneBackfillSlice } from "./backfill.js";
@@ -113,10 +113,26 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     const workerActiveWindow = collectorWindow(workerActiveCursor, since, collectionEnd);
     const workerCorrectionWindow = collectorWindow(workerCorrectionCursor, since - 5 * 60_000, since);
     const [durableObjects, durableCorrections, workers, workerCorrections] = await Promise.all([
-      client.durableObjectUsagePaged(durableActiveWindow.startAt, durableActiveWindow.endAt, { cursor: durableActiveWindow.cursor }),
-      client.durableObjectUsagePaged(durableCorrectionWindow.startAt, durableCorrectionWindow.endAt, { cursor: durableCorrectionWindow.cursor }),
-      client.workerUsage(workerActiveWindow.startAt, workerActiveWindow.endAt, { cursor: workerActiveWindow.cursor }),
-      client.workerUsage(workerCorrectionWindow.startAt, workerCorrectionWindow.endAt, { cursor: workerCorrectionWindow.cursor }),
+      ingestWindow({
+        env, client, ledger, collector: "graphql:durable-objects", budget: ledgerBudget, timeZone,
+        startsAt: durableActiveWindow.startAt, endsAt: durableActiveWindow.endAt, cursor: durableActiveWindow.cursor,
+        persist: false,
+      }),
+      ingestWindow({
+        env, client, ledger, collector: "graphql:durable-objects", budget: ledgerBudget, timeZone,
+        startsAt: durableCorrectionWindow.startAt, endsAt: durableCorrectionWindow.endAt, cursor: durableCorrectionWindow.cursor,
+        persist: false,
+      }),
+      ingestWindow({
+        env, client, ledger, collector: "graphql:workers", budget: ledgerBudget, timeZone,
+        startsAt: workerActiveWindow.startAt, endsAt: workerActiveWindow.endAt, cursor: workerActiveWindow.cursor,
+        persist: false,
+      }),
+      ingestWindow({
+        env, client, ledger, collector: "graphql:workers", budget: ledgerBudget, timeZone,
+        startsAt: workerCorrectionWindow.startAt, endsAt: workerCorrectionWindow.endAt, cursor: workerCorrectionWindow.cursor,
+        persist: false,
+      }),
     ]);
     runContinuation = {
       durableObjects: windowContinuation(durableActiveWindow, durableObjects.continuation, collectionEnd),
@@ -133,29 +149,12 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
       [...workers.samples, ...workerCorrections.samples].map(sample => sample.asset),
       "workers",
     );
+    normalizedSamples = durableObjects.observations + durableCorrections.observations
+      + workers.observations + workerCorrections.observations;
     const ledgerObservations = [
-      ...expandUsageObservations(
-        durableCorrections.samples, "graphql:durable-objects", "durable-object-usage",
-        durableCorrections.complete ? "complete" : "partial",
-        { watermarkAt: durableCorrections.watermarkAt },
-      ),
-      ...expandUsageObservations(
-        durableObjects.samples, "graphql:durable-objects", "durable-object-usage",
-        durableObjects.complete ? "complete" : "partial",
-        { watermarkAt: durableObjects.watermarkAt },
-      ),
-      ...expandUsageObservations(
-        workerCorrections.samples, "graphql:workers", "workersInvocationsAdaptive",
-        workerCorrections.complete ? "complete" : "partial",
-        { watermarkAt: workerCorrections.watermarkAt },
-      ),
-      ...expandUsageObservations(
-        workers.samples, "graphql:workers", "workersInvocationsAdaptive",
-        workers.complete ? "complete" : "partial",
-        { watermarkAt: workers.watermarkAt },
-      ),
+      ...(durableCorrections.normalizedObservations ?? []), ...(durableObjects.normalizedObservations ?? []),
+      ...(workerCorrections.normalizedObservations ?? []), ...(workers.normalizedObservations ?? []),
     ];
-    normalizedSamples = ledgerObservations.length;
     const ledgerChanges = await ledger.applyObservations(ledgerObservations, timeZone);
     const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
     const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
@@ -174,9 +173,12 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     await ledger.sealCompletedDays(env.BROLLY_ACCOUNT_ID, timeZone, now);
     if (billingDue) {
       try {
-        const billing = await reconcileBilling(env, client, ledgerBudget, now);
+        const billing = await ingestWindow({
+          env, client, ledger, collector: "billing", budget: ledgerBudget, timeZone,
+          startsAt: now - 31 * 86_400_000, endsAt: now,
+        });
         const reconciledCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, now);
-        const billingAlerts = await evaluateUsageAlerts(env, billing.alertChanges, {
+        const billingAlerts = await evaluateUsageAlerts(env, billing.changes, {
           timeZone,
           billingCycleId: reconciledCycle.id,
           billingCycleStart: reconciledCycle.startsAt,
@@ -186,8 +188,8 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
         await dispatchAlertNotifications(env, billingAlerts.notifications, ledgerBudget);
         await store.saveCoverage([{
           family: "billing", metric: "authoritative_usage", finestScope: "account",
-          state: billing.complete ? "healthy" : billing.available ? "delayed" : "permission_denied", checkedAt: now,
-          detail: billing.error ?? (billing.available ? undefined : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries"),
+          state: billing.coverage[0]?.state ?? "unavailable", checkedAt: now,
+          detail: billing.coverage[0]?.detail,
         }]);
         await ledger.persistCollectorState(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", "", {
           watermarkAt: now, nextEligibleAt: now + 60 * 60_000,

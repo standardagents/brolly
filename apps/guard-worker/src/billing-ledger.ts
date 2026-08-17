@@ -16,13 +16,22 @@ export interface BillingReconciliationResult {
   error?: string;
 }
 
+export interface BillingWindow {
+  startsAt: number;
+  endsAt: number;
+  recordGaps?: boolean;
+}
+
 export async function reconcileBilling(
   env: Env,
   client: CloudflareClient,
   budget?: LedgerRunBudget,
   now = Date.now(),
+  window?: BillingWindow,
 ): Promise<BillingReconciliationResult> {
-  const records = await client.billingUsage(now - 31 * 86_400_000, now);
+  const startsAt = window?.startsAt ?? now - 31 * 86_400_000;
+  const endsAt = window?.endsAt ?? now;
+  const records = await client.billingUsage(startsAt, endsAt);
   if (!records) return { available: false, complete: false, records: 0, cycles: 0, unknownProducts: [], authoritativeCostUsd: null, alertChanges: [] };
   const truncated = records.length > 20_000;
   const boundedRecords = records.slice(0, 20_000);
@@ -170,6 +179,21 @@ export async function reconcileBilling(
   ).bind(env.BROLLY_ACCOUNT_ID, nowValue, `Billing reconciliation retained the first 20,000 of ${records.length} lines`));
   await runBatches(env.DB, statements, budget);
   await allocateAuthoritativeCosts(env.DB, env.BROLLY_ACCOUNT_ID, boundedRecords, timeZone, budget);
+  const effectiveStart = effectiveBillingStart(boundedRecords, startsAt);
+  const missingRanges = window?.recordGaps
+    ? billingMissingRanges(boundedRecords, effectiveStart, endsAt)
+    : [];
+  const gapDetail = missingRanges.length
+    ? `Billing data is missing for ${missingRanges.map(range => `${range.from} through ${range.to}`).join(", ")}`
+    : undefined;
+  if (gapDetail) {
+    const result = await env.DB.prepare(
+      `INSERT INTO metric_coverage(family,metric,finest_scope,state,detail,checked_at)
+       VALUES('billing','initial_import_gaps','account','delayed',?1,?2)
+       ON CONFLICT(family,metric) DO NOTHING`,
+    ).bind(gapDetail, nowValue).run();
+    chargeMeta(budget, result.meta);
+  }
   const authoritativeCostUsd = [...cycles.values()].reduce((total, cycle) => total + cycle.cost, 0);
   const alertChanges = billingAlertChanges(
     env.BROLLY_ACCOUNT_ID,
@@ -181,9 +205,56 @@ export async function reconcileBilling(
   return {
     available: true, complete: !truncated, records: boundedRecords.length, cycles: cycles.size,
     unknownProducts: [...unknownProducts].sort(), authoritativeCostUsd, alertChanges,
-    ...(truncated ? { error: `Billing reconciliation reached its 20,000-line limit from ${records.length} returned lines` } : {}),
+    ...((truncated || gapDetail) ? {
+      error: [
+        truncated ? `Billing reconciliation reached its 20,000-line limit from ${records.length} returned lines` : null,
+        gapDetail,
+      ].filter(Boolean).join("; "),
+    } : {}),
   };
 }
+
+function billingMissingRanges(records: BillingUsageRecord[], startsAt: number, endsAt: number): Array<{ from: string; to: string }> {
+  const firstDay = utcDayStart(startsAt);
+  // Cloudflare's current day is still accruing and cannot establish a gap.
+  const lastDay = utcDayStart(endsAt) - 86_400_000;
+  if (lastDay < firstDay) return [];
+  const covered = new Set<string>();
+  for (const record of records) {
+    const start = safeDate(record.ChargePeriodStart, startsAt);
+    const end = Math.max(start + 1, safeDate(record.ChargePeriodEnd, endOfUtcDay(start)));
+    for (let day = utcDayStart(start); day < end; day += 86_400_000) {
+      if (day >= firstDay && day <= lastDay) covered.add(utcDate(day));
+    }
+  }
+  const missing: number[] = [];
+  for (let day = firstDay; day <= lastDay; day += 86_400_000) {
+    if (!covered.has(utcDate(day))) missing.push(day);
+  }
+  const ranges: Array<{ from: string; to: string }> = [];
+  for (const day of missing) {
+    const previous = ranges.at(-1);
+    const date = utcDate(day);
+    if (previous && utcDate(Date.parse(`${previous.to}T00:00:00Z`) + 86_400_000) === date) previous.to = date;
+    else ranges.push({ from: date, to: date });
+  }
+  return ranges;
+}
+
+function effectiveBillingStart(records: BillingUsageRecord[], requestedStart: number): number {
+  const starts = records.map(record => record.BillingPeriodStart ? Date.parse(record.BillingPeriodStart) : NaN)
+    .filter(Number.isFinite);
+  return starts.length ? Math.max(requestedStart, Math.min(...starts)) : requestedStart;
+}
+
+function utcDayStart(timestamp: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function endOfUtcDay(timestamp: number): number { return utcDayStart(timestamp) + 86_400_000; }
+
+function utcDate(timestamp: number): string { return new Date(timestamp).toISOString().slice(0, 10); }
 
 interface BillingAggregate {
   resourceId: string;

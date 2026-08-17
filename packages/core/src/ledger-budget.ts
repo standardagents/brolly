@@ -36,6 +36,18 @@ export const MAX_LEDGER_RUN_LIMITS: LedgerRunLimits = {
   wallMs: 55_000,
 };
 
+/**
+ * Per-request budget for the one-shot onboarding import.  The import has a
+ * smaller Cloudflare request allowance than the recurring monitor so a fresh
+ * install cannot crowd out normal monitoring work.
+ */
+export const INITIAL_INGESTION_LIMITS: LedgerRunLimits = {
+  ...MAX_LEDGER_RUN_LIMITS,
+  graphqlQueries: 40,
+  restRequests: 5,
+  wallMs: 25_000,
+};
+
 export class LedgerBudgetExceededError extends Error {
   constructor(readonly kind: LedgerBudgetKind, readonly used: number, readonly limit: number) {
     super(`Ledger ${kind} budget exceeded (${used}/${limit})`);

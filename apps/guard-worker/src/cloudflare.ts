@@ -44,6 +44,8 @@ interface PaygoBillingUsageRecord {
   ServiceFamilyName?: string;
   ZoneId?: string;
   ZoneName?: string;
+  BillingPeriodStart?: string;
+  BillingPeriodEnd?: string;
 }
 
 export interface DurableObjectUsageCursor {
@@ -728,18 +730,40 @@ export class CloudflareClient {
   async billingUsage(since: number, until: number): Promise<BillingUsageRecord[] | null> {
     const token = await configuredBillingToken(this.env);
     if (!token) return null;
-    const from = new Date(since).toISOString().slice(0, 10);
-    const to = new Date(until).toISOString().slice(0, 10);
     try {
-      return await this.get<BillingUsageRecord[]>(
-        `/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-        token,
-      );
+      const requested = await this.getBillingUsage(since, until, token);
+      const aligned = billingAlignedStart(requested, since, until);
+      if (aligned !== null) return await this.getBillingUsage(aligned, until, token);
+      return requested;
     } catch (error) {
       if (!(error instanceof CloudflareApiError) || ![403, 404].includes(error.status)) throw error;
-      const records = await this.get<PaygoBillingUsageRecord[]>(`/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage`, token);
-      return records.map(normalizePaygoBillingRecord);
+      const requested = await this.getPaygoBillingUsage(since, until, token);
+      const alignedRecords = requested.map(normalizePaygoBillingRecord);
+      const aligned = billingAlignedStart(alignedRecords, since, until);
+      if (aligned !== null) return (await this.getPaygoBillingUsage(aligned, until, token)).map(normalizePaygoBillingRecord);
+      return alignedRecords;
     }
+  }
+
+  private async getBillingUsage(since: number, until: number, token: string): Promise<BillingUsageRecord[]> {
+    const from = new Date(since).toISOString().slice(0, 10);
+    const to = new Date(until).toISOString().slice(0, 10);
+    const records = await this.get<BillingUsageRecord[]>(
+      `/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      token,
+    );
+    // BillingPeriodStart is present on the v2 response. It tells us the
+    // account's actual cycle boundary, which can differ from the first day of
+    // the month. A query beginning mid-cycle silently omits that cycle.
+    return records;
+  }
+
+  private async getPaygoBillingUsage(since: number, until: number, token: string): Promise<PaygoBillingUsageRecord[]> {
+    const from = new Date(since).toISOString().slice(0, 10);
+    return this.get<PaygoBillingUsageRecord[]>(
+      `/accounts/${this.env.BROLLY_ACCOUNT_ID}/billable-usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(new Date(until).toISOString().slice(0, 10))}`,
+      token,
+    );
   }
 
   private async get<T>(path: string, token?: string): Promise<T> {
@@ -763,12 +787,20 @@ export class CloudflareClient {
   }
 
   private async request<T>(path: string, token?: string): Promise<ApiEnvelope<T>> {
-    this.budget.charge("apiCalls");
-    this.ledgerBudget?.charge("restRequests");
-    const response = await fetch(`${API}${path}`, {
-      headers: authHeaders(token ?? await this.token()),
-      signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-    });
+    const authorization = authHeaders(token ?? await this.token());
+    let response: Response;
+    for (let attempt = 0; ; attempt += 1) {
+      this.budget.charge("apiCalls");
+      this.ledgerBudget?.charge("restRequests");
+      response = await fetch(`${API}${path}`, {
+        headers: authorization,
+        signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+      });
+      if (response.status !== 429 || attempt > 0) break;
+      const retryAfter = retryAfterMilliseconds(response.headers.get("Retry-After"));
+      if (retryAfter === null) break;
+      await delayWithSignal(retryAfter, this.budget.signal);
+    }
     if (!response.ok) throw await cloudflareApiError(response);
     const envelope = await response.json() as ApiEnvelope<T>;
     if (!envelope.success) throw new Error(envelope.errors?.map(error => error.message).join("; ") || "Cloudflare API error");
@@ -794,10 +826,65 @@ function normalizePaygoBillingRecord(row: PaygoBillingUsageRecord): BillingUsage
     x_ProductFamilyName: family,
     x_ZoneId: row.ZoneId,
     x_ZoneName: row.ZoneName,
+    BillingPeriodStart: row.BillingPeriodStart,
+    BillingPeriodEnd: row.BillingPeriodEnd,
     BilledCost: row.BilledCost,
     EffectiveCost: row.EffectiveCost,
     ListCost: row.ListCost,
   };
+}
+
+function startOfUtcDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function billingCycleStart(records: BillingUsageRecord[]): number | null {
+  const starts = records.map(record => record.BillingPeriodStart ? Date.parse(record.BillingPeriodStart) : NaN)
+    .filter(Number.isFinite);
+  return starts.length ? Math.min(...starts) : null;
+}
+
+function billingAlignedStart(records: BillingUsageRecord[], since: number, until: number): number | null {
+  const cycleStart = billingCycleStart(records);
+  if (cycleStart === null) return null;
+  // A short recurring window can begin after the current cycle's start. Walk
+  // back one cycle when the resulting request remains within 90 days. A full
+  // initial window keeps its first returned boundary to respect that maximum.
+  const previous = previousCycleStart(cycleStart);
+  const aligned = previous !== null && until - previous <= 90 * 86_400_000 ? previous : cycleStart;
+  return aligned === startOfUtcDay(since) ? null : aligned;
+}
+
+function previousCycleStart(timestamp: number): number | null {
+  const date = new Date(timestamp);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  const day = date.getUTCDate();
+  const previous = new Date(Date.UTC(year, month - 1, day));
+  return previous.getUTCDate() === day ? previous.getTime() : null;
+}
+
+function retryAfterMilliseconds(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, REQUEST_TIMEOUT_MS);
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Math.min(timestamp - Date.now(), REQUEST_TIMEOUT_MS));
+}
+
+async function delayWithSignal(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (milliseconds <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("Cloudflare request aborted"));
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function catalogCapabilityGaps(accountId: string, checkedAt: number): CollectorCoverage[] {

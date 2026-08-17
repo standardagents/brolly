@@ -67,7 +67,7 @@ export function BackfillPage({ token }: { token: string }) {
           </div>
           <div className="flex gap-2">
             <select className="rounded border border-[var(--line)] bg-white px-3 text-sm" value={days} onChange={event => setDays(event.target.value)}>
-              <option value="1">Previous 24 hours</option><option value="30">Previous 30 days</option><option value="90">Previous 90 days</option><option value="365">Previous year</option><option value="730">Previous two years</option>
+              <option value="1">Previous 24 hours</option><option value="30">Previous 30 days</option><option value="90">Previous 90 days</option>
             </select>
             <button className="button primary" disabled={busy} type="button" onClick={() => void create()}>{busy ? "Scheduling…" : "Schedule backfill"}</button>
           </div>
