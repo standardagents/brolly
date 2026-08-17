@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
+import { familyControl } from "@standardagents/brolly-core";
 import { api } from "../api";
 import { Button, Icon, InfoTip, Input, Notice } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
@@ -190,13 +191,15 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
  * The check verifies permission surfaces, but the cards speak in what those
  * permissions let Brolly do. Monitoring is probed through the Workers and
  * Durable Objects Analytics queries (the same grant covers every cataloged
- * product); billing needs the separate Billing Read token and is the carrot —
- * it upgrades every service in the coverage grid from monitor-only to
- * monitoring plus spending caps.
+ * product); billing needs the separate Billing Read token and adds
+ * dollar-denominated alerts for every service in the coverage grid. Neither
+ * grant adds enforcement: only the families in FAMILY_CONTROLS can be
+ * quarantined or paused, and that depends on the fuse and control actions,
+ * not on access.
  */
 const ACCESS_CAPABILITIES = [
   { key: "monitoring" as const, label: "Usage monitoring", detail: "Live usage meters and alerts for every service.", icon: "pulse" as const },
-  { key: "billing" as const, label: "Billing access", detail: "Daily and monthly spending caps based on invoiced dollar amounts.", icon: "wallet" as const },
+  { key: "billing" as const, label: "Billing access", detail: "Daily and monthly alerts based on your invoiced dollar amounts.", icon: "wallet" as const },
 ];
 
 type CapabilityStatus =
@@ -316,36 +319,42 @@ function CapabilityPill({ status }: { status: CapabilityStatus }) {
 }
 
 /**
- * Every monitored service with a status light. Off = monitoring not yet
- * confirmed; yellow = monitor only; green = monitoring plus spending caps.
- * Lights stay off until the Usage monitoring row resolves as connected, and
- * all turn green together when Billing Read connects — the grid exists to
- * make that upgrade worth the manual token paste, so the carrot line stays
- * visible until billing is connected.
+ * Every cataloged service with a status light and, where it applies, a
+ * control marker. The light says what Brolly can see: off until usage
+ * monitoring is confirmed, yellow for usage alerts, green once billing access
+ * adds dollar alerts. The marker says what Brolly can do: a shield where the
+ * fuse can quarantine (Workers, Durable Objects), a pause glyph where the
+ * consumer can be paused (Queues). Billing access changes the lights, never
+ * the markers.
  */
 // Bright status-light hues, deliberately hotter than the muted --good/--warn
 // text tokens so the dots read as lights in both themes.
 const LIGHT_GREEN = "bg-[#2fd05e] shadow-[0_0_6px_#2fd05e66]";
 const LIGHT_YELLOW = "bg-[#ffc53d] shadow-[0_0_6px_#ffc53d66]";
+const CONTROL_MARKER = { quarantine: { icon: "shield" as const, label: "Quarantine" }, pause: { icon: "pause" as const, label: "Pause" } };
 
 function ServiceCoverageGrid({ families, monitored, capped }: { families: OnboardingData["families"]; monitored: boolean; capped: boolean }) {
   const dot = capped ? LIGHT_GREEN : monitored ? LIGHT_YELLOW : "bg-faint opacity-40";
   return (
     <section className="rounded-panel border border-line bg-panel p-4" aria-label="Service coverage">
-      <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <strong className="text-sm">Service coverage</strong>
-        <span className="flex items-center gap-4 text-[11px] text-muted">
-          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_YELLOW}`} /> Monitor only</span>
-          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${LIGHT_GREEN}`} /> Monitoring + spending caps</span>
+        <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted [&_svg]:size-3.5">
+          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${dot}`} /> {capped ? "Usage + billing alerts" : monitored ? "Usage alerts" : "Checking"}</span>
+          {Object.values(CONTROL_MARKER).map(marker => <span key={marker.icon} className="flex items-center gap-1.5"><Icon name={marker.icon} /> {marker.label}</span>)}
         </span>
       </header>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-        {families.map(family => (
-          <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-field border border-line-soft bg-panel-soft px-2.5 py-2">
-            <i className={`size-2 flex-none rounded-full ${dot}`} />
-            <span className="truncate text-xs font-semibold">{family.label}</span>
-          </span>
-        ))}
+        {families.map(family => {
+          const control = familyControl(family.family);
+          return (
+            <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-field border border-line-soft bg-panel-soft px-2.5 py-2">
+              <i className={`size-2 flex-none rounded-full ${dot}`} />
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold">{family.label}</span>
+              {control && <Icon name={CONTROL_MARKER[control].icon} className="size-3.5 flex-none text-muted" />}
+            </span>
+          );
+        })}
       </div>
     </section>
   );

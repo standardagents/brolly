@@ -4,7 +4,7 @@ import type { NotificationKind } from "../types";
 
 export type IconName =
   | "alert" | "arrow" | "bell" | "check" | "chevron" | "clipboard" | "clock" | "external" | "gauge" | "info"
-  | "layers" | "lock" | "logout" | "pulse" | "radar" | "refresh" | "search" | "shield" | "sliders" | "trend" | "wallet" | "x";
+  | "layers" | "lock" | "logout" | "pause" | "pulse" | "radar" | "refresh" | "search" | "shield" | "sliders" | "trend" | "wallet" | "x";
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
   alert: <><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 9v4M12 17h.01" /></>,
@@ -20,6 +20,7 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
   layers: <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5M3 16l9 5 9-5" /></>,
   lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></>,
+  pause: <path d="M9 5v14M15 5v14" />,
   pulse: <path d="M3 12h4l2.5-7 4.5 14 2.5-7H21" />,
   radar: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="m12 12 6-6" /></>,
   refresh: <><path d="M20 11a8 8 0 1 0-2 6" /><path d="M20 4v7h-7" /></>,

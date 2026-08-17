@@ -24,7 +24,7 @@ export function StepIntro({ title, children }: { title: string; children: ReactN
 
 /** Rule + action row that closes every step. */
 export function StepActions({ children }: { children: ReactNode }) {
-  return <footer className="mt-[34px] flex justify-between border-t border-line pt-[22px] max-md:flex-wrap max-md:gap-2.5">{children}</footer>;
+  return <footer className="mt-6 flex justify-between max-md:flex-wrap max-md:gap-2.5">{children}</footer>;
 }
 
 export function AccessStep({ data, token, busy, result, notice, error, onVerify, onVerified }: {

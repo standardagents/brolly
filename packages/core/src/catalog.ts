@@ -10,6 +10,22 @@ export interface ProductMetricDefinition {
 
 export const METRIC_CATALOG_VERSION = "2026-08-13";
 
+/**
+ * Families Brolly can act on, as opposed to only watch, and how. Workers and
+ * Durable Objects are quarantined through the deployment-carried fuse
+ * (`runtime_quarantine`; Workers can also lose their triggers via
+ * `disable_trigger`). Queues are paused by disabling the consumer
+ * (`pause_consumer`). Every other family has no control action: Brolly
+ * monitors usage and billing for it and alerts, but cannot cap its spend.
+ */
+export const FAMILY_CONTROLS = { workers: "quarantine", durable_objects: "quarantine", queues: "pause" } as const;
+export type EnforceableFamily = keyof typeof FAMILY_CONTROLS;
+export type FamilyControl = (typeof FAMILY_CONTROLS)[EnforceableFamily];
+export const ENFORCEABLE_FAMILIES = Object.keys(FAMILY_CONTROLS) as EnforceableFamily[];
+export function familyControl(family: string): FamilyControl | null {
+  return family in FAMILY_CONTROLS ? FAMILY_CONTROLS[family as EnforceableFamily] : null;
+}
+
 export const METRIC_CATALOG: ProductMetricDefinition[] = [
   { family: "workers", metrics: ["requests", "cpu_ms", "cache_requests"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   {
