@@ -6,3 +6,6 @@ coverage/
 packages/cli/worker/
 *.log
 .DS_Store
+
+# Disposable planning docs; local only
+docs/plans/
