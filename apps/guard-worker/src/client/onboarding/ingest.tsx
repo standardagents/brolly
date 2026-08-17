@@ -89,7 +89,7 @@ function ImportCollectorRow({ collector, paused }: { collector: InitialIngestion
         </div>
         <span className="shrink-0 text-xs font-semibold text-[var(--muted)]">{completed}/{collector.total}</span>
       </div>
-      <span className="text-xs text-[var(--faint)]">{collector.oldestCompleteAt ? `${formatDate(collector.oldestCompleteAt)} through current` : "Import range pending"}</span>
+      <span className="text-xs text-[var(--faint)]">{collector.oldestCompleteAt ? `${formatDate(collector.oldestCompleteAt)} – current` : "Import range pending"}</span>
     </article>
   );
 }
