@@ -8,14 +8,23 @@ import type { Env } from "./env.js";
 import { LedgerStore } from "./ledger-store.js";
 import { configuredBillingToken } from "./credentials.js";
 import { runOneBackfillSlice } from "./backfill.js";
+import { PRODUCT_USAGE_DEFINITIONS } from "./product-usage.js";
 
 const DAY_MS = 86_400_000;
 const NINETY_DAYS_MS = 90 * DAY_MS;
-const MAX_SLICE_MS = 32 * DAY_MS;
+const USAGE_SLICE_MS = DAY_MS;
+/** Cloudflare's Billing Usage API accepts at most a 31-day query window. */
+const BILLING_MAX_SLICE_MS = 31 * DAY_MS;
 
 export const INITIAL_USAGE_COLLECTORS = [
-  { collector: "graphql:durable-objects", label: "Durable Objects", dataset: "durable-object-usage" },
-  { collector: "graphql:workers", label: "Workers", dataset: "workersInvocationsAdaptive" },
+  { collector: "graphql:durable-objects", label: "Durable Objects", dataset: "durable-object-usage", retentionDays: 90 },
+  { collector: "graphql:workers", label: "Workers", dataset: "workersInvocationsAdaptive", retentionDays: 90 },
+  ...PRODUCT_USAGE_DEFINITIONS.map(item => ({
+    collector: item.collector,
+    label: item.label,
+    dataset: item.datasets.map(dataset => dataset.dataset).join("+"),
+    retentionDays: item.retentionDays,
+  })),
 ] as const;
 
 export const INITIAL_BILLING_COLLECTOR = {
@@ -124,13 +133,20 @@ export function initialIngestionSlicePlan(now: number, billingAvailable: boolean
   const startsAt = now - NINETY_DAYS_MS;
   const slices: InitialIngestionSlicePlan[] = [];
   for (const collector of INITIAL_USAGE_COLLECTORS) {
-    for (let end = now; end > startsAt;) {
-      const start = Math.max(startsAt, end - MAX_SLICE_MS);
+    const availableStartsAt = Math.max(startsAt, now - collector.retentionDays * DAY_MS);
+    for (let end = now; end > availableStartsAt;) {
+      const start = Math.max(availableStartsAt, end - USAGE_SLICE_MS);
       slices.push({ collector: collector.collector, startsAt: start, endsAt: end });
       end = start;
     }
   }
-  if (billingAvailable) slices.push({ collector: INITIAL_BILLING_COLLECTOR.collector, startsAt, endsAt: now });
+  if (billingAvailable) {
+    for (let end = now; end > startsAt;) {
+      const start = Math.max(startsAt, end - BILLING_MAX_SLICE_MS);
+      slices.push({ collector: INITIAL_BILLING_COLLECTOR.collector, startsAt: start, endsAt: end });
+      end = start;
+    }
+  }
   return slices;
 }
 

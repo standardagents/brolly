@@ -8,7 +8,7 @@ export interface ProductMetricDefinition {
   billingSource: boolean;
 }
 
-export const METRIC_CATALOG_VERSION = "2026-08-13";
+export const METRIC_CATALOG_VERSION = "2026-08-17";
 
 /**
  * Families Brolly can act on, as opposed to only watch, and how. Workers and
@@ -51,19 +51,20 @@ export const METRIC_CATALOG: ProductMetricDefinition[] = [
   { family: "d1", metrics: ["rows_read", "rows_written", "storage_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "r2", metrics: ["class_a", "class_b", "storage_bytes", "egress_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "kv", metrics: ["reads", "writes", "deletes", "lists", "storage_bytes"], preferredScope: "namespace", fastSource: "graphql", billingSource: true },
-  { family: "pages", metrics: ["requests", "builds"], preferredScope: "resource", fastSource: "rest", billingSource: true },
+  { family: "pages", metrics: ["requests", "builds"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "images", metrics: ["transformations", "stored_images", "delivery"], preferredScope: "account", fastSource: "graphql", billingSource: true },
   { family: "stream", metrics: ["minutes_stored", "minutes_delivered"], preferredScope: "account", fastSource: "graphql", billingSource: true },
-  { family: "vectorize", metrics: ["queried_dimensions", "stored_dimensions"], preferredScope: "resource", fastSource: "rest", billingSource: true },
+  { family: "vectorize", metrics: ["queried_dimensions", "stored_dimensions"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "hyperdrive", metrics: ["database_queries"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "ai_gateway", metrics: ["requests", "tokens", "cost_usd"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "containers", metrics: ["vcpu_seconds", "memory_gb_seconds", "disk_gb_seconds", "egress_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "browser_rendering", metrics: ["sessions", "session_minutes"], preferredScope: "account", fastSource: "graphql", billingSource: true },
   { family: "workflows", metrics: ["requests", "cpu_ms", "steps", "storage_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
-  { family: "worker_builds", metrics: ["build_minutes"], preferredScope: "resource", fastSource: "rest", billingSource: true },
+  { family: "worker_builds", metrics: ["build_minutes"], preferredScope: "account", fastSource: "graphql", billingSource: true },
   { family: "analytics_engine", metrics: ["data_points_written", "data_points_read", "queries", "storage_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
-  { family: "log_explorer", metrics: ["data_points", "queries", "storage_bytes"], preferredScope: "account", fastSource: "graphql", billingSource: true },
+  { family: "log_explorer", metrics: ["ingested_bytes", "queries", "storage_bytes"], preferredScope: "resource", fastSource: "graphql", billingSource: true },
   { family: "zones", metrics: ["requests", "bandwidth_bytes"], preferredScope: "zone", fastSource: "graphql", billingSource: true },
+  { family: "email", metrics: ["sent", "routed"], preferredScope: "zone", fastSource: "graphql", billingSource: true },
   { family: "unknown", metrics: ["authoritative_usage", "authoritative_cost_usd"], preferredScope: "account", fastSource: null, billingSource: true },
 ];
 
@@ -156,6 +157,7 @@ export const METRIC_DEFINITIONS: MetricDefinition[] = [
 
 function metricUnit(metric: string): MetricDefinition["unit"] {
   if (metric.includes("cost")) return "usd";
+  if (metric.includes("gb_seconds")) return "gb_seconds";
   if (metric.includes("byte") || metric.includes("storage") || metric.includes("egress")) return "bytes";
   if (metric.includes("row")) return "rows";
   if (metric.includes("request")) return "requests";

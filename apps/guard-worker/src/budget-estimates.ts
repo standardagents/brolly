@@ -297,6 +297,14 @@ function billingFamily(row: BillingUsageRecord): string | null {
     ["pages", /cloudflare pages|pages build/],
     ["images", /cloudflare images|image transformation/],
     ["stream", /cloudflare stream|stream video/],
+    ["containers", /\bcontainers?\b/],
+    ["browser_rendering", /browser rendering/],
+    ["workflows", /\bworkflows?\b/],
+    ["worker_builds", /worker builds?|build minutes?/],
+    ["analytics_engine", /analytics engine/],
+    ["log_explorer", /log explorer/],
+    ["zones", /zone analytics|bandwidth/],
+    ["email", /email routing|email service|email sent/],
     ["workers", /\bworkers?\b/],
   ];
   return patterns.find(([, pattern]) => pattern.test(value))?.[0] ?? null;

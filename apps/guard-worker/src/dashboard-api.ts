@@ -286,7 +286,7 @@ function familyLabel(family: string): string {
   const labels: Record<string, string> = {
     durable_objects: "Durable Objects", workers: "Workers", workers_ai: "Workers AI", ai_gateway: "AI Gateway",
     d1: "D1", r2: "R2", kv: "Workers KV", queues: "Queues", vectorize: "Vectorize", hyperdrive: "Hyperdrive",
-    pages: "Pages", zones: "Zones", images: "Images", stream: "Stream", billing: "Billing",
+    pages: "Pages", zones: "Zones", images: "Images", stream: "Stream", email: "Email", billing: "Billing",
   };
   return labels[family] ?? family.replaceAll("_", " ").replace(/\b\w/g, value => value.toUpperCase());
 }

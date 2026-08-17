@@ -29,11 +29,11 @@ The one-minute cron acts as a scheduler:
 - inventory and billing reconciliation are due hourly;
 - Analytics dataset capability discovery is due daily;
 - retention maintenance is due hourly;
-- newest-first historical backfill uses only budget remaining after active protection work.
+- newest-first historical backfill drains up to the configured slice budget after active protection work.
 
-First-run setup creates a separate initial-ingestion job. It imports the available 90-day Cloudflare Analytics window in at most three 32-day slices per usage collector. Billing Read adds one cycle-aligned billing slice. The request has its own bounded budget, can continue in the background, and leaves unfinished slices for the cron scheduler. Failed slices retry after 30 seconds, two minutes, and eight minutes before recording missing coverage. Initial and manual ingestion write ledger history without evaluating alerts, sending notifications, or preparing controls.
+First-run setup creates a separate initial-ingestion job. It imports daily usage for Workers, Durable Objects, Workers AI, Queues, D1, R2, Workers KV, Pages Functions, Images, Stream, Vectorize, Hyperdrive, AI Gateway, Containers, Browser Rendering, Workflows, Worker Builds, Analytics Engine, Log Explorer, zones, and Email. Each collector stops at the earlier of 90 days or its documented Analytics retention. Billing Read uses contiguous windows of at most 31 days across the full 90-day request. The request has its own bounded budget and leaves unfinished slices for the cron scheduler. Failed slices retry after 30 seconds, two minutes, and eight minutes before recording missing coverage. Initial and manual ingestion write ledger history without evaluating alerts, sending notifications, or preparing controls.
 
-Active collection reads one fixed completed five-minute window with a two-minute ingestion delay, plus the immediately preceding fixed window as a correction pass. Each continuation remains bound to its original start and end timestamps after a restart. Durable Object datasets and Worker scripts use stable identifier ordering and keyset cursors with pages of up to 10,000 rows. A partial result persists independent active and correction cursors and keeps its interval in partial quality.
+Active collection reads one fixed completed five-minute window with a two-minute ingestion delay, plus the immediately preceding fixed window as a correction pass. Each continuation remains bound to its original start and end timestamps after a restart. Durable Object datasets and Worker scripts use stable identifier ordering and keyset cursors with pages of up to 10,000 rows. Other product backfill collectors use daily product or resource groups. A dataset that reaches its bounded 10,000-row daily limit records partial coverage. A partial result persists independent active and correction cursors and keeps its interval in partial quality.
 
 Current day and billing-cycle values live in deterministic 8-bit accumulator shards. A shard approaching 1.5 MB splits into deterministic 4-bit secondary segments. Each resource metric retains correction bookkeeping and a bounded 12-scan baseline. Repeating a window is idempotent; a changed Cloudflare result replaces the prior contribution through a delta. Completed local days seal into one usage_daily row per resource and day. Billing cycles use Cloudflare's reconciled boundaries when Billing Read is available and an explicitly approximate calendar boundary during a coverage gap.
 
@@ -57,11 +57,11 @@ Budget exhaustion records an incomplete monitor run and preserves continuation s
 
 ## Billing and cost labels
 
-Hourly Billing Read reconciliation requests Cloudflare billable usage with explicit cycle-aligned date bounds. The restricted v2 endpoint is attempted first; a 403 or 404 uses the Billing Read-compatible PayGo endpoint. Billing records define authoritative aggregate charges and actual billing-cycle boundaries. A full-day span without billing rows remains missing data and creates a dated billing coverage record during the initial import.
+Hourly Billing Read reconciliation requests Cloudflare billable usage with explicit date bounds. A request may align to the current billing-cycle start when the resulting range stays within Cloudflare's 31-day limit. The restricted v2 endpoint is attempted first; a 403 or 404 uses the Billing Read-compatible PayGo endpoint. Billing records define authoritative aggregate charges and actual billing-cycle boundaries. A full-day span without billing rows remains missing data and creates a dated billing coverage record during the initial import.
 
 Granular usage cost remains a model. Brolly proportionally allocates a product/day authoritative charge only among leaf resources with defensible estimated-cost weights. The dashboard labels values as authoritative aggregate, allocated, estimated, sampled, partial, or stale.
 
-An unfamiliar Cloudflare product or metric is stored as a billing line, receives a dynamic metric definition, and creates a billing:catchall capability gap. It remains visible in account and product totals.
+An unfamiliar Cloudflare product or metric is stored as a billing line, receives a dynamic metric definition, and creates a billing:catchall capability gap. It remains visible in account and product totals. Detailed collectors retain the usage fields Cloudflare exposes. Metrics such as Pages builds, stored Stream minutes, and Workflow storage remain billing-derived when Analytics has no matching field.
 
 ## Limits and alert instances
 
@@ -90,7 +90,7 @@ Automatic deployment limits allow one changing action per Worker in 15 minutes a
 
 ## Retention and D1 capacity
 
-Cloudflare Analytics serves the previous 90 days. Brolly imports that available window once during setup, then history deepens as recurring ingestion writes each new day. The stored daily history has a separate 730-day ceiling. Account, product, and namespace aggregates receive preservation priority. Individual-resource history targets the same duration under these safeguards:
+Cloudflare Analytics retention varies by dataset. Brolly requests up to 90 days during setup and records the shorter available range for datasets with 30-day, 31-day, 32-day, or 62-day retention. The stored daily history has a separate 730-day ceiling. Account, product, and namespace aggregates receive preservation priority. Individual-resource history targets the same duration under these safeguards:
 
 - 70% capacity records a warning and displays projected retention;
 - 80% pauses historical backfill;

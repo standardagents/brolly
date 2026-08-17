@@ -1,10 +1,18 @@
 import type { AssetRef, BoundedRunContext, CollectorCoverage, CoverageResult, LedgerRunBudget, MetricSample } from "@standardagents/brolly-core";
-import { METRIC_CATALOG } from "@standardagents/brolly-core";
+import { LedgerBudgetExceededError, METRIC_CATALOG, MonitoringBudgetExceededError } from "@standardagents/brolly-core";
 import type { Env } from "./env.js";
 import { configuredBillingToken, operationalToken } from "./credentials.js";
+import {
+  PRODUCT_USAGE_DEFINITIONS,
+  buildProductDatasetQuery,
+  normalizeProductDataset,
+  productDatasetVariables,
+  type ProductUsageDefinition,
+} from "./product-usage.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 const REQUEST_TIMEOUT_MS = 8_000;
+const BILLING_USAGE_MAX_RANGE_MS = 31 * 86_400_000;
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -82,8 +90,18 @@ export interface WorkerUsageResult {
   watermarkAt: number;
 }
 
+export interface ProductUsageResult {
+  samples: MetricSample[];
+  coverage: CoverageResult[];
+  continuation: null;
+  complete: boolean;
+  pages: number;
+  watermarkAt: number;
+}
+
 export class CloudflareClient {
   private tokenPromise: Promise<string> | null = null;
+  private zoneIdsPromise: Promise<string[]> | null = null;
   constructor(
     private readonly env: Env,
     private readonly budget: BoundedRunContext,
@@ -142,7 +160,7 @@ export class CloudflareClient {
           ),
         };
       } catch (error) {
-        const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
+        const state: CoverageResult["state"] = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
         return {
           assets: [],
           coverage: inventoryCoverage(family, scope, state, error instanceof Error ? error.message : String(error)),
@@ -156,62 +174,76 @@ export class CloudflareClient {
   }
 
   async analyticsCapabilities(): Promise<CollectorCoverage[]> {
-    const datasets = [
-      ["durableObjectsInvocationsAdaptiveGroups", "object"],
-      ["durableObjectsPeriodicGroups", "object"],
-      ["durableObjectsSqlStorageGroups", "namespace"],
-      ["durableObjectsStorageGroups", "account"],
-      ["workersInvocationsAdaptive", "resource"],
-    ] as const;
-    const query = `query BrollyAnalyticsCapabilities($account: String!) {
+    const datasets: Array<{ dataset: string; collectorKey: string; family: string; scope: AssetRef["scope"]; root: "account" | "zone" }> = [
+      { dataset: "durableObjectsInvocationsAdaptiveGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "object", root: "account" },
+      { dataset: "durableObjectsPeriodicGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "object", root: "account" },
+      { dataset: "durableObjectsSqlStorageGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "namespace", root: "account" },
+      { dataset: "durableObjectsStorageGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "account", root: "account" },
+      { dataset: "workersInvocationsAdaptive", collectorKey: "graphql:workers", family: "workers", scope: "resource", root: "account" },
+      ...PRODUCT_USAGE_DEFINITIONS.flatMap(definition => definition.datasets.map(source => ({
+        dataset: source.dataset,
+        collectorKey: definition.collector,
+        family: definition.family,
+        scope: source.root === "zone" ? "zone" as const : source.resourceDimension ? definition.scope : "account" as const,
+        root: source.root ?? "account",
+      }))),
+    ];
+    const fields = "enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan";
+    const accountDatasets = datasets.filter(item => item.root === "account");
+    const zoneDatasets = datasets.filter(item => item.root === "zone");
+    const query = `query BrollyAnalyticsCapabilities($account: String!, $zones: [string!]!) {
       viewer { accounts(filter: { accountTag: $account }) { settings {
-        durableObjectsInvocationsAdaptiveGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsPeriodicGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsSqlStorageGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsStorageGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        workersInvocationsAdaptive { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
+        ${accountDatasets.map(item => `${item.dataset} { ${fields} }`).join("\n")}
+      } } zones(filter: { zoneTag_in: $zones }) { settings {
+        ${zoneDatasets.map(item => `${item.dataset} { ${fields} }`).join("\n")}
       } } }
     }`;
     const checkedAt = Date.now();
     try {
       this.budget.charge("apiCalls");
       this.ledgerBudget?.charge("graphqlQueries", datasets.length);
+      const zoneIds = await this.zoneIds();
       const response = await fetch(`${API}/graphql`, {
         method: "POST", headers: authHeaders(await this.token()),
-        body: JSON.stringify({ query, variables: { account: this.env.BROLLY_ACCOUNT_ID } }),
+        body: JSON.stringify({ query, variables: { account: this.env.BROLLY_ACCOUNT_ID, zones: zoneIds } }),
         signal: this.budget.signal,
       });
       if (!response.ok) throw await cloudflareApiError(response);
       type Setting = { enabled?: boolean; availableFields?: string[]; maxDuration?: number; maxNumberOfFields?: number; maxPageSize?: number; notOlderThan?: number };
-      const payload = await response.json() as { data?: { viewer?: { accounts?: Array<{ settings?: Record<string, Setting> }> } }; errors?: Array<{ message: string }> };
+      const payload = await response.json() as {
+        data?: { viewer?: { accounts?: Array<{ settings?: Record<string, Setting> }>; zones?: Array<{ settings?: Record<string, Setting> }> } };
+        errors?: Array<{ message: string }>;
+      };
       if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
-      const settings = payload.data?.viewer?.accounts?.[0]?.settings ?? {};
-      const discovered = datasets.map(([dataset, scope]) => {
-        const setting = settings[dataset];
+      const accountSettings = payload.data?.viewer?.accounts?.[0]?.settings ?? {};
+      const zoneSettings = payload.data?.viewer?.zones?.map(zone => zone.settings ?? {}) ?? [];
+      const discovered = datasets.map(item => {
+        const candidates = item.root === "account" ? [accountSettings[item.dataset]] : zoneSettings.map(setting => setting[item.dataset]);
+        const setting = candidates.find(value => value?.enabled === true) ?? candidates.find(Boolean);
         const available = setting?.enabled === true;
         return {
-          accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: `graphql:${dataset}`, dataset,
+          accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: item.collectorKey, dataset: item.dataset,
           available, retentionDays: setting?.notOlderThan ? Math.floor(setting.notOlderThan / 86_400) : null,
           samplingBehavior: setting?.availableFields?.some(field => field.toLowerCase().includes("sampleinterval"))
             ? "Adaptive sampling; sampleInterval is recorded per result" : "Dataset sampling follows Cloudflare Analytics settings",
-          finestScope: scope, lastVerifiedAt: checkedAt, errorCode: available ? null : "dataset_disabled",
+          finestScope: item.scope, lastVerifiedAt: checkedAt, errorCode: available ? null : "dataset_disabled",
           humanExplanation: available
             ? `Available with page size ${setting?.maxPageSize ?? "unknown"} and duration limit ${setting?.maxDuration ?? "unknown"} seconds`
             : "Cloudflare reports this Analytics dataset as unavailable for the current token or plan",
           state: available ? "healthy" : "unavailable", watermarkAt: null,
         } satisfies CollectorCoverage;
       });
-      return [...discovered, ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt)];
+      return [...discovered, ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map(item => item.family)))];
     } catch (error) {
-      const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
+      const state: CollectorCoverage["state"] = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
       const detail = error instanceof Error ? error.message : String(error);
       return [
-        ...datasets.map(([dataset, scope]) => ({
-        accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: `graphql:${dataset}`, dataset,
-        available: false, retentionDays: null, samplingBehavior: null, finestScope: scope,
+        ...datasets.map(item => ({
+        accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: item.collectorKey, dataset: item.dataset,
+        available: false, retentionDays: null, samplingBehavior: null, finestScope: item.scope,
         lastVerifiedAt: checkedAt, errorCode: state, humanExplanation: detail, state, watermarkAt: null,
         } satisfies CollectorCoverage)),
-        ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt),
+        ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map(item => item.family))),
       ];
     }
   }
@@ -727,6 +759,80 @@ export class CloudflareClient {
     }
   }
 
+  /** Collect one bounded product window from every dataset in its registry entry. */
+  async productUsage(definition: ProductUsageDefinition, since: number, until: number): Promise<ProductUsageResult> {
+    const samples: MetricSample[] = [];
+    const coverage: CoverageResult[] = [];
+    let complete = true;
+    let pages = 0;
+    for (const source of definition.datasets) {
+      try {
+        const zoneIds = source.root === "zone" ? await this.zoneIds() : [];
+        if (source.root === "zone" && zoneIds.length === 0) {
+          coverage.push(...source.metrics.map(item => ({
+            family: definition.family, metric: item.metric, finestScope: "zone" as const,
+            state: "healthy" as const, checkedAt: Date.now(), detail: "The connected account has no zones.",
+          })));
+          continue;
+        }
+        this.budget.charge("apiCalls");
+        this.ledgerBudget?.charge("pagesPerDataset");
+        this.ledgerBudget?.charge("graphqlQueries");
+        const response = await fetch(`${API}/graphql`, {
+          method: "POST",
+          headers: authHeaders(await this.token()),
+          body: JSON.stringify({
+            query: buildProductDatasetQuery(definition, source),
+            variables: productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, since, until, zoneIds),
+          }),
+          signal: this.budget.signal,
+        });
+        if (!response.ok) throw await cloudflareApiError(response);
+        const payload = await response.json() as {
+          data?: { viewer?: { accounts?: Array<Record<string, unknown>>; zones?: Array<Record<string, unknown>> } };
+          errors?: Array<{ message: string }>;
+        };
+        if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
+        const roots = (source.root ?? "account") === "zone"
+          ? payload.data?.viewer?.zones ?? []
+          : payload.data?.viewer?.accounts ?? [];
+        samples.push(...normalizeProductDataset(definition, source, roots, this.env.BROLLY_ACCOUNT_ID, since, until));
+        const truncated = roots.some(root => Array.isArray(root[source.alias]) && (root[source.alias] as unknown[]).length >= 10_000);
+        coverage.push(...source.metrics.map(item => ({
+          family: definition.family,
+          metric: item.metric,
+          finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+          state: truncated ? "delayed" as const : "healthy" as const,
+          checkedAt: Date.now(),
+          detail: truncated ? `${source.dataset} reached its bounded 10,000-row daily limit; retained rows are marked partial` : undefined,
+        })));
+        pages += 1;
+      } catch (error) {
+        if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
+        complete = false;
+        const state: CoverageResult["state"] = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
+        coverage.push(...source.metrics.map(item => ({
+          family: definition.family,
+          metric: item.metric,
+          finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+          state,
+          checkedAt: Date.now(),
+          detail: `${source.dataset}: ${error instanceof Error ? error.message : String(error)}`,
+        })));
+      }
+    }
+    coverage.push(...definition.billingOnlyMetrics.map(item => ({
+      family: definition.family,
+      metric: item,
+      finestScope: definition.scope,
+      state: "unavailable" as const,
+      checkedAt: Date.now(),
+      detail: "This metric is retained through authoritative billing because Cloudflare does not expose a supported usage field.",
+    })));
+    this.budget.charge("samples", samples.length);
+    return { samples, coverage, continuation: null, complete, pages, watermarkAt: until };
+  }
+
   async billingUsage(since: number, until: number): Promise<BillingUsageRecord[] | null> {
     const token = await configuredBillingToken(this.env);
     if (!token) return null;
@@ -807,6 +913,12 @@ export class CloudflareClient {
     return envelope;
   }
 
+  private zoneIds(): Promise<string[]> {
+    this.zoneIdsPromise ??= this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`)
+      .then(result => result.rows.map(row => stringValue(row.id)).filter((value): value is string => Boolean(value)));
+    return this.zoneIdsPromise;
+  }
+
   private token(): Promise<string> {
     this.tokenPromise ??= operationalToken(this.env);
     return this.tokenPromise;
@@ -848,21 +960,10 @@ function billingCycleStart(records: BillingUsageRecord[]): number | null {
 function billingAlignedStart(records: BillingUsageRecord[], since: number, until: number): number | null {
   const cycleStart = billingCycleStart(records);
   if (cycleStart === null) return null;
-  // A short recurring window can begin after the current cycle's start. Walk
-  // back one cycle when the resulting request remains within 90 days. A full
-  // initial window keeps its first returned boundary to respect that maximum.
-  const previous = previousCycleStart(cycleStart);
-  const aligned = previous !== null && until - previous <= 90 * 86_400_000 ? previous : cycleStart;
+  // Re-read from the cycle boundary when Cloudflare's documented 31-day
+  // request limit permits it. Older cycles are covered by separate slices.
+  const aligned = until - cycleStart <= BILLING_USAGE_MAX_RANGE_MS ? cycleStart : startOfUtcDay(since);
   return aligned === startOfUtcDay(since) ? null : aligned;
-}
-
-function previousCycleStart(timestamp: number): number | null {
-  const date = new Date(timestamp);
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-  const day = date.getUTCDate();
-  const previous = new Date(Date.UTC(year, month - 1, day));
-  return previous.getUTCDate() === day ? previous.getTime() : null;
 }
 
 function retryAfterMilliseconds(value: string | null): number | null {
@@ -887,9 +988,9 @@ async function delayWithSignal(milliseconds: number, signal: AbortSignal): Promi
   });
 }
 
-function catalogCapabilityGaps(accountId: string, checkedAt: number): CollectorCoverage[] {
+function catalogCapabilityGaps(accountId: string, checkedAt: number, coveredFamilies = new Set(["workers", "durable_objects"])): CollectorCoverage[] {
   return METRIC_CATALOG
-    .filter(product => product.family !== "workers" && product.family !== "durable_objects")
+    .filter(product => !coveredFamilies.has(product.family))
     .map(product => ({
       accountId,
       collectorKey: product.fastSource ? `${product.fastSource}:${product.family}` : "billing:catchall",

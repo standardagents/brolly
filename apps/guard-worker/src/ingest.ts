@@ -1,11 +1,12 @@
 import type { AccumulatorChange } from "./ledger-accumulator.js";
 import { reconcileBilling } from "./billing-ledger.js";
-import type { CloudflareClient, DurableObjectUsageCursor, DurableObjectUsageResult, WorkerUsageCursor, WorkerUsageResult } from "./cloudflare.js";
+import type { CloudflareClient, DurableObjectUsageCursor, DurableObjectUsageResult, ProductUsageResult, WorkerUsageCursor, WorkerUsageResult } from "./cloudflare.js";
 import type { Env } from "./env.js";
 import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
+import { productUsageDefinition, type ProductUsageCollector } from "./product-usage.js";
 import type { CoverageResult, LedgerRunBudget, MetricSample, UsageObservation } from "@standardagents/brolly-core";
 
-export type UsageCollector = "graphql:durable-objects" | "graphql:workers" | "billing";
+export type UsageCollector = "graphql:durable-objects" | "graphql:workers" | ProductUsageCollector | "billing";
 
 export interface IngestWindowOptions {
   env: Env;
@@ -62,19 +63,28 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
     };
   }
 
+  const definition = productUsageDefinition(options.collector);
   const result = options.collector === "graphql:durable-objects"
     ? await options.client.durableObjectUsagePaged(options.startsAt, options.endsAt, {
       cursor: options.cursor as DurableObjectUsageCursor | undefined,
       maxPages: options.maxPages,
     })
-    : await options.client.workerUsage(options.startsAt, options.endsAt, {
-      cursor: options.cursor as WorkerUsageCursor | undefined,
-      maxPages: options.maxPages,
-    });
+    : options.collector === "graphql:workers"
+      ? await options.client.workerUsage(options.startsAt, options.endsAt, {
+        cursor: options.cursor as WorkerUsageCursor | undefined,
+        maxPages: options.maxPages,
+      })
+      : definition
+        ? await options.client.productUsage(definition, options.startsAt, options.endsAt)
+        : unreachableCollector(options.collector);
   const observations = expandUsageObservations(
     result.samples,
     options.collector,
-    options.collector === "graphql:durable-objects" ? "durable-object-usage" : "workersInvocationsAdaptive",
+    options.collector === "graphql:durable-objects"
+      ? "durable-object-usage"
+      : options.collector === "graphql:workers"
+        ? "workersInvocationsAdaptive"
+        : definition!.datasets.map(item => item.dataset).join("+"),
     result.complete ? "complete" : "partial",
     {
       watermarkAt: result.watermarkAt,
@@ -94,4 +104,8 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
   };
 }
 
-export type UsageIngestResult = DurableObjectUsageResult | WorkerUsageResult;
+export type UsageIngestResult = DurableObjectUsageResult | WorkerUsageResult | ProductUsageResult;
+
+function unreachableCollector(collector: string): never {
+  throw new Error(`Unsupported usage collector: ${String(collector)}`);
+}

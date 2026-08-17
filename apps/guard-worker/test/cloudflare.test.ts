@@ -171,6 +171,35 @@ describe("Cloudflare Worker telemetry", () => {
   });
 });
 
+describe("Cloudflare product dataset discovery", () => {
+  it("maps account and zone dataset settings to registered product collectors", async () => {
+    let query = "";
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (new URL(url).pathname.endsWith("/zones")) {
+        return Response.json({ success: true, result: [{ id: "zone-1" }], result_info: { page: 1, total_pages: 1 } });
+      }
+      query = String(init?.body);
+      return Response.json({ data: { viewer: {
+        accounts: [{ settings: {
+          d1AnalyticsAdaptiveGroups: { enabled: true, availableFields: ["rowsRead"], notOlderThan: 7_776_000, maxPageSize: 10_000 },
+        } }],
+        zones: [{ settings: {
+          emailSendingAdaptiveGroups: { enabled: true, availableFields: ["datetime"], notOlderThan: 2_592_000, maxPageSize: 10_000 },
+        } }],
+      } } });
+    }));
+
+    const result = await new CloudflareClient(env, new RunBudget()).analyticsCapabilities();
+
+    expect(query).toContain("queueMessageOperationsAdaptiveGroups");
+    expect(query).toContain("containersUsageAdaptiveGroups");
+    expect(query).toContain("emailSendingAdaptiveGroups");
+    expect(query).toContain("zoneTag_in: $zones");
+    expect(result.find(item => item.dataset === "d1AnalyticsAdaptiveGroups")).toMatchObject({ collectorKey: "graphql:d1", available: true, retentionDays: 90 });
+    expect(result.find(item => item.dataset === "emailSendingAdaptiveGroups")).toMatchObject({ collectorKey: "graphql:email", available: true, retentionDays: 30 });
+  });
+});
+
 describe("Cloudflare billing telemetry", () => {
   it("uses the authoritative daily usage endpoint with explicit date bounds", async () => {
     const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
@@ -245,7 +274,7 @@ describe("Cloudflare billing telemetry", () => {
     expect(calls).toBe(2);
   });
 
-  it("aligns a short billing window to the preceding cycle start", async () => {
+  it("aligns a billing window to the current cycle start within the 31-day limit", async () => {
     const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
     const urls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -269,10 +298,12 @@ describe("Cloudflare billing telemetry", () => {
       Date.parse("2026-07-17T00:00:00Z"), Date.parse("2026-08-17T00:00:00Z"),
     );
     expect(urls).toHaveLength(2);
-    expect(new URL(urls[1]!).searchParams.get("from")).toBe("2026-07-09");
+    expect(new URL(urls[1]!).searchParams.get("from")).toBe("2026-08-09");
+    expect(Date.parse(new URL(urls[1]!).searchParams.get("to")!) - Date.parse(new URL(urls[1]!).searchParams.get("from")!))
+      .toBeLessThanOrEqual(31 * 86_400_000);
   });
 
-  it("aligns the Billing Read PayGo fallback to the preceding cycle start", async () => {
+  it("aligns the Billing Read PayGo fallback to the current cycle start", async () => {
     const billingEnv = { ...env, CLOUDFLARE_BILLING_TOKEN: "cfut_test_billing_token_value" } as Env;
     const urls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -296,7 +327,7 @@ describe("Cloudflare billing telemetry", () => {
     );
     expect(urls).toHaveLength(3);
     expect(new URL(urls[1]!).searchParams.get("from")).toBe("2026-07-17");
-    expect(new URL(urls[2]!).searchParams.get("from")).toBe("2026-07-09");
+    expect(new URL(urls[2]!).searchParams.get("from")).toBe("2026-08-09");
     expect(new URL(urls[2]!).searchParams.get("to")).toBe("2026-08-17");
   });
 });

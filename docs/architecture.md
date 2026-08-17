@@ -89,7 +89,8 @@ inside scheduled collectors, setup checks, configuration verification, and
 explicit refresh jobs.
 
 The one-minute cron is a scheduler. Active Worker and Durable Object telemetry
-is due every five minutes. Hot watch can run each minute while a current alert
+is due every five minutes. Product-wide historical collectors cover every
+registered Cloudflare usage dataset during the initial import. Hot watch can run each minute while a current alert
 instance is open and the aligned Cloudflare watermark has advanced. Inventory,
 billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
@@ -115,15 +116,19 @@ retained for up to 730 days under D1 capacity safeguards.
 
 Billing Read reconciliation runs hourly. Cloudflare billing data defines
 authoritative aggregate charges and actual cycle boundaries. Requests align to
-the account billing-cycle start so reconciliation includes every available
-cycle row. Detailed resource
+the current account billing-cycle start when the resulting range remains within
+Cloudflare's 31-day request limit. Detailed resource
 cost remains modeled; a product/day charge is proportionally allocated only
 where granular usage provides a defensible weighting. Unmapped billing products
 remain visible through account/product catchalls and explicit coverage gaps.
 
 Setup offers a one-shot import of Cloudflare's available 90-day history. Usage
-collectors split the window into at most three 32-day slices, and Billing Read
-uses one cycle-aligned slice. This ingestion path writes normalized ledger data
+collectors create daily slices within each dataset's discovered or registered
+retention. Billing Read uses contiguous slices of at most 31 days. Registered
+usage families include Workers, Durable Objects, Workers AI, Queues, D1, R2,
+Workers KV, Pages Functions, Images, Stream, Vectorize, Hyperdrive, AI Gateway,
+Containers, Browser Rendering, Workflows, Worker Builds, Analytics Engine, Log
+Explorer, zones, and Email. This ingestion path writes normalized ledger data
 without entering alert, notification, or control evaluation. Daily collection
 extends the stored history after setup, subject to the 730-day D1 retention
 ceiling.

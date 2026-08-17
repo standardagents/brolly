@@ -95,7 +95,7 @@ const freshInstall = firstRun === "1" || firstRun === "empty";
 const defaultFamilyDailySpend = Object.fromEntries([
   "workers", "durable_objects", "workers_ai", "queues", "d1", "r2", "kv", "pages", "images", "stream",
   "vectorize", "hyperdrive", "ai_gateway", "containers", "browser_rendering", "workflows", "worker_builds",
-  "analytics_engine", "log_explorer", "zones", "unknown",
+  "analytics_engine", "log_explorer", "zones", "email", "unknown",
 ].map(family => [family, spendLimits(1, 5, 10)]));
 
 const defaultPolicy = {
@@ -131,7 +131,14 @@ const catalogFamilies = [
   { family: "vectorize", label: "Vectorize", metrics: ["queried_dimensions", "stored_dimensions"] },
   { family: "hyperdrive", label: "Hyperdrive", metrics: ["database_queries"] },
   { family: "ai_gateway", label: "AI Gateway", metrics: ["requests", "tokens", "cost_usd"] },
+  { family: "containers", label: "Containers", metrics: ["vcpu_seconds", "memory_gb_seconds", "disk_gb_seconds", "egress_bytes"] },
+  { family: "browser_rendering", label: "Browser Rendering", metrics: ["sessions", "session_minutes"] },
+  { family: "workflows", label: "Workflows", metrics: ["requests", "cpu_ms", "steps", "storage_bytes"] },
+  { family: "worker_builds", label: "Worker Builds", metrics: ["build_minutes"] },
+  { family: "analytics_engine", label: "Analytics Engine", metrics: ["data_points_written", "data_points_read", "queries", "storage_bytes"] },
+  { family: "log_explorer", label: "Log Explorer", metrics: ["ingested_bytes", "queries", "storage_bytes"] },
   { family: "zones", label: "Zones", metrics: ["requests", "bandwidth_bytes"] },
+  { family: "email", label: "Email", metrics: ["sent", "routed"] },
 ];
 
 const discoveredAssets = [

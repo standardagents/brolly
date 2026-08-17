@@ -259,8 +259,11 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     }
     await coverageIncidents(store, [...inventory.coverage, ...durableObjects.coverage, ...workers.coverage], env, automaticQueue);
     await flushAutomaticFuses(store, env, automaticQueue);
-    const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
-    if (backfill.worked) normalizedSamples += backfill.samples;
+    while (ledgerBudget.remaining("backfillSlices") > 0 && ledgerBudget.remaining("wallMs") >= 8_000) {
+      const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
+      if (!backfill.worked) break;
+      normalizedSamples += backfill.samples;
+    }
 
     const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: env.BROLLY_TIMEZONE ?? "UTC" }).format(new Date(now));
     if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {

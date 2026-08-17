@@ -3,6 +3,7 @@ import type { Env } from "./env.js";
 import { LedgerStore } from "./ledger-store.js";
 import type { LedgerRunBudget } from "@standardagents/brolly-core";
 import { ingestWindow, type UsageCollector } from "./ingest.js";
+import { productUsageDefinition } from "./product-usage.js";
 
 interface SliceRow {
   id: string;
@@ -36,7 +37,10 @@ export async function runOneBackfillSlice(
   budget.charge("d1RowsRead", slice ? 1 : 0);
   if (!slice) return { worked: false, complete: true, samples: 0 };
   const collector = toUsageCollector(slice.collector_key);
-  if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < 16) {
+  const product = collector ? productUsageDefinition(collector) : undefined;
+  const requiredQueries = product?.datasets.length
+    ?? (collector === "graphql:durable-objects" || collector === "graphql:workers" ? 16 : 1);
+  if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < requiredQueries) {
     return { worked: false, complete: false, samples: 0 };
   }
   budget.charge("backfillSlices");
@@ -53,18 +57,21 @@ export async function runOneBackfillSlice(
     }
     const result = await ingestWindow({
       env, client, ledger, collector, startsAt: slice.starts_at, endsAt: slice.ends_at,
-      cursor: collector === "graphql:durable-objects" ? parseCursor(slice.cursor_json) : parseWorkerCursor(slice.cursor_json),
+      cursor: collector === "graphql:durable-objects"
+        ? parseCursor(slice.cursor_json)
+        : collector === "graphql:workers" ? parseWorkerCursor(slice.cursor_json) : undefined,
       budget, timeZone, historical: true, maxPages: 2,
     });
     const unavailable = result.coverage.find(item =>
       (item.state === "permission_denied" || item.state === "unavailable")
       && !(collector === "graphql:workers" && item.metric === "cache_requests")
+      && !item.detail?.startsWith("This metric is retained through authoritative billing")
     );
     if (unavailable) throw new Error(unavailable.detail ?? `${collector} telemetry is ${unavailable.state}`);
     const terminal = collector === "billing" || result.complete;
     const coverage = collector === "billing"
       ? result.coverage.some(item => item.metric === "initial_import_gaps" && item.state !== "healthy") ? "partial" : "complete"
-      : result.complete ? "complete" : "partial";
+      : result.complete && !result.coverage.some(item => item.state === "delayed") ? "complete" : "partial";
     await finishSlice(
       env.DB, budget, slice, terminal ? "complete" : "pending", result.continuation,
       terminal ? null : "Continuation saved after the bounded page budget",
@@ -126,7 +133,8 @@ async function updateJobStatus(db: D1Database, budget: LedgerRunBudget, jobId: s
 function toUsageCollector(value: string): UsageCollector | null {
   if (value === "billing" || value.includes("billing")) return "billing";
   if (value.includes("durable")) return "graphql:durable-objects";
-  if (value.includes("workers")) return "graphql:workers";
+  if (value === "graphql:workers" || value === "graphql:workersInvocationsAdaptive") return "graphql:workers";
+  if (productUsageDefinition(value)) return value as UsageCollector;
   return null;
 }
 
