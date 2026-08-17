@@ -9,7 +9,7 @@
     "build:deploy-template": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-guard build && node scripts/sync-deploy-template.mjs",
     "build:docs": "pnpm --filter @standardagents/brolly-docs build",
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
-    "deploy:docs": "pnpm build:docs && pnpm --filter @standardagents/brolly-docs deploy:built",
+    "deploy:docs": "node scripts/deploy-docs.mjs",
     "dev": "pnpm --filter @standardagents/brolly-guard dev",
     "dev:demo": "pnpm --filter @standardagents/brolly-guard dev:demo",
     "release:runtime": "node scripts/release-runtime.mjs",

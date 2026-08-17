@@ -1,6 +1,6 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "brolly-docs-local",
+  "name": "brolly-docs",
   "main": "src/worker.ts",
   "compatibility_date": "2026-08-08",
   "workers_dev": false,
@@ -11,5 +11,8 @@
     "html_handling": "drop-trailing-slash",
     "not_found_handling": "404-page"
   },
-  "observability": { "enabled": false }
+  "routes": [
+    { "pattern": "brolly.standardagents.ai", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
 }
