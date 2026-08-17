@@ -4,27 +4,38 @@ import type { OnboardingData } from "../types";
 import {
   AccessStep,
   AccountBudgetStep,
-  ObjectBudgetStep,
   ProductBudgetStep,
   ResourceBudgetStep,
   RuntimeStep,
   StepActions,
 } from "./BudgetSteps";
+import { ActionsStep } from "./actions";
+import { AlertsStep } from "./alerts";
+import { AlertLevelsStep, DEFAULT_ALERT_LEVELS, type LevelAssignments } from "./levels";
+import { GrantBillingAccessButton } from "./access";
+import { ImportProgress } from "./ingest";
+import { useNotificationTargets } from "../components/notifications";
 import { preparePolicy, prepareRuntimeIntegrations } from "./model";
 import { useBudgetEstimates } from "./useBudgetEstimates";
 import { useOnboardingSave } from "./useOnboardingSave";
 import { useWizardNavigation } from "./useWizardNavigation";
-import { ImportHistoryStep } from "./ingest";
 
+/**
+ * Setup order. Steps 1 and 2 are the baseline; steps 3 to 5 add fidelity and
+ * their limits must descend (resource <= product <= account).
+ */
 const STEPS = [
-  { label: "Confirm account access", preview: "Confirm which Cloudflare usage APIs Brolly can read." },
-  { label: "Import history", preview: "Pull the last 90 days of usage and billing." },
-  { label: "Account budget", preview: "One daily dollar limit for the whole account." },
-  { label: "Product budgets", preview: "A daily limit for each Cloudflare product." },
-  { label: "Resource budgets", preview: "A daily limit for each Worker and Durable Object namespace." },
-  { label: "Per-object limits", preview: "Usage thresholds for individual Durable Objects." },
-  { label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
-];
+  { key: "access", label: "Connect Cloudflare", preview: "Confirm the usage and billing APIs Brolly can read." },
+  { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
+  { key: "levels", label: "Alert levels", preview: "Warning, Critical, and Emergency by default; add your own. Each level inherits the channels of the levels before it." },
+  { key: "actions", label: "Actions per level", preview: "What Brolly does at each alert level: notify, prepare a stop action, or quarantine." },
+  { key: "account", label: "Account spend", preview: "One dollar limit for the whole account." },
+  { key: "product", label: "Product spend & usage", preview: "Spend and usage limits for each Cloudflare product." },
+  { key: "resource", label: "Resource spend & usage", preview: "Limits for any single Worker or Durable Object." },
+  { key: "runtime", label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
+] as const;
+type StepKey = typeof STEPS[number]["key"];
+const stepIndex = (key: StepKey) => STEPS.findIndex(step => step.key === key);
 
 /** Round step marker: filled while active, green once done, outlined otherwise. */
 function StepMarker({ state = "todo", children }: { state?: "active" | "done" | "todo"; children: ReactNode }) {
@@ -54,6 +65,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
 }) {
   const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
+  const [billingDialogOpen, setBillingDialogOpen] = useState(false);
+  const [levels, setLevels] = useState(DEFAULT_ALERT_LEVELS);
+  const [levelAssignments, setLevelAssignments] = useState<LevelAssignments>({});
+  const targets = useNotificationTargets(token);
+  const channelReady = targets.targets.length > 0;
   const navigation = useWizardNavigation(STEPS.length, initialStep, editing);
   const estimates = useBudgetEstimates(token, policy, setPolicy);
   const save = useOnboardingSave(token, data, policy, integrations, onSaved);
@@ -68,10 +84,15 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       result={estimates.estimates}
       notice={estimates.accessNotice}
       error={estimates.accessError}
+      billingDialogOpen={billingDialogOpen}
+      onCloseBilling={() => setBillingDialogOpen(false)}
+      onOpenBilling={() => setBillingDialogOpen(true)}
       onVerify={() => void estimates.verifyAccess()}
       onVerified={estimates.acceptBillingAccess}
     />,
-    <ImportHistoryStep token={token} billingConnected={billingConnected} onContinue={navigation.advance} />,
+    <AlertsStep token={token} targets={targets} />,
+    <AlertLevelsStep token={token} targets={targets} levels={levels} setLevels={setLevels} assignments={levelAssignments} setAssignments={setLevelAssignments} />,
+    <ActionsStep levels={levels} policy={policy} setPolicy={setPolicy} />,
     <AccountBudgetStep
       data={data}
       estimates={estimates.estimates}
@@ -83,7 +104,6 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     />,
     <ProductBudgetStep data={data} estimates={estimates.estimates} policy={policy} setPolicy={setPolicy} />,
     <ResourceBudgetStep data={data} estimates={estimates.estimates} policy={policy} setPolicy={setPolicy} />,
-    <ObjectBudgetStep policy={policy} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
   ];
 
@@ -98,7 +118,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
         </span>
       </header>
       <div className="mx-auto grid max-w-[1280px] grid-cols-[340px_minmax(0,1fr)] gap-14 px-8 pt-14 pb-[100px] max-xl:grid-cols-[290px_1fr] max-xl:gap-[30px] max-xl:px-6 max-xl:pt-10 max-xl:pb-20 max-md:block max-md:px-3.5 max-md:pt-[26px] max-md:pb-[60px]">
-        <WizardSidebar editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection} />
+        <WizardSidebar editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
+          {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
+        </WizardSidebar>
         <div className="grid min-w-0 gap-5">
           {STEPS.map((step, index) => index > navigation.unlocked
             ? <LockedStep key={step.label} step={step} index={index} />
@@ -110,12 +132,14 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
-                {index === navigation.unlocked && index === 2 && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
-                {index === navigation.unlocked && index < STEPS.length - 1 && index !== 1 && (index !== 0 || estimates.estimates) && (
+                {index === navigation.unlocked && index === stepIndex("account") && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
+                {index === navigation.unlocked && index < STEPS.length - 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}
                     busy={save.busy || (index === 0 && estimates.busy)}
+                    blocked={index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue." : ""}
                     firstStep={index === 0}
+                    onOpenBilling={() => setBillingDialogOpen(true)}
                     onContinue={navigation.advance}
                   />
                 )}
@@ -138,7 +162,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   );
 }
 
-function WizardSidebar({ editing, active, unlocked, onSelect }: {
+function WizardSidebar({ editing, active, unlocked, onSelect, children }: {
+  children?: ReactNode;
   editing: boolean;
   active: number;
   unlocked: number;
@@ -170,6 +195,7 @@ function WizardSidebar({ editing, active, unlocked, onSelect }: {
           );
         })}
       </ol>
+      {children}
     </aside>
   );
 }
@@ -187,18 +213,31 @@ function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number
   );
 }
 
-function ContinueFooter({ billingConnected, busy, firstStep, onContinue }: {
+function ContinueFooter({ billingConnected, blocked = "", busy, firstStep, onContinue, onOpenBilling }: {
   billingConnected: boolean;
+  blocked?: string;
   busy: boolean;
   firstStep: boolean;
   onContinue: () => void;
+  onOpenBilling: () => void;
 }) {
-  const label = firstStep ? billingConnected ? "Continue to import" : "Continue without billing access" : "Continue";
+  if (firstStep && !billingConnected) {
+    return (
+      <StepActions>
+        <span className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 max-lg:grid-cols-1 max-lg:items-stretch">
+          <small className="max-w-[52ch] text-left leading-5 text-muted"><strong className="text-ink">Billing access is highly recommended.</strong> It lets Brolly trigger events from actual billable charges. This gives you more understandable thresholds and greater protection for your account.</small>
+          <Button variant="secondary" className="shrink-0" disabled={busy} onClick={onContinue}>Continue without billing</Button>
+          <GrantBillingAccessButton disabled={busy} onClick={onOpenBilling} />
+        </span>
+      </StepActions>
+    );
+  }
+
   return (
     <StepActions>
       <span className="flex w-full flex-wrap items-center justify-between gap-4">
-        {firstStep && !billingConnected && <small className="max-w-[52ch] text-left leading-5 text-muted"><strong className="text-ink">Billing API access is highly recommended.</strong> It gives Brolly exact account-wide charges and greatly improves protection for your account.</small>}
-        <Button variant="primary" className="ml-auto shrink-0" disabled={busy} onClick={onContinue}>{label}</Button>
+        {blocked && <small className="text-[12.5px] text-muted">{blocked}</small>}
+        <Button variant="primary" className="ml-auto shrink-0" disabled={busy || Boolean(blocked)} title={blocked || undefined} onClick={onContinue}>{firstStep ? "Continue to alerts" : "Continue"}</Button>
       </span>
     </StepActions>
   );

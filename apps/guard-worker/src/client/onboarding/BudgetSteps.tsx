@@ -1,6 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { ProtectionExplainer, RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
-import { Icon } from "../components/ui";
+import { Icon, Notice } from "../components/ui";
 import type { OnboardingBudgetEstimates, OnboardingData, Policy, SpendLimits, Threshold } from "../types";
 import { AccessActions, RecentUsageEstimator } from "./access";
 import { LimitEditor, LimitTable, ObjectLimitRow, TelemetryLegend } from "./limits";
@@ -15,10 +15,10 @@ type SharedStepProps = {
 };
 
 /** Every step opens with the same heading and lead paragraph. */
-export function StepIntro({ title, children }: { title: string; children: ReactNode }) {
+export function StepIntro({ title, children }: { title: string; children?: ReactNode }) {
   return <>
-    <h2 className="mb-2.5 text-[27px] tracking-[-.025em]">{title}</h2>
-    <p className="mb-7 text-[14px] leading-[1.6] text-muted">{children}</p>
+    <h2 className={`text-[27px] tracking-[-.025em] ${children ? "mb-2.5" : "mb-7"}`}>{title}</h2>
+    {children && <p className="mb-7 text-[14px] leading-[1.6] text-muted">{children}</p>}
   </>;
 }
 
@@ -27,19 +27,22 @@ export function StepActions({ children }: { children: ReactNode }) {
   return <footer className="mt-6 flex justify-between max-md:flex-wrap max-md:gap-2.5">{children}</footer>;
 }
 
-export function AccessStep({ data, token, busy, result, notice, error, onVerify, onVerified }: {
+export function AccessStep({ data, token, busy, result, notice, error, billingDialogOpen, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
   data: OnboardingData;
   token: string;
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
   notice: string;
   error: string;
+  billingDialogOpen: boolean;
+  onCloseBilling: () => void;
+  onOpenBilling: () => void;
   onVerify: () => void;
   onVerified: (result: OnboardingBudgetEstimates) => void;
 }) {
   return <>
-    <StepIntro title="Confirm account access">Brolly monitors usage through Cloudflare&apos;s read-only APIs.</StepIntro>
-    <AccessActions accountId={data.accountId} families={data.families} busy={busy} result={result} notice={notice} error={error} token={token} onVerify={onVerify} onVerified={onVerified} />
+    <StepIntro title="Confirm account access" />
+    <AccessActions accountId={data.accountId} families={data.families} busy={busy} result={result} notice={notice} error={error} token={token} billingDialogOpen={billingDialogOpen} onCloseBilling={onCloseBilling} onOpenBilling={onOpenBilling} onVerify={onVerify} onVerified={onVerified} />
   </>;
 }
 
@@ -49,30 +52,17 @@ export function AccountBudgetStep({ busy, estimates, notice, policy, setPolicy, 
   onSuggest: () => void;
 }) {
   return <>
-    <StepIntro title="What is an unacceptable account day?">These limits apply across all monitored Cloudflare products. Warnings give you time; emergency limits create approval-ready stop actions where a safe control exists.</StepIntro>
+    <StepIntro title="Account spend">One dollar limit for the whole Cloudflare account, across every product. Product and resource limits below must stay at or under this amount.</StepIntro>
     <RecentUsageEstimator busy={busy} result={estimates} notice={notice} onSuggest={onSuggest} />
     <LimitEditor title="Total account spend" value={policy.accountDailySpend} onChange={value => setPolicy(current => ({ ...current, accountDailySpend: value }))} />
-    <div className="mt-4 flex items-center justify-between gap-[18px] rounded-panel border border-line-soft bg-panel-soft px-[18px] py-4">
-      <div>
-        <strong className="text-[14px]">Control mode</strong>
-        <p className="mt-1 max-w-[52ch] text-[12.5px] text-muted">Automatic mode applies an installed fuse only at an emergency threshold. Recovery remains manual.</p>
-      </div>
-      <select
-        className="min-h-10 flex-none rounded-field border border-field-line bg-field px-3 text-ink"
-        value={policy.mode}
-        onChange={event => setPolicy(current => ({ ...current, mode: event.target.value as Policy["mode"] }))}
-      >
-        <option value="observe">Observe only</option>
-        <option value="approval">Require approval</option>
-        <option value="automatic">Automatic emergency quarantine</option>
-      </select>
-    </div>
   </>;
 }
 
 export function ProductBudgetStep({ data, estimates, policy, setPolicy }: SharedStepProps) {
+  const overLimit = data.families.filter(family => exceeds(policy.familyDailySpend[family.family]!, policy.accountDailySpend)).map(family => family.label);
   return <>
-    <StepIntro title="Daily spend by product">Set a limit for every billable family. Brolly saves every limit now and clearly marks products where Cloudflare exposes only some of the usage data needed for alerts.</StepIntro>
+    <StepIntro title="Product spend and usage">Set a spend limit for each Cloudflare product. Usage limits in raw units (requests, rows, GB-s) arrive with the next configuration input. No product limit may exceed the account limit.</StepIntro>
+    {overLimit.length > 0 && <Notice tone="error">These products exceed the account limit: {overLimit.join(", ")}. Lower them or raise the account limit.</Notice>}
     <TelemetryLegend />
     <LimitTable
       heading="Product"
@@ -99,22 +89,23 @@ export function ResourceBudgetStep({ data, estimates, policy, setPolicy }: Share
     value: policy.assetDailySpend[asset.key]!,
     onChange: (value: SpendLimits) => setPolicy(current => ({ ...current, assetDailySpend: { ...current.assetDailySpend, [asset.key]: value } })),
   }));
+  const overLimit = data.scopedAssets.filter(asset => exceeds(policy.assetDailySpend[asset.key]!, policy.familyDailySpend[asset.family]!)).map(asset => asset.name);
   return <>
-    <StepIntro title="Limits for each Worker and namespace">These daily budgets override the product default for one Worker script or one Durable Object namespace. Newly discovered resources inherit their product limit until you assign an explicit budget here.</StepIntro>
-    <TelemetryLegend />
-    {rows.length
-      ? <LimitTable heading="Resource" rows={rows} />
-      : <div className="px-4 py-6 text-[13px] leading-[1.5] text-faint">No Worker scripts or Durable Object namespaces have been discovered yet. Run a scan, then reopen Budgets to assign them.</div>}
-  </>;
-}
-
-export function ObjectBudgetStep({ policy, setPolicy }: Pick<SharedStepProps, "policy" | "setPolicy">) {
-  return <>
-    <StepIntro title="Durable Object kill-switch limits">Brolly evaluates each returned Durable Object ID independently, so one runaway object can be isolated without deleting its storage or taking an entire account offline.</StepIntro>
+    <StepIntro title="Resource spend and usage">Limits for any single instance of a product: no one Durable Object or Worker may spend or use more than this. Brolly evaluates each object independently, so one runaway object can be isolated without taking a product offline. No resource limit may exceed its product limit.</StepIntro>
     <div className="overflow-hidden rounded-panel border border-line">
       {LIMIT_ROWS.map(row => <ObjectLimitRow key={`${row.metric}:${row.windowMs}`} row={row} threshold={findThreshold(policy, row.metric, row.windowMs, row.defaults)} onChange={(threshold: Threshold) => setPolicy(current => ({ ...current, thresholds: replaceThreshold(current.thresholds, threshold) }))} />)}
     </div>
     <ProtectionExplainer mode={policy.mode} />
+    <details className="group mt-3.5 rounded-panel border border-line bg-panel">
+      <summary className="cursor-pointer px-[15px] py-[13px] text-[13px] font-bold group-open:border-b group-open:border-line-soft">Override the limit for a specific Worker or namespace</summary>
+      <div className="p-4">
+        {overLimit.length > 0 && <Notice tone="error">These resources exceed their product limit: {overLimit.join(", ")}.</Notice>}
+        <TelemetryLegend />
+        {rows.length
+          ? <LimitTable heading="Resource" rows={rows} />
+          : <div className="px-4 py-6 text-[13px] leading-[1.5] text-faint">No Worker scripts or Durable Object namespaces have been discovered yet. Run a scan, then reopen Budgets to assign them.</div>}
+      </div>
+    </details>
   </>;
 }
 
@@ -155,4 +146,9 @@ export function RuntimeStep({ assets, integrations, onChange }: {
 function usageDetail(protection: string, estimate?: { observedUsd: number; source: string }): string {
   if (estimate) return `$${estimate.observedUsd.toFixed(2)} in ${estimate.source === "billing" ? "latest billing day" : "prior 24 hr"}`;
   return protection === "active" ? "Usage connected" : "Limited usage data";
+}
+
+/** True when any level of `child` is above the same level of `parent`. Limits must descend: resource ≤ product ≤ account. */
+function exceeds(child: SpendLimits, parent: SpendLimits): boolean {
+  return child.warning > parent.warning || child.critical > parent.critical || child.emergency > parent.emergency;
 }

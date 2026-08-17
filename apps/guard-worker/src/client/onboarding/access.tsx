@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { familyControl } from "@standardagents/brolly-core";
 import { api } from "../api";
-import { Button, Icon, InfoTip, Input, Notice, Spinner } from "../components/ui";
+import { Button, Icon, InfoTip, Input, Modal, Notice, Spinner } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
 
@@ -23,7 +23,7 @@ function ButtonLink({ variant, className = "", ...rest }: AnchorHTMLAttributes<H
   );
 }
 
-export function AccessActions({ accountId, families, busy, result, notice, error, token, onVerify, onVerified }: {
+export function AccessActions({ accountId, families, busy, result, notice, error, token, billingDialogOpen, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
   accountId: string;
   families: OnboardingData["families"];
   busy: boolean;
@@ -31,18 +31,19 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   notice: string;
   error: string;
   token: string;
+  billingDialogOpen: boolean;
+  onCloseBilling: () => void;
+  onOpenBilling: () => void;
   onVerify: () => void;
   onVerified: (result: OnboardingBudgetEstimates) => void;
 }) {
   const [billingToken, setBillingToken] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
-  const [billingSaved, setBillingSaved] = useState(false);
   const analyticsNeedsReconnect = result ? (["workers", "durable_objects"] as const).some(key => {
     const access = result.access[key];
     return access.state === "blocked" || (access.state === "limited" && accessPermissionProblem(access.detail));
   }) : false;
-  const billingNeedsToken = result ? result.access.billing.state !== "connected" : false;
   const revealed = useStaggeredReveal(busy, result);
   useInitialAccessCheck(busy, result, error, onVerify);
   const monitoringDetected = !busy && result !== null && revealed >= 1 && capabilityStatus("monitoring", result).state === "ready";
@@ -51,19 +52,25 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   async function saveBillingAccess() {
     setBillingBusy(true);
     setBillingError("");
-    setBillingSaved(false);
     try {
       await api("/api/billing-access", token, { method: "PUT", body: JSON.stringify({ token: billingToken }) });
       setBillingToken("");
       const verified = await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       if (verified.access.billing.state !== "connected") throw new Error(verified.access.billing.detail || "Cloudflare did not confirm Billing Read access");
-      setBillingSaved(true);
       onVerified(verified);
+      onCloseBilling();
     } catch (cause) {
       setBillingError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBillingBusy(false);
     }
+  }
+
+  function closeBillingDialog() {
+    if (billingBusy) return;
+    setBillingToken("");
+    setBillingError("");
+    onCloseBilling();
   }
 
   return (
@@ -79,7 +86,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
         </Notice>
       )}
 
-      {(busy || result) && <UsageAccessResults result={result} checking={busy} revealed={revealed} />}
+      {(busy || result) && <UsageAccessResults result={result} checking={busy} revealed={revealed} onConnectBilling={onOpenBilling} />}
 
       {(busy || result) && <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />}
 
@@ -91,13 +98,13 @@ export function AccessActions({ accountId, families, busy, result, notice, error
         </article>
       )}
 
-      {(billingNeedsToken || billingSaved) && (
+      {billingDialogOpen && result?.access.billing.state !== "connected" && (
         <BillingAccessSetup
           accountId={accountId}
           token={billingToken}
           busy={billingBusy}
           error={billingError}
-          saved={billingSaved}
+          onClose={closeBillingDialog}
           onToken={setBillingToken}
           onSubmit={() => void saveBillingAccess()}
         />
@@ -106,22 +113,27 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   );
 }
 
-function BillingAccessSetup({ accountId, token, busy, error, saved, onToken, onSubmit }: {
+export function GrantBillingAccessButton({ disabled = false, onClick }: { disabled?: boolean; onClick: () => void }) {
+  return <Button variant="primary" className="shrink-0" disabled={disabled} onClick={onClick}><Icon name="wallet" />Grant billing access</Button>;
+}
+
+function BillingAccessSetup({ accountId, token, busy, error, onClose, onToken, onSubmit }: {
   accountId: string;
   token: string;
   busy: boolean;
   error: string;
-  saved: boolean;
+  onClose: () => void;
   onToken: (value: string) => void;
   onSubmit: () => void;
 }) {
   const templateUrl = billingTokenTemplateUrl(accountId);
   return (
-    <section className="rounded-panel border border-line bg-panel p-5" aria-labelledby="billing-access-title">
-      <h3 id="billing-access-title" className="m-0 text-base">Add billing access</h3>
-      <p className="mt-1 max-w-[60ch] text-xs leading-5 text-muted">Cloudflare keeps billing behind a separate read-only token.</p>
-
-      <ol className="mt-4 grid gap-2">
+    <Modal
+      labelledBy="billing-access-title"
+      onClose={onClose}
+      header={<div><h2 id="billing-access-title">Enable billing access</h2><p>Cloudflare keeps billing behind a separate read-only token.</p></div>}
+    >
+      <ol className="grid gap-2">
         <BillingStep index={1} label="Create a billing token in Cloudflare" hint="Cloudflare's token creation page will be pre-configured with your account values.">
           <ButtonLink variant="primary" href={templateUrl} target="_blank" rel="noreferrer"><Icon name="external" /> Open Cloudflare</ButtonLink>
         </BillingStep>
@@ -130,17 +142,15 @@ function BillingAccessSetup({ accountId, token, busy, error, saved, onToken, onS
           <form className="grid w-full max-w-[30rem] gap-2" onSubmit={event => { event.preventDefault(); onSubmit(); }}>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <label className="sr-only" htmlFor="billing-access-token">Billing token from Cloudflare</label>
-              <Input id="billing-access-token" className="min-w-0 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" disabled={saved} />
-              {saved
-                ? <span className="inline-flex min-h-9 min-w-24 items-center justify-center gap-[7px] rounded-field border border-good-line bg-good-bg px-3.5 text-[13.5px] font-[620] text-good [&>svg]:size-4" role="status"><Icon name="check" /> Saved</span>
-                : <Button type="submit" variant="primary" className="min-w-24" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Saving…" : "Save"}</Button>}
+              <Input id="billing-access-token" className="min-w-0 text-sm" type="password" value={token} onChange={event => onToken(event.target.value)} autoComplete="off" spellCheck={false} placeholder="cfut_…" />
+              <Button type="submit" variant="primary" className="min-w-24" disabled={busy || !token.trim()}><Icon name="check" /> {busy ? "Saving…" : "Save"}</Button>
             </div>
             {error && <Notice tone="error"><strong>Billing access failed.</strong> {error}</Notice>}
           </form>
         </BillingStep>
       </ol>
-      <small className="mt-3 flex items-center gap-1.5 leading-5 text-faint"><Icon name="lock" className="size-3.5" />Brolly encrypts your token inside your own installation and never shows it again.</small>
-    </section>
+      <small className="mt-3 flex items-center gap-1.5 leading-5 text-faint"><Icon name="lock" className="size-3.5" /><span>Brolly encrypts your token inside your installation. Brolly never shows the token again.</span></small>
+    </Modal>
   );
 }
 
@@ -198,8 +208,8 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
  * not on access.
  */
 const ACCESS_CAPABILITIES = [
-  { key: "monitoring" as const, label: "Usage monitoring", detail: "Live usage meters and alerts for every service.", icon: "pulse" as const },
-  { key: "billing" as const, label: "Billing access", detail: "Daily and monthly alerts based on your invoiced dollar amounts.", icon: "wallet" as const },
+  { key: "monitoring" as const, label: "Usage monitoring", detail: "Trigger alerts and actions based on usage quantities.", icon: "pulse" as const },
+  { key: "billing" as const, label: "Billing monitoring", detail: "Trigger alerts and actions based on billable amounts.", icon: "wallet" as const },
 ];
 
 type CapabilityStatus =
@@ -269,7 +279,12 @@ function useStaggeredReveal(checking: boolean, result: OnboardingBudgetEstimates
  * matter how long a detail line runs. The cards never unmount or re-animate
  * between the checking and resolved states.
  */
-function UsageAccessResults({ result, checking, revealed }: { result: OnboardingBudgetEstimates | null; checking: boolean; revealed: number }) {
+function UsageAccessResults({ result, checking, revealed, onConnectBilling }: {
+  result: OnboardingBudgetEstimates | null;
+  checking: boolean;
+  revealed: number;
+  onConnectBilling: () => void;
+}) {
   return (
     <div className="grid gap-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
       {ACCESS_CAPABILITIES.map((row, index) => {
@@ -283,7 +298,9 @@ function UsageAccessResults({ result, checking, revealed }: { result: Onboarding
               <strong className="block text-sm leading-5">{row.label}</strong>
               <span className="block text-xs leading-4 text-muted">{row.detail}</span>
             </div>
-            <CapabilityPill status={status} />
+            {row.key === "billing" && status.state === "attention"
+              ? <span className="animate-access-resolve motion-reduce:animate-none"><GrantBillingAccessButton onClick={onConnectBilling} /></span>
+              : <CapabilityPill status={status} />}
           </article>
         );
       })}
@@ -292,11 +309,8 @@ function UsageAccessResults({ result, checking, revealed }: { result: Onboarding
 }
 
 /**
- * One pill shape for every state so the right column of the cards stays the
- * same size while a check resolves. Checking uses a spinning arc, which reads
- * as "in progress" where a pulsing dot reads as a status light. Not connected
- * is neutral because billing access is optional; only a real permission
- * denial (the reconnect action) uses accent color.
+ * One pill shape keeps status rows stable while checks resolve. Billing uses
+ * an explicit connection action when its read-only token is unavailable.
  */
 function CapabilityPill({ status }: { status: CapabilityStatus }) {
   const base = "inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-semibold leading-none";
@@ -321,7 +335,7 @@ function CapabilityPill({ status }: { status: CapabilityStatus }) {
 /**
  * Every cataloged service with a status light and, where it applies, a
  * control marker. The light says what Brolly can see: off until usage
- * monitoring is confirmed, yellow for usage alerts, green once billing access
+ * monitoring is confirmed, yellow for usage triggers, green once billing access
  * adds dollar alerts. The marker says what Brolly can do: a shield where the
  * fuse can quarantine (Workers, Durable Objects), a pause glyph where the
  * consumer can be paused (Queues). Billing access changes the lights, never
@@ -340,7 +354,7 @@ function ServiceCoverageGrid({ families, monitored, capped }: { families: Onboar
       <header className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <strong className="text-sm">Service coverage</strong>
         <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted [&_svg]:size-3.5">
-          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${dot}`} /> {capped ? "Usage + billing alerts" : monitored ? "Usage alerts" : "Checking"}</span>
+          <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${dot}`} /> {capped ? "Usage & billing triggers" : monitored ? "Usage triggers" : "Checking"}</span>
           {Object.values(CONTROL_MARKER).map(marker => <span key={marker.icon} className="flex items-center gap-1.5"><Icon name={marker.icon} /> {marker.label}</span>)}
         </span>
       </header>

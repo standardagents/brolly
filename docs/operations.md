@@ -7,12 +7,13 @@ while a current alert is open and Cloudflare's completed ingestion watermark
 has advanced. Newest-first backfill consumes only budget left after active
 protection work.
 
-The first-run **Import history** step starts a one-shot 90-day ingestion job.
-Each usage collector receives at most three 32-day slices. Billing Read adds
-one cycle-aligned slice. The job uses a separate budget of 40 GraphQL queries,
-five REST requests, and 25 seconds. Setup can continue while the cron scheduler
-finishes eligible slices. The progress view reports stored slice counts and
-dates.
+The first-run **Alert channels** step starts a one-shot 90-day ingestion job in
+the background and shows its progress while the operator connects channels.
+Usage collectors create daily slices within each dataset's available retention,
+up to 90 days. Billing Read creates three contiguous slices of no more than 31
+days. The job uses a separate budget of 40 GraphQL queries, five REST requests,
+and 25 seconds. Setup can continue while the cron scheduler finishes eligible
+slices. The progress view reports stored slice counts and dates.
 
 One run has default limits of 300 GraphQL dataset queries, 50 REST requests,
 100,000 D1 rows read, 50,000 D1 rows written, 30 dataset pages, four backfill
@@ -144,8 +145,9 @@ unbind the installation's Cloudflare account. The operator can authenticate
 again and continue setup.
 It starts with one bounded read-only check and does not apply suggested limits.
 Results are shown before any credential form.
-OAuth reconnection is revealed only for an Analytics permission problem;
-Billing token instructions are revealed only when Billing Read is unavailable.
+OAuth reconnection is revealed only for an Analytics permission problem.
+When Billing Read is unavailable, both **Grant billing access** actions open the
+same token setup dialog.
 Each result says what Brolly can monitor, what remains missing, and the next
 action. A partial Worker result is not presented as a permission failure when
 Cloudflare simply does not expose a per-Worker billing breakdown; the screen
@@ -156,10 +158,10 @@ protected by account and product limits because Cloudflare does not attribute
 them to individual Workers. Reconnecting OAuth is shown only for an actual
 authorization failure, never for a platform-level telemetry limitation.
 Connected rows explicitly require no action.
-Operators may continue onboarding without Billing Read, but the access-step
-footer labels that choice explicitly and recommends adding the token because
-invoice-aligned account totals materially improve protection. Once Billing
-Read is verified, the normal **Continue to import** action is restored.
+Operators may continue onboarding without Billing Read. The access-step footer
+keeps the recommendation on the left and presents **Continue without billing**
+before the primary **Grant billing access** action. Once Billing Read is
+verified, the normal **Continue to import** action is restored.
 The same account-scoped token generator, paste-and-verify form, connection
 status, and replacement workflow remain available under **Settings → Daily
 billing access** after onboarding. Skipping the first-run prompt therefore

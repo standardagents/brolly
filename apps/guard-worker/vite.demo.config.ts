@@ -158,7 +158,7 @@ const discoveredAssets = [
  * Workers `limited` with a non-permission detail is the `bestAvailable` branch, so
  * it reads "Setup needed" until Billing Read connects and then flips to "Ready";
  * Durable Objects `connected` shows the plain healthy row; billing `not_configured`
- * reveals BillingAccessSetup. accessPermissionProblem() matches on wording, so the
+ * reveals the billing connection actions. accessPermissionProblem() matches on wording, so the
  * Workers detail must avoid "denied", "forbidden", "unauthorized", and "403" or the
  * reconnect callout appears instead.
  */

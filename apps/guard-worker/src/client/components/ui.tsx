@@ -195,6 +195,57 @@ export function EmptyState({ icon = "check", title, children, compact = false }:
   );
 }
 
+function useDialogFocus(onClose: () => void) {
+  const panelRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onCloseRef.current(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previous?.focus?.();
+    };
+  }, []);
+
+  return panelRef;
+}
+
+/** Centered dialog with backdrop dismissal, Escape handling, and focus restoration. */
+export function Modal({ header, onClose, children, labelledBy }: {
+  header: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  labelledBy: string;
+}) {
+  const panelRef = useDialogFocus(onClose);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#14171b66] p-4 backdrop-blur-[2px] dark:bg-[#050608aa]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section
+        className="my-auto flex max-h-[calc(100vh-32px)] w-[min(680px,100%)] flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-drawer outline-none"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        ref={panelRef}
+        tabIndex={-1}
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-line px-6 py-5 [&_h2]:m-0 [&_h2]:text-[22px] [&_h2]:tracking-[-.02em] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[13px] [&_p]:text-muted">
+          {header}
+          <IconButton className="flex-none" aria-label="Close" onClick={onClose}><Icon name="x" /></IconButton>
+        </header>
+        <div className="overflow-y-auto p-6">{children}</div>
+      </section>
+    </div>
+  );
+}
+
 /**
  * Right-side drawer with dialog semantics: Escape closes, focus moves into the
  * panel on open, and clicking the backdrop dismisses.
@@ -206,18 +257,7 @@ export function Drawer({ header, footer, onClose, children, labelledBy }: {
   children: ReactNode;
   labelledBy?: string;
 }) {
-  const panelRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      previous?.focus?.();
-    };
-  }, [onClose]);
+  const panelRef = useDialogFocus(onClose);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-[#14171b66] backdrop-blur-[2px] dark:bg-[#050608aa]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
