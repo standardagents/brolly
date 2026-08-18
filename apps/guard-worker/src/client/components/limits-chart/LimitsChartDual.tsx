@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import { number as formatNumber } from "../../format";
 import { billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
 import { cycleIndexFor, type DayPoint } from "./cycles";
@@ -39,14 +39,14 @@ const USAGE_ACCENT = "#1a9c8c";
  */
 export function LimitsChartDual({ data, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false }: LimitsChartDualProps) {
   const dayWindow = useScopeWindow({
-    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly,
+    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly, chartFields: false,
     onCostChange: cost => onChange("day", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("day", current => ({ ...current, usage })),
     costLevelEnabled: day.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("day", current => ({ ...current, costLevelEnabled })),
     usageLevelEnabled: day.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("day", current => ({ ...current, usageLevelEnabled })),
   });
   const cycleWindow = useScopeWindow({
-    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, costFloor: day.cost, usageFloor: day.usage,
+    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, chartFields: false, costFloor: day.cost, usageFloor: day.usage,
     onCostChange: cost => onChange("cycle", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("cycle", current => ({ ...current, usage })),
     costLevelEnabled: cycle.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("cycle", current => ({ ...current, costLevelEnabled })),
@@ -149,19 +149,10 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, total, levels, day, cy
       </div>
       <Expander open={open}>
         <div className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
-          <ChartCell title="Per day">{row.id === "cost" ? day.window.costChart : day.window.usageChart(row.id)}</ChartCell>
-          <ChartCell title="Per billing cycle">{row.id === "cost" ? cycle.window.costChart : cycle.window.usageChart(row.id)}</ChartCell>
+          <div className="min-w-0">{row.id === "cost" ? day.window.costChart : day.window.usageChart(row.id)}</div>
+          <div className="min-w-0">{row.id === "cost" ? cycle.window.costChart : cycle.window.usageChart(row.id)}</div>
         </div>
       </Expander>
     </div>
-  );
-}
-
-function ChartCell({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="min-w-0">
-      <h5 className="mb-2 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint">{title}</h5>
-      {children}
-    </section>
   );
 }

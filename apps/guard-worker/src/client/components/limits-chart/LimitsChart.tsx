@@ -48,6 +48,8 @@ export interface LimitsChartProps {
   family?: string;
   /** Undo/redo store shared with a parent (survives unmount). Defaults to a private one. */
   history?: LimitHistory;
+  /** Render the value cards under the chart. Off when the row header already carries editable chips. */
+  fields?: boolean;
   /** Content placed beside the history controls in the heading row. */
   headerContent?: ReactNode;
 }
@@ -78,7 +80,7 @@ export function formatLimitValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unitLabel(unit)}`;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = true }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -400,7 +402,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         })}
       </svg>
 
-      {readOnly ? (
+      {!fields ? null : readOnly ? (
         <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
             <li key={level.id} className="inline-flex items-center gap-1.5">
