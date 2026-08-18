@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import { AddChannelRow, ChannelCredentialsForm, targetName, type NotificationChannel, type NotificationTargetsState } from "../components/notifications";
-import { Button, ChannelLogo, Icon, Notice, Popover, Spinner } from "../components/ui";
+import { Button, ChannelLogo, Icon, IconButton, Notice, Popover, Spinner } from "../components/ui";
 import { useOutsideClose } from "../lib/outside-close";
 import type { AlertEntryKind, AlertLevel, AlertLevelEntry, AlertLevelsResponse } from "../types";
 import { slotIndexAt, useDragSession, useFlip, useLeaving, type DragSession } from "./board-motion";
@@ -27,10 +27,13 @@ export function useAlertLevels(token: string) {
   const [levels, setLevels] = useState<AlertLevel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Only the first load shows the spinner; later reloads (after every
+  // mutation) swap the data in place so the board never unmounts and flashes.
+  const loaded = useRef(false);
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!loaded.current) setLoading(true);
     setError("");
-    try { setLevels((await api<AlertLevelsResponse>("/api/alert-levels", token)).levels); }
+    try { setLevels((await api<AlertLevelsResponse>("/api/alert-levels", token)).levels); loaded.current = true; }
     catch (cause) { setError(message(cause)); }
     finally { setLoading(false); }
   }, [token]);
@@ -49,7 +52,20 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
   const scrollerRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [scroll, setScroll] = useState({ atStart: true, atEnd: true });
   useFlip(boardRef);
+
+  const updateScroll = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    setScroll({ atStart: scroller.scrollLeft <= 1, atEnd: scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 1 });
+  }, []);
+  useEffect(() => {
+    updateScroll();
+    window.addEventListener("resize", updateScroll);
+    return () => window.removeEventListener("resize", updateScroll);
+  }, [updateScroll, board.levels.length, board.loading]);
+  const step = (direction: 1 | -1) => scrollerRef.current?.scrollBy({ left: direction * (COLUMN_WIDTH + 12), behavior: "smooth" });
 
   async function mutate(path: string, init: RequestInit) {
     board.setError("");
@@ -147,7 +163,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     {board.error && <Notice tone="error">{board.error}</Notice>}
     {!board.loading && (
       /* The scroller bleeds to the wizard card's border (its padding is clamp(26px,4vw,48px), 16px below md) so columns scroll to the edge instead of clipping inside the content box. */
-      <div ref={scrollerRef} className="-mx-[clamp(26px,4vw,48px)] min-w-0 overflow-x-auto px-[clamp(26px,4vw,48px)] pb-3 max-md:-mx-4 max-md:px-4" aria-label="Alert level board">
+      <div ref={scrollerRef} onScroll={updateScroll} className="-mx-[clamp(26px,4vw,48px)] min-w-0 overflow-x-auto px-[clamp(26px,4vw,48px)] pb-3 max-md:-mx-4 max-md:px-4" aria-label="Alert level board">
         <div ref={boardRef} className="flex min-w-max items-stretch gap-3">
           {columns.map(({ item: level, leaving }) => {
             const index = visualLevels.findIndex(item => item.id === level.id);
@@ -201,7 +217,17 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
         <Button variant="primary" disabled={!draft.trim()} onClick={() => void addLevel()}>Add level</Button>
         <Button variant="quiet" onClick={() => { setDraft(""); setAddingAfter(undefined); }}>Cancel</Button>
       </div>
-    ) : board.levels.length < 8 && <Button variant="secondary" onClick={() => setAddingAfter(board.levels.at(-1)?.id ?? null)}>Add level</Button>}
+    ) : (
+      <div className="flex items-center justify-between gap-3">
+        {board.levels.length < 8 ? <Button variant="secondary" onClick={() => setAddingAfter(board.levels.at(-1)?.id ?? null)}>Add level</Button> : <span />}
+        {!(scroll.atStart && scroll.atEnd) && (
+          <div className="inline-flex items-center gap-1.5" role="group" aria-label="Scroll alert levels">
+            <IconButton aria-label="Previous level" disabled={scroll.atStart} className="size-8 disabled:cursor-default disabled:opacity-40" onClick={() => step(-1)}><Icon name="arrow" className="size-4 rotate-180" /></IconButton>
+            <IconButton aria-label="Next level" disabled={scroll.atEnd} className="size-8 disabled:cursor-default disabled:opacity-40" onClick={() => step(1)}><Icon name="arrow" className="size-4" /></IconButton>
+          </div>
+        )}
+      </div>
+    )}
   </>;
 }
 
