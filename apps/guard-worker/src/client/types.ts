@@ -60,6 +60,8 @@ export interface RiskTolerance {
 export interface ScopeLimits {
   cost: SpendLimits;
   usage: Record<string, SpendLimits>;
+  /** Whole scope monitored. Missing means enabled. */
+  enabled?: boolean;
   costEnabled?: boolean;
   usageEnabled?: Record<string, boolean>;
   costLevelEnabled?: Record<string, boolean>;

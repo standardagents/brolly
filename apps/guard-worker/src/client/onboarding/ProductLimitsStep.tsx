@@ -4,6 +4,7 @@ import { LimitsChartDual, levelColor, useUsageSeries, type WindowLimits } from "
 import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
 import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
 import { Icon, ProductIcon, Spinner } from "../components/ui";
+import { MonitorSwitch } from "../components/limits-chart/UsageDimensions";
 import type { AlertLevel, OnboardingData, Policy, PolicyLimits, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
 
@@ -116,12 +117,13 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
                 const scope = `family:${family.family}`;
                 const active = scope === currentActive;
                 const openItem = openFor(scope);
+                const familyOn = policy.limits?.day?.[scope]?.enabled ?? true;
                 const items = infoByScope[scope]?.items ?? [];
                 const deviated = new Set(infoByScope[scope]?.deviated ?? []);
                 return (
                   <li key={scope}>
                     <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
-                      className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"}`}>
+                      className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"} ${familyOn ? "" : "opacity-50"}`}>
                       <ProductIcon family={family.family} size="sm" />
                       <span className="min-w-0 flex-1 truncate">{family.label}{deviated.size > 0 && <span className="ml-0.5 text-orange" title="Some limits differ from the tolerance defaults">*</span>}</span>
                       {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
@@ -194,6 +196,10 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
   const tolerance = policy.riskTolerance?.percentOfTypical;
   const dayLimits = policy.limits?.day?.[scope];
   const cycleLimits = policy.limits?.cycle?.[scope];
+  const familyEnabled = dayLimits?.enabled ?? true;
+  const setFamilyEnabled = (next: boolean) => {
+    for (const window of ["day", "cycle"] as const) setPolicy(previous => updateScope(previous, window, scope, family, current => ({ ...current, enabled: next })));
+  };
   useEffect(() => {
     if (!usage.data) return;
     const data = usage.data;
@@ -227,10 +233,15 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
           <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="bell" className="size-3.5" /> Alerts</span>
           {control && <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink" title="Brolly can quarantine this product."><Icon name="shield" className="size-3.5" /> Quarantine</span>}
         </span>
+        <span className="ml-auto flex items-center gap-2 text-[11.5px] font-bold text-muted">
+          <span>{familyEnabled ? "Monitored" : "Not monitored"}</span>
+          <MonitorSwitch label={label} on={familyEnabled} onChange={setFamilyEnabled} />
+        </span>
       </header>
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
       {usage.error && <p className="text-[13px] text-faint">Usage history is unavailable. {usage.error}</p>}
       {usage.data && (
+        <div className={familyEnabled ? "" : "pointer-events-none opacity-50"} aria-disabled={!familyEnabled}>
         <LimitsChartDual
           data={usage.data}
           levels={levels}
@@ -238,9 +249,10 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
           cycle={cycleLimits ?? emptyScope()}
           onChange={(window, change) => setPolicy(previous => updateScope(previous, window, scope, family, change))}
           tolerance={tolerance}
-          open={open}
+          open={familyEnabled ? open : null}
           onOpenChange={onOpenChange}
         />
+        </div>
       )}
     </section>
   );

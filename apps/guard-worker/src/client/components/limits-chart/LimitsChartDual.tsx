@@ -10,6 +10,7 @@ import { useScopeWindow, type ScopeWindow, type UsageLimitValues } from "./use-s
 export interface WindowLimits {
   cost: LevelValues;
   usage: UsageLimitValues;
+  enabled?: boolean;
   costEnabled?: boolean;
   usageEnabled?: Record<string, boolean>;
   costLevelEnabled?: Record<string, boolean>;

@@ -569,6 +569,7 @@ export function validPolicy(policy: Policy, requireEveryFamily = false, levelIds
       for (const scope of Object.values(scopes)) {
         if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some(value => !validOptionalSpend(value))) return false;
         if (scope.costEnabled !== undefined && typeof scope.costEnabled !== "boolean") return false;
+        if (scope.enabled !== undefined && typeof scope.enabled !== "boolean") return false;
         if (!validBooleanMap(scope.usageEnabled) || !validBooleanMap(scope.costLevelEnabled)) return false;
         if (scope.usageLevelEnabled && Object.values(scope.usageLevelEnabled).some(value => !validBooleanMap(value))) return false;
       }
