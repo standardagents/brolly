@@ -113,9 +113,9 @@ export function chooseAxis(series: number[], extra: number[] = []): Axis {
   const middle = median(nonzero);
   const outlier = nonzero.length >= 3 && middle > 0 && dataMax > OUTLIER_RATIO * middle;
   if (!outlier) return linearAxis(top);
-  // A knee under the median keeps the median region at roughly a quarter of
-  // the axis height instead of hugging the baseline.
-  return symlogAxis(top, middle / 4);
+  // Knee at the median: typical days sit low and an outlier towers over
+  // them, while the linear stretch under the knee keeps zeros readable.
+  return symlogAxis(top, middle);
 }
 
 export function linearAxis(top: number): Axis {

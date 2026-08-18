@@ -20,7 +20,8 @@ describe("axis selection", () => {
     const axis = chooseAxis(series);
     expect(axis.kind).toBe("symlog");
     expect(axis.position(0)).toBe(0);
-    expect(axis.position(5)).toBeGreaterThan(0.2);
+    expect(axis.position(5)).toBeGreaterThan(0.1);
+    expect(axis.position(900) - axis.position(5)).toBeGreaterThan(0.75);
     expect(axis.position(900)).toBeLessThanOrEqual(1);
     expect(axis.invert(axis.position(42))).toBeCloseTo(42, 6);
     expect(axis.ticks[0]).toBe(0);
