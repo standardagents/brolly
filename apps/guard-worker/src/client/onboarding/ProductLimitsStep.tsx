@@ -64,11 +64,11 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const [activeScope, setActiveScope] = useState<string | null>(null);
   const currentActive = activeScope ?? (ordered[0] ? `family:${ordered[0].family}` : null);
 
-  // Scroll spy: a product becomes active once its top has crossed a line
-  // 70% of the way down the viewport, so the sidebar leads the eye slightly.
+  // Scroll spy: a product becomes active once its top has risen past a line
+  // 30% of the way down the visible area.
   useEffect(() => {
     const update = () => {
-      const line = STICKY_TOP + (window.innerHeight - STICKY_TOP) * 0.7;
+      const line = STICKY_TOP + (window.innerHeight - STICKY_TOP) * 0.3;
       let current: string | null = null;
       for (const family of ordered) {
         const scope = `family:${family.family}`;
