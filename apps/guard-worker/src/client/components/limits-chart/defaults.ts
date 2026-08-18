@@ -51,9 +51,9 @@ export function pushLevelValue(series: DayPoint[], cycles: CycleBounds[] | undef
 
 /**
  * Default level values derived from a scope's typical historical usage.
- * Daily limits use the median nonzero day. Cycle limits use the median of at
- * least two fully covered, completed cycles and otherwise use the daily
- * median multiplied by the current cycle length.
+ * Daily limits use the median nonzero day. Cycle limits use that
+ * daily median multiplied by the current cycle length, so an anomalous past
+ * cycle never becomes the norm.
  */
 export function toleranceDefaults(
   series: DayPoint[],
@@ -71,30 +71,15 @@ export function toleranceDefaults(
   let baseline = dailyTypical;
 
   if (window === "cycle") {
-    const coveredDays = new Map(inWindow.map(point => [dayStart(point.day), point.sealed !== false]));
-    const complete = cycles.filter(cycle => {
-      if (cycle.endsAt > dayStart(today)) return false;
-      for (let at = cycle.startsAt; at < cycle.endsAt; at += DAY_MS) {
-        if (coveredDays.get(at) !== true) return false;
-      }
-      return true;
-    });
-    if (complete.length >= 2) {
-      baseline = median(complete.map(cycle => inWindow
-        .filter(point => {
-          const at = dayStart(point.day);
-          return at >= cycle.startsAt && at < cycle.endsAt;
-        })
-        .reduce((sum, point) => sum + Math.max(0, point.value), 0)));
-    } else {
-      const currentIndex = cycleIndexFor(cycles, today);
-      const current = cycles[currentIndex] ?? cycles.at(-1);
-      baseline = dailyTypical * (current ? daysBetween(current.startsAt, current.endsAt) : 30);
-    }
+    // Cycle baseline = the daily typical × days in the current cycle. A
+    // median of past cycle totals would let one runaway cycle set the norm.
+    const currentIndex = cycleIndexFor(cycles, today);
+    const current = cycles[currentIndex] ?? cycles.at(-1);
+    baseline = dailyTypical * (current ? daysBetween(current.startsAt, current.endsAt) : 30);
   }
 
   if (!(baseline > 0)) return Object.fromEntries(order.map((id, index) => [id, niceLadder(0, order.length)[index]!])) as LevelValues;
-  let values: LevelValues = Object.fromEntries(order.map(id => [id, snapToNice(baseline * Math.max(100, percent[id] ?? 100) / 100)]));
+  let values: LevelValues = Object.fromEntries(order.map(id => [id, snapToNice(baseline * Math.max(1, percent[id] ?? 100) / 100)]));
   const axis = chooseAxis(inWindow.map(point => point.value), Object.values(values));
   for (const id of order) values = pushLevels(axis, order, values, id, values[id]!);
   return values;

@@ -24,7 +24,7 @@ function render(props: Partial<Parameters<typeof LimitsChart>[0]> = {}) {
 describe("LimitsChart", () => {
   it("renders one bar per day in the window and one slider per level", () => {
     const html = render();
-    expect((html.match(/<rect /g) ?? []).length).toBe(series.length);
+    expect((html.match(/<rect [^>]*rx=/g) ?? []).length).toBe(series.length);
     expect((html.match(/role="slider"/g) ?? []).length).toBe(LEVELS.length);
     expect(html).toContain('aria-valuenow="10"');
     expect(html).toContain('aria-valuenow="20"');

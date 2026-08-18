@@ -99,9 +99,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const projection = useMemo(() => projectCycle(dense, cycles, today), [dense, cycles, today]);
   const observedMax = useMemo(() => Math.max(0, ...dense.map(point => point.value)), [dense]);
   const seriesValues = useMemo(() => dense.map(point => point.value), [dense]);
-  const heightValues = useMemo(() => [
-    ...seriesValues, ...cumulative.map(point => point.cumulative), projection?.projected ?? 0,
-  ], [seriesValues, cumulative, projection]);
+  // The daily chart is about days: its axis fits the bars and levels, and the
+  // cumulative background may run off the top. The cycle chart's axis must
+  // hold the running total and the projection.
+  const heightValues = useMemo(() => (limitWindow === "cycle"
+    ? [...seriesValues, ...cumulative.map(point => point.cumulative), projection?.projected ?? 0]
+    : seriesValues), [seriesValues, cumulative, projection, limitWindow]);
 
   // The axis extends to keep every level visible, but stays frozen while a
   // handle is dragged so the chart does not rescale under the pointer.
@@ -285,6 +288,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         aria-label={chartLabel}
       >
         <defs>
+          <clipPath id={`${patternId}-plot`}><rect x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} /></clipPath>
           <pattern id={`${patternId}-hatch`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="1" opacity=".22" />
           </pattern>
@@ -317,16 +321,18 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               <polygon key={`${band.id}-${index}`} points={points} fill={band.color} opacity=".82" clipPath={`url(#${patternId}-band-${band.id})`} />
             )))}
           </>
-        ) : sawtooth.map((points, index) => (
-          <polygon key={index} points={points} fill="currentColor" opacity=".07" />
-        ))}
+        ) : (
+          <g clipPath={`url(#${patternId}-plot)`}>
+            {sawtooth.map((points, index) => <polygon key={index} points={points} fill="currentColor" opacity=".07" />)}
+          </g>
+        )}
         {projection && remainingDays > 0 && (() => {
           const x1 = xFor(dense.length - 1) + barSlot / 2;
           const x2 = xFor(dense.length - 1 + remainingDays) + barSlot / 2;
           const y1 = yFor(projection.toDate);
           const y2 = yFor(projection.projected);
           const base = PLOT.top + plotHeight;
-          return <g>
+          return <g clipPath={`url(#${patternId}-plot)`}>
             <polygon points={`${x1},${base} ${x1},${y1} ${x2},${y2} ${x2},${base}`} fill={`url(#${patternId}-hatch)`} />
             <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="currentColor" opacity=".4" strokeDasharray="2 3" strokeWidth="1" />
           </g>;

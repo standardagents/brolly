@@ -112,7 +112,7 @@ describe("risk tolerance baseline", () => {
     expect(values.emergency).toBeGreaterThan(values.critical!);
   });
 
-  it("uses the median of complete billing cycles", () => {
+  it("derives cycle defaults from the daily typical times the current cycle length, not from past cycle totals", () => {
     const cycles = [
       { startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 0, 4) },
       { startsAt: Date.UTC(2026, 0, 4), endsAt: Date.UTC(2026, 0, 7) },
@@ -123,7 +123,8 @@ describe("risk tolerance baseline", () => {
       { day: "2026-01-04", value: 4 }, { day: "2026-01-05", value: 4 }, { day: "2026-01-06", value: 4 },
       { day: "2026-01-07", value: 1000 },
     ], cycles, "2026-01-08", ["warn"], { warn: 100 }, "cycle");
-    expect(values.warn).toBe(9);
+    // Daily median of nonzero days is 4; the current cycle spans 5 days.
+    expect(values.warn).toBe(20);
   });
 
   it("excludes a completed cycle with an interior coverage gap", () => {
