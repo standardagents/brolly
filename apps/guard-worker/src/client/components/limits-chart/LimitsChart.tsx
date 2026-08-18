@@ -48,8 +48,11 @@ export interface LimitsChartProps {
   family?: string;
   /** Undo/redo store shared with a parent (survives unmount). Defaults to a private one. */
   history?: LimitHistory;
-  /** Render the value cards under the chart. Off when the row header already carries editable chips. */
-  fields?: boolean;
+  /**
+   * Value editors under the chart: "cards" (default), "inline" (one plain
+   * row: diamond, label, value, switch per level, no boxes), or false.
+   */
+  fields?: "cards" | "inline" | false;
   /** Content placed beside the history controls in the heading row. */
   headerContent?: ReactNode;
 }
@@ -80,7 +83,7 @@ export function formatLimitValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unitLabel(unit)}`;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = true }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -411,6 +414,14 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             </li>
           ))}
         </ul>
+      ) : fields === "inline" ? (
+        <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-line-soft pt-2">
+          {levels.map(level => (
+            <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+              enabled={levelEnabled?.[level.id] ?? true}
+              onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
+          ))}
+        </div>
       ) : (
         // Four across when there are four or more levels; fewer levels share the row three-wide so each card gets a third.
         <div className={`mt-2.5 grid grid-cols-2 gap-2 ${levels.length >= 4 ? "@[560px]:grid-cols-4" : "@[560px]:grid-cols-3"}`}>
@@ -428,7 +439,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   );
 }
 
-function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level: LimitsChartLevel; unit: string; value: number; onCommit(next: number): void; enabled: boolean; onToggle?(next: boolean): void }) {
+function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = false }: { level: LimitsChartLevel; unit: string; value: number; onCommit(next: number): void; enabled: boolean; onToggle?(next: boolean): void; inline?: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
   const shown = draft ?? compactValue(value, unit);
   const commitDraft = () => {
@@ -437,14 +448,8 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
     setDraft(null);
     if (parsed !== null && parsed >= 0) onCommit(parsed);
   };
-  return (
-    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2 py-1.5 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
-      <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
-        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-        <span className="truncate">{level.label}</span>
-        {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
-      </span>
-      <span className="flex min-w-0 items-baseline gap-[3px] text-ink">
+  const input = (
+    <span className="flex min-w-0 items-baseline gap-[3px] text-ink">
         {unit === "USD" && <b className="text-[13px] text-faint">$</b>}
         <input
           className="min-w-[2ch] max-w-full border-0 bg-transparent p-0 text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default"
@@ -468,6 +473,25 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
         />
         {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unitLabel(unit)}</small>}
       </span>
+  );
+  if (inline) {
+    return (
+      <label className={`inline-flex items-center gap-2 transition-opacity ${enabled ? "" : "opacity-55"}`}>
+        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
+        <span className="text-[11.5px] font-bold text-muted">{level.label}</span>
+        <span className="rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
+        {onToggle && <LevelSwitch label={level.label} on={enabled} onChange={onToggle} />}
+      </label>
+    );
+  }
+  return (
+    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2 py-1.5 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
+      <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
+        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
+        <span className="truncate">{level.label}</span>
+        {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
+      </span>
+      {input}
     </label>
   );
 }

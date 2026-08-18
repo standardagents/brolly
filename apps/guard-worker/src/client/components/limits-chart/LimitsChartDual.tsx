@@ -40,14 +40,14 @@ const USAGE_ACCENT = "#1a9c8c";
  */
 export function LimitsChartDual({ data, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false }: LimitsChartDualProps) {
   const dayWindow = useScopeWindow({
-    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly, chartFields: false,
+    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly, chartFields: "inline",
     onCostChange: cost => onChange("day", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("day", current => ({ ...current, usage })),
     costLevelEnabled: day.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("day", current => ({ ...current, costLevelEnabled })),
     usageLevelEnabled: day.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("day", current => ({ ...current, usageLevelEnabled })),
   });
   const cycleWindow = useScopeWindow({
-    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, chartFields: false, costFloor: day.cost, usageFloor: day.usage,
+    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, chartFields: "inline", costFloor: day.cost, usageFloor: day.usage,
     onCostChange: cost => onChange("cycle", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("cycle", current => ({ ...current, usage })),
     costLevelEnabled: cycle.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("cycle", current => ({ ...current, costLevelEnabled })),

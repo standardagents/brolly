@@ -25,8 +25,8 @@ export interface ScopeWindowInput {
   onCostLevelEnabledChange?(next: Record<string, boolean>): void;
   usageLevelEnabled?: Record<string, Record<string, boolean>>;
   onUsageLevelEnabledChange?(next: Record<string, Record<string, boolean>>): void;
-  /** Value cards under each chart (off when the row header carries the chips). */
-  chartFields?: boolean;
+  /** Value editors under each chart: cards, one inline row, or none. */
+  chartFields?: "cards" | "inline" | false;
 }
 
 export interface ScopeWindow {
@@ -48,7 +48,7 @@ export interface ScopeWindow {
  * undo history, chart nodes, and chip edit handlers. Layouts decide how the
  * rows look; this decides what they contain.
  */
-export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, chartFields = true }: ScopeWindowInput): ScopeWindow {
+export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, chartFields = "cards" }: ScopeWindowInput): ScopeWindow {
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const histories = useLimitHistories();
