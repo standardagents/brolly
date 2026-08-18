@@ -415,7 +415,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : fields === "inline" ? (
-        <div className="mt-2 grid grid-cols-3 gap-x-4 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2">
+        <div className="mt-2 grid grid-cols-3 gap-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2 [&>label]:bg-panel-soft/60">
           {levels.map(level => (
             <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
@@ -477,7 +477,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
   if (inline) {
     // Label over value, switch to the right; no box.
     return (
-      <label className={`flex w-full min-w-0 items-center gap-2.5 transition-opacity ${enabled ? "" : "opacity-55"}`}>
+      <label className={`flex w-full min-w-0 items-center gap-2.5 rounded-field px-2 py-1.5 transition-opacity ${enabled ? "" : "opacity-55"}`}>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
             <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
@@ -485,7 +485,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
           </span>
           <span className="-ml-1 w-max rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
         </span>
-        {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
+        {onToggle && <span className="flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
       </label>
     );
   }
