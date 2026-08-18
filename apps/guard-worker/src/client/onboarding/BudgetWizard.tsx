@@ -109,7 +109,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
       </header>
-      <WizardStepper editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
+      <WizardStepper active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
         {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
       </WizardStepper>
       <div className="mx-auto max-w-[1440px] px-8 pt-8 pb-[100px] max-xl:px-6 max-xl:pb-20 max-md:px-3.5 max-md:pt-4 max-md:pb-[60px]">
@@ -158,9 +158,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
  * the step cards get the full page width; labels hide below `lg`, markers
  * stay.
  */
-function WizardStepper({ editing, active, unlocked, onSelect, children }: {
+function WizardStepper({ active, unlocked, onSelect, children }: {
   children?: ReactNode;
-  editing: boolean;
   active: number;
   unlocked: number;
   onSelect: (index: number) => void;
@@ -168,7 +167,6 @@ function WizardStepper({ editing, active, unlocked, onSelect, children }: {
   return (
     <aside className="sticky top-[60px] z-30 border-b border-line bg-panel/95 backdrop-blur">
       <div className="mx-auto flex max-w-[1440px] items-center gap-6 px-8 py-2.5 max-xl:px-6 max-md:gap-3 max-md:px-3.5">
-        <h1 className="m-0 whitespace-nowrap text-[15px] font-[750] tracking-[-.01em] max-md:hidden">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
         <ol className="flex min-w-0 flex-1 list-none items-center gap-1 overflow-x-auto">
           {STEPS.map((step, index) => {
             const reachable = index <= unlocked;
