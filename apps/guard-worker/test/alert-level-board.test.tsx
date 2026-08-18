@@ -115,7 +115,8 @@ describe("alert level board drag and drop", () => {
       handle.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: -100, clientY: 20, pointerId: 1 }));
     });
     expect(document.querySelector("[aria-hidden='true'].border-dashed")).not.toBeNull();
-    await act(async () => { handle.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: -100, clientY: 20, pointerId: 1 })); });
+    // The handle unmounts once its column becomes a placeholder; the browser still delivers pointerup to the document.
+    await act(async () => { document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: -100, clientY: 20, pointerId: 1 })); });
     await waitFor(() => expect(calls.some(call => call.method === "PATCH" && call.path === "/api/alert-levels/critical" && call.body.position === 0)).toBe(true));
   });
 });

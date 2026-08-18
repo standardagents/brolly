@@ -120,7 +120,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <section
                 key={step.label}
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
-                className="scroll-mt-[84px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
+                className="min-w-0 scroll-mt-[84px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}

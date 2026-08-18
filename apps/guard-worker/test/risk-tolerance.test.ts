@@ -19,21 +19,23 @@ describe("risk tolerance presets", () => {
         const list = order.map(id => values[id]!);
         expect(list).toHaveLength(count);
         expect(list.every((value, index) => index === 0 || value > list[index - 1]!)).toBe(true);
-        expect(list.every(value => value >= RISK_PRESETS[preset].low && value <= RISK_PRESETS[preset].high)).toBe(true);
+        const anchors = RISK_PRESETS[preset];
+        // The minimum-gap push can nudge the top of a dense ladder slightly past the last anchor.
+        expect(list.every(value => value >= anchors[0]! && value <= anchors[anchors.length - 1]! * 1.2)).toBe(true);
       });
     }
   }
 
-  it("places three balanced levels near 90, 270, and 800 percent", () => {
+  it("places three balanced levels at 90, 200, and 300 percent", () => {
     expect(tolerancePresetValues("balanced", ["warn", "critical", "emergency"]))
-      .toEqual({ warn: 90, critical: 270, emergency: 800 });
+      .toEqual({ warn: 90, critical: 200, emergency: 300 });
   });
 
   it("treats a missing policy value as balanced", () => {
     const value = normalizeRiskTolerance(undefined, ["warn", "critical", "emergency"], 1234);
     expect(value).toEqual({
       preset: "balanced",
-      percentOfTypical: { warn: 90, critical: 270, emergency: 800 },
+      percentOfTypical: { warn: 90, critical: 200, emergency: 300 },
       baseline: { computedAt: 1234, windowDays: 90 },
     });
   });

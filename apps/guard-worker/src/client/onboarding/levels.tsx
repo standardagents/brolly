@@ -146,7 +146,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     {board.loading && <Spinner />}
     {board.error && <Notice tone="error">{board.error}</Notice>}
     {!board.loading && (
-      <div ref={scrollerRef} className="-mx-1 overflow-x-auto px-1 pb-3" aria-label="Alert level board">
+      <div ref={scrollerRef} className="-mx-1 w-[calc(100%+8px)] min-w-0 max-w-[calc(100%+8px)] overflow-x-auto px-1 pb-3" aria-label="Alert level board">
         <div ref={boardRef} className="flex min-w-max items-stretch gap-3">
           {columns.map(({ item: level, leaving }) => {
             const index = visualLevels.findIndex(item => item.id === level.id);
@@ -179,14 +179,19 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
         </div>
       </div>
     )}
-    {columnDrag.session && <Ghost session={columnDrag.session}>
-      <div className="rounded-panel border border-orange bg-panel p-3.5 shadow-drawer" style={{ width: COLUMN_WIDTH }}>
-        <div className="flex items-center gap-1.5 text-[14px] font-[750]"><span className="text-faint" aria-hidden="true">⠿</span>{board.levels.find(level => level.id === columnDrag.session!.data.id)?.label}</div>
-      </div>
-    </Ghost>}
+    {columnDrag.session && (() => {
+      const level = board.levels.find(item => item.id === columnDrag.session!.data.id);
+      return level ? <Ghost session={columnDrag.session}>
+        <div className="rounded-panel shadow-drawer" style={{ width: COLUMN_WIDTH, height: columnDrag.session.height }}>
+          <LevelColumn level={level} index={level.position} count={board.levels.length} token={token} targets={targets} usedTargets={usedTargets} entryDrag={null}
+            onGrabColumn={() => {}} onGrabEntry={() => {}} onMove={() => {}} onAddBefore={() => {}} onAddAfter={() => {}} onChanged={async () => {}} onError={() => {}} ghost />
+        </div>
+      </Ghost> : null;
+    })()}
     {entryDrag.session && draggedEntry && <Ghost session={entryDrag.session}>
-      <div className="rounded-field border border-orange bg-panel-soft p-2.5 shadow-drawer" style={{ width: entryDrag.session.width }}>
-        <EntryHead target={targets.targets.find(target => target.id === draggedEntry.targetId)} />
+      <div className="shadow-drawer" style={{ width: entryDrag.session.width }}>
+        <ChannelEntry entry={draggedEntry} slotIndex={-1} leaving={false} target={targets.targets.find(target => target.id === draggedEntry.targetId)} token={token} levelId={draggedEntry.levelId}
+          onGrab={() => {}} onChanged={async () => {}} onError={() => {}} ghost />
       </div>
     </Ghost>}
     {addingAfter !== undefined ? (
@@ -207,13 +212,15 @@ function Ghost({ session, children }: { session: DragSession<unknown>; children:
   );
 }
 
-function LevelColumn({ level, index, count, token, targets, usedTargets, entryDrag, onGrabColumn, onGrabEntry, onMove, onAddBefore, onAddAfter, onChanged, onError }: {
+function LevelColumn({ level, index, count, token, targets, usedTargets, entryDrag, onGrabColumn, onGrabEntry, onMove, onAddBefore, onAddAfter, onChanged, onError, ghost = false }: {
   level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; usedTargets: Set<string | null>;
   entryDrag: { id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; entry: AlertLevelEntry | null } | null;
   onGrabColumn: (event: React.PointerEvent, element: HTMLElement) => void;
   onGrabEntry: (event: React.PointerEvent, entryId: string, element: HTMLElement) => void;
   onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void;
   onChanged: () => Promise<void>; onError: (error: string) => void;
+  /** Non-interactive copy rendered inside the drag ghost. */
+  ghost?: boolean;
 }) {
   const [label, setLabel] = useState(level.label);
   const [addOpen, setAddOpen] = useState(false);
@@ -253,7 +260,7 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, entryDr
   const listed = useLeaving(rows.filter((row): row is { kind: "entry"; entry: AlertLevelEntry } => row.kind === "entry").map(row => row.entry), entry => entry.id);
 
   return (
-    <section ref={sectionRef} data-level={level.id} className="flex h-full flex-col rounded-panel border border-line bg-panel p-3.5">
+    <section ref={sectionRef} data-level={ghost ? undefined : level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 ${ghost ? "pointer-events-none border-orange" : "border-line"}`}>
       <header className="mb-3 flex items-center gap-1.5">
         <button type="button" className="cursor-grab touch-none rounded px-1 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag ${level.label} to reorder`} onPointerDown={event => onGrabColumn(event, sectionRef.current!)}>⠿</button>
         <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
@@ -290,15 +297,16 @@ function EntryHead({ target }: { target: Target | undefined }) {
   return <div className="flex items-center gap-2">{target && <ChannelLogo kind={target.kind} />}<strong className="min-w-0 flex-1 truncate text-[12.5px]">{target ? targetName(target) : "Removed channel"}</strong></div>;
 }
 
-function ChannelEntry({ entry, slotIndex, leaving, target, token, levelId, onGrab, onChanged, onError }: {
+function ChannelEntry({ entry, slotIndex, leaving, target, token, levelId, onGrab, onChanged, onError, ghost = false }: {
   entry: AlertLevelEntry; slotIndex: number; leaving: boolean; target: Target | undefined; token: string; levelId: string;
   onGrab: (event: React.PointerEvent, element: HTMLElement) => void; onChanged: () => Promise<void>; onError: (error: string) => void;
+  ghost?: boolean;
 }) {
   const ref = useRef<HTMLElement>(null);
   async function patch(repeatIntervalMs: number | null) { try { await api(`/api/alert-levels/${encodeURIComponent(levelId)}/entries/${encodeURIComponent(entry.id)}`, token, { method: "PATCH", body: JSON.stringify({ repeatIntervalMs }) }); await onChanged(); } catch (cause) { onError(message(cause)); } }
   async function remove() { try { await api(`/api/alert-levels/${encodeURIComponent(levelId)}/entries/${encodeURIComponent(entry.id)}`, token, { method: "DELETE" }); await onChanged(); } catch (cause) { onError(message(cause)); } }
   return (
-    <article ref={ref} data-flip-key={`entry:${entry.id}`} data-entry-slot={slotIndex} className={`rounded-field border border-line-soft bg-panel-soft p-2.5 ${leaving ? "board-out" : "board-in"}`}>
+    <article ref={ref} data-flip-key={ghost ? undefined : `entry:${entry.id}`} data-entry-slot={ghost ? undefined : slotIndex} className={`rounded-field border bg-panel-soft p-2.5 ${ghost ? "pointer-events-none border-orange" : leaving ? "board-out border-line-soft" : "board-in border-line-soft"}`}>
       <div className="flex items-center gap-2">
         <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 text-faint hover:text-ink active:cursor-grabbing" aria-label={`Drag ${target ? targetName(target) : "channel"} to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
         <div className="min-w-0 flex-1"><EntryHead target={target} /></div>

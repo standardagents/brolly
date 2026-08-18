@@ -9,25 +9,37 @@ export const MAX_TOLERANCE_PERCENT = 10_000;
 /** Starting visible maximum of the track: 10× the average. It grows toward MAX_TOLERANCE_PERCENT on release. */
 export const TOLERANCE_AXIS_MAX = 1_000;
 
-export const RISK_PRESETS: Record<Exclude<RiskTolerancePreset, "custom">, { low: number; high: number }> = {
-  conservative: { low: 75, high: 300 },
-  balanced: { low: 90, high: 800 },
-  growth: { low: 150, high: 3_000 },
+/** Anchor percentages for three levels; other level counts sample this curve geometrically. */
+export const RISK_PRESETS: Record<Exclude<RiskTolerancePreset, "custom">, readonly number[]> = {
+  conservative: [75, 150, 200],
+  balanced: [90, 200, 300],
+  growth: [120, 300, 1_000],
 };
 
-/** Fixed geometric preset curve, snapped and pushed with the chart's gap rule. */
+/** Preset curve sampled for `order.length` levels, snapped and pushed with the chart's gap rule. */
 export function tolerancePresetValues(preset: Exclude<RiskTolerancePreset, "custom">, order: readonly string[]): LevelValues {
-  const curve = RISK_PRESETS[preset];
+  const anchors = RISK_PRESETS[preset];
   const last = Math.max(0, order.length - 1);
   let values: LevelValues = Object.fromEntries(order.map((id, index) => {
     const t = last === 0 ? 1 : index / last;
-    const raw = curve.low * (curve.high / curve.low) ** t;
+    const raw = sampleCurve(anchors, t);
     return [id, raw < 100 ? Math.round(raw) : snapToNice(raw, 1)];
   }));
   const axis = toleranceAxis(Math.max(TOLERANCE_AXIS_MAX, ...Object.values(values)));
   const floor = Object.fromEntries(order.map(id => [id, MIN_TOLERANCE_PERCENT]));
   for (const id of order) values = pushLevels(axis, order, values, id, values[id]!, floor);
   return values;
+}
+
+/** Geometric interpolation along the anchor polyline at t in [0, 1]. */
+function sampleCurve(anchors: readonly number[], t: number): number {
+  if (anchors.length === 1) return anchors[0]!;
+  const scaled = t * (anchors.length - 1);
+  const index = Math.min(anchors.length - 2, Math.floor(scaled));
+  const local = scaled - index;
+  const low = anchors[index]!;
+  const high = anchors[index + 1]!;
+  return low * (high / low) ** local;
 }
 
 /** Existing policies without risk tolerance use the balanced curve. */

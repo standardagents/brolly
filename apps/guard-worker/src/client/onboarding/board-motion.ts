@@ -109,8 +109,9 @@ export function useDragSession<T>(handlers: { onMove?(session: DragSession<T>): 
   const startDrag = (event: React.PointerEvent, data: T, element: HTMLElement, scroller: HTMLElement | null) => {
     if (event.button !== 0) return;
     pending.current = { data, startX: event.clientX, startY: event.clientY, element, scroller, pointerId: event.pointerId };
-    const target = event.currentTarget as HTMLElement;
-    target.setPointerCapture?.(event.pointerId);
+    // Listen on the document: the grabbed element may unmount once the drag
+    // activates (its column turns into a placeholder), which would end
+    // pointer capture on it.
     const move = (moveEvent: PointerEvent) => {
       const start = pending.current;
       if (!start) return;
@@ -127,9 +128,9 @@ export function useDragSession<T>(handlers: { onMove?(session: DragSession<T>): 
       handlersRef.current.onMove?.(live.current);
     };
     const finish = () => {
-      target.removeEventListener("pointermove", move);
-      target.removeEventListener("pointerup", finish);
-      target.removeEventListener("pointercancel", finish);
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
       document.body.style.userSelect = "";
       stopAutoScroll();
       const last = live.current;
@@ -138,9 +139,9 @@ export function useDragSession<T>(handlers: { onMove?(session: DragSession<T>): 
       setSession(null);
       if (last) handlersRef.current.onDrop(last);
     };
-    target.addEventListener("pointermove", move);
-    target.addEventListener("pointerup", finish);
-    target.addEventListener("pointercancel", finish);
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
   };
 
   return { session, startDrag };

@@ -79,9 +79,9 @@ describe("RiskToleranceStep", () => {
     await act(async () => { button("Growth").click(); });
     const state = document.querySelector("[data-preset]")!;
     expect(state.getAttribute("data-preset")).toBe("growth");
-    expect(JSON.parse(state.getAttribute("data-values")!)).toEqual({ warn: 150, critical: 680, emergency: 3000 });
+    expect(JSON.parse(state.getAttribute("data-values")!)).toEqual({ warn: 120, critical: 300, emergency: 1000 });
     expect([...document.querySelectorAll("[role='slider']")].map(element => element.getAttribute("aria-valuenow")))
-      .toEqual(["150", "680", "3000"]);
+      .toEqual(["120", "300", "1000"]);
   });
 
   it("marks the selection Custom when a slider is dragged", async () => {
