@@ -5,3 +5,4 @@ export { type LevelValues, pushLevels, defaultLevels, completeLevels } from "./l
 export { chooseAxis, type Axis } from "./scale";
 export { LimitsChartPair, type LimitsChartPairProps, type UsageLimitValues } from "./LimitsChartPair";
 export { useUsageSeries, scopeKey, type UsageSeriesResponse } from "./api";
+export { LimitsChartDual, type LimitsChartDualProps, type WindowLimits } from "./LimitsChartDual";

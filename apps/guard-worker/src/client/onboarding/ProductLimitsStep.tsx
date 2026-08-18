@@ -1,6 +1,6 @@
 import { familyControl } from "@standardagents/brolly-core";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { LimitsChartPair, levelColor, useUsageSeries, type UsageSeriesResponse } from "../components/limits-chart";
+import { LimitsChartDual, levelColor, useUsageSeries, type WindowLimits } from "../components/limits-chart";
 import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
 import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
 import { Icon, ProductIcon, Spinner } from "../components/ui";
@@ -8,7 +8,7 @@ import type { AlertLevel, OnboardingData, Policy, PolicyLimits, ScopeLimits } fr
 import { StepIntro } from "./BudgetSteps";
 
 type Window = keyof PolicyLimits;
-type OpenState = { cost: boolean; usage: string | null | undefined };
+type OpenState = string | null;
 type SidebarItem = { id: string; label: string };
 type SectionInfo = { items: SidebarItem[]; hasUsage: boolean; deviated: string[] };
 
@@ -91,11 +91,11 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
       return { ...current, [scope]: info };
     });
   }, []);
-  // Product sections start collapsed; the sidebar or a row click opens one.
-  const openFor = (scope: string): OpenState => openByScope[scope] ?? { cost: false, usage: null };
+  // Product sections start collapsed; the sidebar or a row click opens one row.
+  const openFor = (scope: string): OpenState => openByScope[scope] ?? null;
   const setOpenFor = (scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next }));
   const jumpTo = (scope: string, item?: string) => {
-    if (item) setOpenFor(scope, item === "cost" ? { ...openFor(scope), cost: true } : { ...openFor(scope), usage: item });
+    if (item) setOpenFor(scope, item);
     const section = sectionRefs.current[scope];
     if (section) window.scrollTo({ top: window.scrollY + section.getBoundingClientRect().top - STICKY_TOP - 8, behavior: "smooth" });
   };
@@ -115,10 +115,9 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
               {group.list.map(family => {
                 const scope = `family:${family.family}`;
                 const active = scope === currentActive;
-                const open = openFor(scope);
+                const openItem = openFor(scope);
                 const items = infoByScope[scope]?.items ?? [];
                 const deviated = new Set(infoByScope[scope]?.deviated ?? []);
-                const openItem = open.usage === undefined ? items[1]?.id : open.usage;
                 return (
                   <li key={scope}>
                     <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
@@ -130,7 +129,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
                     {active && items.length > 0 && (
                       <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
                         {items.map(item => {
-                          const itemActive = item.id === "cost" ? open.cost : item.id === openItem;
+                          const itemActive = item.id === openItem;
                           const changed = deviated.has(item.id);
                           return (
                             <li key={item.id}>
@@ -216,7 +215,6 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
     }
     onInfo({ hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
   }, [usage.data, onInfo, order, tolerance, dayLimits, cycleLimits]);
-  const daily = policy.limits?.day?.[scope];
   const control = familyControl(family);
 
   return (
@@ -233,68 +231,26 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
       {usage.error && <p className="text-[13px] text-faint">Usage history is unavailable. {usage.error}</p>}
       {usage.data && (
-        <div className="grid grid-cols-2 gap-6 max-xl:grid-cols-1">
-          {(["day", "cycle"] as const).map(window => (
-            <WindowColumn key={window} window={window} data={usage.data!} scope={scope} family={family} token={token} levels={levels}
-              policy={policy} setPolicy={setPolicy} daily={daily} open={open} onOpenChange={onOpenChange} />
-          ))}
-        </div>
+        <LimitsChartDual
+          data={usage.data}
+          levels={levels}
+          day={dayLimits ?? emptyScope()}
+          cycle={cycleLimits ?? emptyScope()}
+          onChange={(window, change) => setPolicy(previous => updateScope(previous, window, scope, family, change))}
+          tolerance={tolerance}
+          open={open}
+          onOpenChange={onOpenChange}
+        />
       )}
     </section>
   );
 }
 
-function WindowColumn({ window, data, scope, family, token, levels, policy, setPolicy, daily, open, onOpenChange }: {
-  window: Window;
-  data: UsageSeriesResponse;
-  scope: string;
-  family: string;
-  token: string;
-  levels: Array<{ id: string; label: string; color: string }>;
-  policy: Policy;
-  setPolicy: Dispatch<SetStateAction<Policy>>;
-  daily: ScopeLimits | undefined;
-  open: OpenState;
-  onOpenChange: (next: OpenState) => void;
-}) {
-  const current = policy.limits?.[window]?.[scope] ?? emptyScope();
-  const update = (change: (limits: ScopeLimits) => ScopeLimits) => setPolicy(previous => updateScope(previous, window, scope, family, change));
-  return (
-    <section className="min-w-0">
-      <LimitsChartPair
-        token={token}
-        scope={scope}
-        family={family}
-        window={window}
-        data={data}
-        levels={levels}
-        open={open}
-        onOpenChange={onOpenChange}
-        cost={current.cost}
-        onCostChange={cost => update(limits => ({ ...limits, cost }))}
-        usage={current.usage}
-        onUsageChange={usage => update(limits => ({ ...limits, usage }))}
-        costFloor={window === "cycle" ? daily?.cost : undefined}
-        usageFloor={window === "cycle" ? daily?.usage : undefined}
-        tolerance={policy.riskTolerance?.percentOfTypical}
-        costEnabled={current.costEnabled ?? true}
-        onCostEnabledChange={costEnabled => update(limits => ({ ...limits, costEnabled }))}
-        usageEnabled={current.usageEnabled}
-        onUsageEnabledChange={usageEnabled => update(limits => ({ ...limits, usageEnabled }))}
-        costLevelEnabled={current.costLevelEnabled}
-        onCostLevelEnabledChange={costLevelEnabled => update(limits => ({ ...limits, costLevelEnabled }))}
-        usageLevelEnabled={current.usageLevelEnabled}
-        onUsageLevelEnabledChange={usageLevelEnabled => update(limits => ({ ...limits, usageLevelEnabled }))}
-      />
-    </section>
-  );
-}
-
-function updateScope(policy: Policy, window: Window, scope: string, family: string, change: (limits: ScopeLimits) => ScopeLimits): Policy {
+function updateScope(policy: Policy, window: Window, scope: string, family: string, change: (limits: WindowLimits) => WindowLimits): Policy {
   const limits: PolicyLimits = policy.limits
     ? { day: { ...policy.limits.day }, cycle: { ...policy.limits.cycle } }
     : { day: {}, cycle: {} };
-  const next = change(limits[window][scope] ?? emptyScope());
+  const next = change(limits[window][scope] ?? emptyScope()) as ScopeLimits;
   limits[window][scope] = next;
   const result: Policy = { ...policy, limits };
   if (window === "day") result.familyDailySpend = { ...result.familyDailySpend, [family]: next.cost };

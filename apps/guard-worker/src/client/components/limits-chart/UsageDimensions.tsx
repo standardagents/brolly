@@ -137,7 +137,7 @@ const EXPAND_MS = 260;
  * collapses, so open and close both animate over the same duration and the
  * closing row never snaps.
  */
-function Expander({ open, children }: { open: boolean; children: React.ReactNode }) {
+export function Expander({ open, children }: { open: boolean; children: React.ReactNode }) {
   const [mounted, setMounted] = useState(open);
   useEffect(() => {
     if (open) { setMounted(true); return; }
@@ -155,7 +155,7 @@ function Expander({ open, children }: { open: boolean; children: React.ReactNode
   );
 }
 
-function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
+export function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
   return (
     <label className="inline-flex cursor-pointer items-center" title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."}>
       <span className="sr-only">Monitor {label}</span>
@@ -166,7 +166,7 @@ function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; on
 }
 
 /** One level value in a row: click to edit in place, Enter/blur commits, Escape cancels. */
-function LevelChip({ level, value, on, unit, onToggle, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onToggle?(next: boolean): void; onCommit?(next: number): void }) {
+export function LevelChip({ level, value, on, unit, onToggle, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onToggle?(next: boolean): void; onCommit?(next: number): void }) {
   const [draft, setDraft] = useState<string | null>(null);
   const shown = value === undefined ? "–" : compactValue(value, unit);
   const commit = () => {
@@ -189,7 +189,7 @@ function LevelChip({ level, value, on, unit, onToggle, onCommit }: { level: Limi
       {onCommit ? (
         <input
           className="w-[5ch] rounded-[3px] border border-transparent bg-transparent px-0.5 text-[10.5px] tabular-nums text-muted outline-none hover:border-line focus:border-orange focus:bg-field focus:text-ink"
-          style={{ width: `${Math.max(3, (draft ?? shown).length) + 1.5}ch` }}
+          style={{ width: `${Math.max(3, (draft ?? shown).length) + 1}ch` }}
           value={draft ?? shown}
           aria-label={`${level.label} limit`}
           inputMode="decimal"
