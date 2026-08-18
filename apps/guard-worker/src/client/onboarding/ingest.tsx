@@ -59,7 +59,7 @@ export function ImportProgress({ token, billingConnected }: { token: string; bil
   const billing = billingConnected ? ingestion.collectors.find(item => item.collector === "billing") : undefined;
 
   return (
-    <section className="mt-6 grid gap-3 border-t border-line pt-4 max-md:hidden" aria-label="Import progress" aria-live="polite">
+    <section className="grid w-[220px] gap-1.5 max-md:hidden" aria-label="Import progress" aria-live="polite">
       <strong className="text-[12.5px] text-muted">Importing 90 days of history</strong>
       <ImportCollectorRow collector={usage} paused={paused} />
       {billing && <ImportCollectorRow collector={{ ...billing, label: "Billing" }} paused={paused} />}

@@ -109,10 +109,10 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
       </header>
-      <div className="mx-auto grid max-w-[1360px] grid-cols-[250px_minmax(0,1fr)] gap-10 px-8 pt-14 pb-[100px] max-xl:grid-cols-[220px_minmax(0,1fr)] max-xl:gap-[26px] max-xl:px-6 max-xl:pt-10 max-xl:pb-20 max-md:block max-md:px-3.5 max-md:pt-[26px] max-md:pb-[60px]">
-        <WizardSidebar editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
-          {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
-        </WizardSidebar>
+      <WizardStepper editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
+        {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
+      </WizardStepper>
+      <div className="mx-auto max-w-[1440px] px-8 pt-8 pb-[100px] max-xl:px-6 max-xl:pb-20 max-md:px-3.5 max-md:pt-4 max-md:pb-[60px]">
         <div className="grid min-w-0 gap-5">
           {STEPS.map((step, index) => index > navigation.unlocked
             ? <LockedStep key={step.label} step={step} index={index} />
@@ -120,7 +120,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <section
                 key={step.label}
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
-                className="min-w-0 scroll-mt-[84px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
+                className="min-w-0 scroll-mt-[128px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
@@ -153,7 +153,12 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   );
 }
 
-function WizardSidebar({ editing, active, unlocked, onSelect, children }: {
+/**
+ * Horizontal step rail under the header. It replaces the old side column so
+ * the step cards get the full page width; labels hide below `lg`, markers
+ * stay.
+ */
+function WizardStepper({ editing, active, unlocked, onSelect, children }: {
   children?: ReactNode;
   editing: boolean;
   active: number;
@@ -161,32 +166,32 @@ function WizardSidebar({ editing, active, unlocked, onSelect, children }: {
   onSelect: (index: number) => void;
 }) {
   return (
-    <aside className="sticky top-24 h-max max-md:static max-md:mb-5">
-      <h1 className="mt-5 mb-3.5 text-[30px] leading-[1.05] tracking-[-.03em] max-md:text-[28px]">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
-      <ol className="mt-[26px] list-none border-t border-line pt-[18px] max-md:mt-2 max-md:flex max-md:justify-between max-md:border-t-0 max-md:pt-2">
-        {STEPS.map((step, index) => {
-          const reachable = index <= unlocked;
-          return (
-            <li
-              key={step.label}
-              className={`text-[14px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}
-            >
-              <button
-                type="button"
-                className="group/step flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent py-[9px] text-left text-[14px] font-[640] text-inherit disabled:cursor-default max-md:gap-0 max-md:py-1"
-                disabled={!reachable}
-                aria-current={index === active ? "step" : undefined}
-                title={reachable ? undefined : "Unlocks when you reach this step"}
-                onClick={() => onSelect(index)}
-              >
-                <StepMarker state={index === active ? "active" : index < unlocked ? "done" : "todo"}>{index < unlocked ? "✓" : index + 1}</StepMarker>
-                <span className={`max-md:sr-only ${reachable ? "group-hover/step:text-ink" : ""}`}>{step.label}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-      {children}
+    <aside className="sticky top-[60px] z-30 border-b border-line bg-panel/95 backdrop-blur">
+      <div className="mx-auto flex max-w-[1440px] items-center gap-6 px-8 py-2.5 max-xl:px-6 max-md:gap-3 max-md:px-3.5">
+        <h1 className="m-0 whitespace-nowrap text-[15px] font-[750] tracking-[-.01em] max-md:hidden">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
+        <ol className="flex min-w-0 flex-1 list-none items-center gap-1 overflow-x-auto">
+          {STEPS.map((step, index) => {
+            const reachable = index <= unlocked;
+            return (
+              <li key={step.label} className={`flex items-center text-[13px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}>
+                {index > 0 && <span className="mx-1 h-px w-4 bg-line max-lg:w-2" aria-hidden="true" />}
+                <button
+                  type="button"
+                  className="group/step flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-field border-0 bg-transparent px-1.5 py-1 text-left text-inherit hover:bg-panel-soft disabled:cursor-default disabled:hover:bg-transparent"
+                  disabled={!reachable}
+                  aria-current={index === active ? "step" : undefined}
+                  title={reachable ? step.label : "Unlocks when you reach this step"}
+                  onClick={() => onSelect(index)}
+                >
+                  <StepMarker state={index === active ? "active" : index < unlocked ? "done" : "todo"}>{index < unlocked ? "✓" : index + 1}</StepMarker>
+                  <span className={`max-lg:sr-only ${reachable ? "group-hover/step:text-ink" : ""}`}>{step.label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="ml-auto flex-none max-md:hidden">{children}</div>
+      </div>
     </aside>
   );
 }
