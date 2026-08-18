@@ -431,11 +431,11 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
         <span className="truncate">{level.label}</span>
         {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
       </span>
-      <span className="flex min-w-0 items-baseline gap-1 text-ink">
+      <span className="flex min-w-0 items-baseline gap-[3px] text-ink">
         {unit === "USD" && <b className="text-[13px] text-faint">$</b>}
         <input
-          className="min-w-[2ch] max-w-full border-0 bg-transparent text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default"
-          style={{ width: `${Math.max(2, shown.length) + 0.5}ch` }}
+          className="min-w-[2ch] max-w-full border-0 bg-transparent p-0 text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default"
+          style={{ width: `calc(${Math.max(2, shown.length)}ch + 2px)` }}
           inputMode="decimal"
           disabled={!enabled}
           value={shown}
