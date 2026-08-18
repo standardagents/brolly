@@ -22,6 +22,8 @@ export function LimitsChartPreview() {
   const [cost, setCost] = useState<LevelValues>({});
   const [usage, setUsage] = useState<UsageLimitValues>({});
   const [cycleCost, setCycleCost] = useState<LevelValues>({});
+  const [timeCost, setTimeCost] = useState<LevelValues>({ warn: 60, critical: 120, emergency: 200, shutdown: 400 });
+  const [timeUsage, setTimeUsage] = useState<UsageLimitValues>({ "workers.requests": { warn: 200_000_000, critical: 400_000_000, emergency: 700_000_000, shutdown: 1_500_000_000 } });
   const [cycleUsage, setCycleUsage] = useState<UsageLimitValues>({});
   const [doCost, setDoCost] = useState<LevelValues>({});
   const [doUsage, setDoUsage] = useState<UsageLimitValues>({});
@@ -51,6 +53,10 @@ export function LimitsChartPreview() {
       <h2 className="mt-10 mb-4 text-[22px]">Billing cycle limits · Workers</h2>
       <LimitsChartPair token="session" scope="family:workers" family="workers" window="cycle" levels={LEVELS}
         cost={cycleCost} onCostChange={setCycleCost} usage={cycleUsage} onUsageChange={setCycleUsage}
+        costFloor={cost} usageFloor={usage} />
+      <h2 className="mt-10 mb-4 text-[22px]">Billing cycle limits · Workers · time split</h2>
+      <LimitsChartPair token="session" scope="family:workers" family="workers" window="cycle" levels={LEVELS} cycleFill="time"
+        cost={timeCost} onCostChange={setTimeCost} usage={timeUsage} onUsageChange={setTimeUsage}
         costFloor={cost} usageFloor={usage} />
     </main>
   );
