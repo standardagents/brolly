@@ -130,7 +130,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
       history={histories(id)} />;
   };
   return (
-    <div className="grid grid-cols-2 gap-5 max-md:grid-cols-1">
+    <div className="grid gap-6">
       <section className="min-w-0">
         <ColumnHead family={family}>{window === "day" ? "Cost per day" : "Cost per billing cycle"}</ColumnHead>
         <DimensionRows dimensions={costDimension} levels={levels} values={{ cost }} selected={costOpen ? "cost" : null} onSelect={() => setCostOpen(open => !open)} renderChart={() => costChart} accent="#2f6fd6" label="Cost"

@@ -55,7 +55,7 @@ export function summarizeCost(data: UsageSeriesResponse): DimensionSummary {
  * selected row expands and `renderChart` draws the full chart under it; the
  * open/close transition animates through a `grid-template-rows` tween.
  */
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_72px_80px_212px_36px] items-center gap-3";
+const ROW_GRID = "grid grid-cols-[minmax(140px,240px)_120px_96px_minmax(220px,1fr)_36px] items-center gap-4 max-md:grid-cols-[minmax(0,1fr)_72px_80px_minmax(150px,1fr)_36px]";
 
 export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled, onToggleLevel, onValueChange, window = "day", cycles, today }: {
   dimensions: DimensionSummary[];
@@ -97,12 +97,12 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
               </span>
               <MiniChart series={dimension.series} cycles={cycles} today={today} window={window} accent={accent}
                 levels={levels.filter(level => levelEnabled?.[dimension.id]?.[level.id] ?? true)} values={values[dimension.id] ?? {}}
-                className="pointer-events-none relative h-6 w-[72px]" />
+                className="pointer-events-none relative h-7 w-[120px] max-md:w-[72px]" />
               <span className="pointer-events-none relative text-right text-[12.5px] font-[740] tabular-nums">
                 {dimension.unit === "USD" ? formatLimitValue(dimension.cycleToDate, "USD") : formatNumber(dimension.cycleToDate)}
                 <small className="block text-[10px] font-medium text-faint">this cycle</small>
               </span>
-              <span className="relative flex items-center justify-end gap-2">
+              <span className="relative flex items-center gap-3 pl-2">
                 {levels.map(level => {
                   const levelOn = levelEnabled?.[dimension.id]?.[level.id] ?? true;
                   const value = values[dimension.id]?.[level.id];
@@ -226,8 +226,8 @@ export function MiniChart({ series, cycles, today, window, levels, values, accen
     const axis = chooseAxis(derived.heightValues, levelValues);
     const order = levels.map(level => level.id);
     const colorById = new Map(levels.map(level => [level.id, level.color]));
-    const width = 72;
-    const height = 24;
+    const width = 120;
+    const height = 28;
     const slot = width / Math.max(1, points.length);
     const yFor = (value: number) => height - axis.position(value) * (height - 1);
     return points.flatMap((point, index) => {
@@ -248,7 +248,7 @@ export function MiniChart({ series, cycles, today, window, levels, values, accen
     });
   }, [series, cycles, today, window, levels, values, accent]);
   return (
-    <svg viewBox="0 0 72 24" className={className} aria-hidden="true" preserveAspectRatio="none">
+    <svg viewBox="0 0 120 28" className={className} aria-hidden="true" preserveAspectRatio="none">
       {bars.map(bar => <rect key={bar.key} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} opacity={window === "cycle" ? 0.82 : 1} />)}
     </svg>
   );
