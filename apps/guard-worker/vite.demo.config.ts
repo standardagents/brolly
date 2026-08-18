@@ -850,8 +850,14 @@ function demoApi(): Plugin {
         }
         if (entryRoute?.[2] && req.method === "PATCH") {
           const body = await readJson(req);
-          const entry = alertLevels.find(item => item.id === entryRoute[1])?.entries.find(item => item.id === entryRoute[2]);
+          const level = alertLevels.find(item => item.id === entryRoute[1]);
+          const entry = level?.entries.find(item => item.id === entryRoute[2]);
           if (entry && "repeatIntervalMs" in body) entry.repeatIntervalMs = body.repeatIntervalMs as number | null;
+          if (level && entry && typeof body.position === "number") {
+            level.entries = level.entries.filter(item => item.id !== entry.id);
+            level.entries.splice(Math.max(0, Math.min(body.position, level.entries.length)), 0, entry);
+            level.entries.forEach((item, index) => { item.position = index; });
+          }
           return send({ ok: true, entry });
         }
         if (entryRoute?.[2] && req.method === "DELETE") {

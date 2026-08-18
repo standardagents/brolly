@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { LimitsChartPair, levelColor, type LevelValues, type UsageLimitValues } from "./components/limits-chart";
 import { RiskToleranceStep } from "./onboarding/RiskToleranceStep";
+import { AlertLevelsStep, useAlertLevels } from "./onboarding/levels";
+import { useNotificationTargets } from "./components/notifications";
 import type { AlertLevel, Policy } from "./types";
 
 const LEVELS_SPEC = ["Warn", "Critical", "Emergency", "Shutdown"];
@@ -14,6 +16,8 @@ const ALERT_LEVELS: AlertLevel[] = LEVELS_SPEC.map((label, index) => ({ id: labe
 
 /** Internal visual QA surface for the editable daily and billing-cycle charts. */
 export function LimitsChartPreview() {
+  const board = useAlertLevels("session");
+  const targets = useNotificationTargets("session");
   const [policy, setPolicy] = useState<Policy>({ version: "preview", accountDailySpend: {}, familyDailySpend: {}, assetDailySpend: {}, thresholds: [] });
   const [cost, setCost] = useState<LevelValues>({});
   const [usage, setUsage] = useState<UsageLimitValues>({});
@@ -28,6 +32,9 @@ export function LimitsChartPreview() {
 
   return (
     <main className="mx-auto max-w-[1180px] p-8 text-ink">
+      <section className="mb-12 max-w-[900px] rounded-panel border border-line bg-panel p-8">
+        <AlertLevelsStep token="session" targets={targets} board={board} />
+      </section>
       <section className="mb-12 max-w-[900px] rounded-panel border border-line bg-panel p-8">
         <RiskToleranceStep token="session" policy={policy} levels={ALERT_LEVELS} setPolicy={setPolicy} />
       </section>

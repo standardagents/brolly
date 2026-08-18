@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api";
 import { AddChannelRow, ChannelCredentialsForm, targetName, type NotificationChannel, type NotificationTargetsState } from "../components/notifications";
 import { Button, ChannelLogo, Icon, Notice, Popover, Spinner } from "../components/ui";
 import { useOutsideClose } from "../lib/outside-close";
 import type { AlertEntryKind, AlertLevel, AlertLevelEntry, AlertLevelsResponse } from "../types";
+import { slotIndexAt, useDragSession, useFlip, useLeaving, type DragSession } from "./board-motion";
 import { StepIntro } from "./BudgetSteps";
 
 const INTERVALS = [
@@ -18,6 +20,9 @@ const INTERVALS = [
   { value: "86400000", label: "24 h" },
 ] as const;
 
+const COLUMN_WIDTH = 290;
+type Target = NotificationTargetsState["targets"][number];
+
 export function useAlertLevels(token: string) {
   const [levels, setLevels] = useState<AlertLevel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,13 +35,21 @@ export function useAlertLevels(token: string) {
     finally { setLoading(false); }
   }, [token]);
   useEffect(() => { void load(); }, [load]);
-  return { levels, loading, error, setError, load };
+  return { levels, setLevels, loading, error, setError, load };
 }
+
+/** What is being dragged and where it would land. */
+type Drag =
+  | { kind: "column"; id: string; targetIndex: number }
+  | { kind: "entry"; id: string; fromLevelId: string; targetLevelId: string; targetIndex: number };
 
 export function AlertLevelsStep({ token, targets, board }: { token: string; targets: NotificationTargetsState; board: ReturnType<typeof useAlertLevels> }) {
   const [draft, setDraft] = useState("");
   const [addingAfter, setAddingAfter] = useState<string | null | undefined>(undefined);
-  const [dragged, setDragged] = useState<string | null>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  useFlip(boardRef);
 
   async function mutate(path: string, init: RequestInit) {
     board.setError("");
@@ -59,37 +72,123 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
 
   async function move(level: AlertLevel, position: number) {
     if (position < 0 || position >= board.levels.length || position === level.position) return;
+    board.setLevels(current => reorder(current, level.id, position).map((item, index) => ({ ...item, position: index })));
     await mutate(`/api/alert-levels/${encodeURIComponent(level.id)}`, { method: "PATCH", body: JSON.stringify({ position }) });
   }
+
+  /** Move a channel entry to `toLevelId` at `toIndex` (index among that level's channel entries). */
+  async function moveEntry(entryId: string, fromLevelId: string, toLevelId: string, toIndex: number) {
+    const from = board.levels.find(level => level.id === fromLevelId);
+    const entry = from?.entries.find(item => item.id === entryId);
+    if (!from || !entry) return;
+    const optimistic = moveEntryLocally(board.levels, entryId, fromLevelId, toLevelId, toIndex);
+    if (!optimistic) return;
+    board.setLevels(optimistic.levels);
+    board.setError("");
+    try {
+      if (fromLevelId === toLevelId) {
+        await api(`/api/alert-levels/${encodeURIComponent(toLevelId)}/entries/${encodeURIComponent(entryId)}`, token, { method: "PATCH", body: JSON.stringify({ position: optimistic.position }) });
+      } else {
+        await api(`/api/alert-levels/${encodeURIComponent(fromLevelId)}/entries/${encodeURIComponent(entryId)}`, token, { method: "DELETE" });
+        const created = await api<{ entry?: { id: string }; id?: string }>(`/api/alert-levels/${encodeURIComponent(toLevelId)}/entries`, token, {
+          method: "POST", body: JSON.stringify({ kind: "channel", targetId: entry.targetId, repeatIntervalMs: entry.repeatIntervalMs }),
+        });
+        const newId = created.entry?.id ?? created.id;
+        if (newId) await api(`/api/alert-levels/${encodeURIComponent(toLevelId)}/entries/${encodeURIComponent(newId)}`, token, { method: "PATCH", body: JSON.stringify({ position: optimistic.position }) });
+      }
+      await board.load();
+    } catch (cause) { board.setError(message(cause)); await board.load(); }
+  }
+
+  const columnDrag = useDragSession<{ id: string }>({
+    onMove(session) {
+      const rects = columnRects(boardRef.current, session.data.id);
+      const targetIndex = slotIndexAt(rects, session.x, "x");
+      setDrag(current => (current?.kind === "column" && current.targetIndex === targetIndex ? current : { kind: "column", id: session.data.id, targetIndex }));
+    },
+    onDrop(session) {
+      const rects = columnRects(boardRef.current, session.data.id);
+      const targetIndex = slotIndexAt(rects, session.x, "x");
+      setDrag(null);
+      const level = board.levels.find(item => item.id === session.data.id);
+      if (level && targetIndex !== level.position) void move(level, targetIndex);
+    },
+  });
+
+  const entryDrag = useDragSession<{ id: string; levelId: string }>({
+    onMove(session) {
+      const target = entryTarget(boardRef.current, session);
+      if (!target) return;
+      setDrag(current => (current?.kind === "entry" && current.targetLevelId === target.levelId && current.targetIndex === target.index
+        ? current
+        : { kind: "entry", id: session.data.id, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index }));
+    },
+    onDrop(session) {
+      const target = entryTarget(boardRef.current, session);
+      setDrag(null);
+      if (!target) return;
+      void moveEntry(session.data.id, session.data.levelId, target.levelId, target.index);
+    },
+  });
+
+  // Visual model: columns in drop order with a placeholder for the dragged
+  // column, and entries per level with a placeholder for the dragged entry.
+  const visualLevels = useMemo(() => {
+    if (drag?.kind !== "column") return board.levels;
+    return reorder(board.levels, drag.id, drag.targetIndex);
+  }, [board.levels, drag]);
+  const usedTargets = useMemo(() => new Set(board.levels.flatMap(level => level.entries.filter(entry => entry.kind === "channel").map(entry => entry.targetId))), [board.levels]);
+  const draggedEntry = drag?.kind === "entry" ? board.levels.flatMap(level => level.entries).find(entry => entry.id === drag.id) ?? null : null;
+  const columns = useLeaving(visualLevels, level => level.id);
 
   return <>
     <StepIntro title="Build alert levels">Each entry applies to its column and every column to the right. Columns may stay empty.</StepIntro>
     {board.loading && <Spinner />}
     {board.error && <Notice tone="error">{board.error}</Notice>}
     {!board.loading && (
-      <div className="overflow-x-auto pb-3" aria-label="Alert level board">
-        <div className="flex min-w-max items-stretch gap-3">
-          {board.levels.map((level, index) => (
-            <LevelColumn
-              key={level.id}
-              level={level}
-              index={index}
-              count={board.levels.length}
-              token={token}
-              targets={targets}
-              dragged={dragged}
-              onDragStart={() => setDragged(level.id)}
-              onDrop={() => { const source = board.levels.find(item => item.id === dragged); setDragged(null); if (source) void move(source, index); }}
-              onMove={position => void move(level, position)}
-              onAddBefore={() => addBefore(level)}
-              onAddAfter={() => setAddingAfter(level.id)}
-              onChanged={board.load}
-              onError={board.setError}
-            />
-          ))}
+      <div ref={scrollerRef} className="-mx-1 overflow-x-auto px-1 pb-3" aria-label="Alert level board">
+        <div ref={boardRef} className="flex min-w-max items-stretch gap-3">
+          {columns.map(({ item: level, leaving }) => {
+            const index = visualLevels.findIndex(item => item.id === level.id);
+            const isDraggedColumn = drag?.kind === "column" && drag.id === level.id;
+            return (
+              <div key={level.id} data-flip-key={`column:${level.id}`} data-column={level.id} className={`flex-none ${leaving ? "board-out" : "board-in"}`} style={{ width: COLUMN_WIDTH }}>
+                {isDraggedColumn ? (
+                  <div className="h-full min-h-[120px] rounded-panel border-2 border-dashed border-orange/60 bg-orange-soft/30" aria-hidden="true" />
+                ) : (
+                  <LevelColumn
+                    level={level}
+                    index={index}
+                    count={board.levels.length}
+                    token={token}
+                    targets={targets}
+                    usedTargets={usedTargets}
+                    entryDrag={drag?.kind === "entry" ? { ...drag, entry: draggedEntry } : null}
+                    onGrabColumn={(event, element) => columnDrag.startDrag(event, { id: level.id }, element, scrollerRef.current)}
+                    onGrabEntry={(event, entryId, element) => entryDrag.startDrag(event, { id: entryId, levelId: level.id }, element, scrollerRef.current)}
+                    onMove={position => void move(level, position)}
+                    onAddBefore={() => addBefore(level)}
+                    onAddAfter={() => setAddingAfter(level.id)}
+                    onChanged={board.load}
+                    onError={board.setError}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     )}
+    {columnDrag.session && <Ghost session={columnDrag.session}>
+      <div className="rounded-panel border border-orange bg-panel p-3.5 shadow-drawer" style={{ width: COLUMN_WIDTH }}>
+        <div className="flex items-center gap-1.5 text-[14px] font-[750]"><span className="text-faint" aria-hidden="true">⠿</span>{board.levels.find(level => level.id === columnDrag.session!.data.id)?.label}</div>
+      </div>
+    </Ghost>}
+    {entryDrag.session && draggedEntry && <Ghost session={entryDrag.session}>
+      <div className="rounded-field border border-orange bg-panel-soft p-2.5 shadow-drawer" style={{ width: entryDrag.session.width }}>
+        <EntryHead target={targets.targets.find(target => target.id === draggedEntry.targetId)} />
+      </div>
+    </Ghost>}
     {addingAfter !== undefined ? (
       <div className="mt-3 flex flex-wrap items-end gap-2 rounded-field border border-line-soft bg-panel-soft p-3">
         <label className="flex flex-col gap-1 text-[12px] font-[680]">Level name<input autoFocus className="min-h-[38px] rounded-field border border-field-line bg-field px-2.5 text-[13px]" value={draft} maxLength={40} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void addLevel(); } }} /></label>
@@ -100,14 +199,26 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
   </>;
 }
 
-function LevelColumn({ level, index, count, token, targets, dragged, onDragStart, onDrop, onMove, onAddBefore, onAddAfter, onChanged, onError }: {
-  level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; dragged: string | null;
-  onDragStart: () => void; onDrop: () => void; onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void;
+/** Floating copy of the dragged item that follows the pointer. */
+function Ghost({ session, children }: { session: DragSession<unknown>; children: React.ReactNode }) {
+  return createPortal(
+    <div className="pointer-events-none fixed z-[60] rotate-[1.5deg] opacity-95" style={{ left: session.x - session.grabX, top: session.y - session.grabY }} aria-hidden="true">{children}</div>,
+    document.body,
+  );
+}
+
+function LevelColumn({ level, index, count, token, targets, usedTargets, entryDrag, onGrabColumn, onGrabEntry, onMove, onAddBefore, onAddAfter, onChanged, onError }: {
+  level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; usedTargets: Set<string | null>;
+  entryDrag: { id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; entry: AlertLevelEntry | null } | null;
+  onGrabColumn: (event: React.PointerEvent, element: HTMLElement) => void;
+  onGrabEntry: (event: React.PointerEvent, entryId: string, element: HTMLElement) => void;
+  onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void;
   onChanged: () => Promise<void>; onError: (error: string) => void;
 }) {
   const [label, setLabel] = useState(level.label);
   const [addOpen, setAddOpen] = useState(false);
   const [newChannel, setNewChannel] = useState<NotificationChannel | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const actionEntries = groupedActions(level.entries);
   useEffect(() => setLabel(level.label), [level.label]);
 
@@ -133,49 +244,84 @@ function LevelColumn({ level, index, count, token, targets, dragged, onDragStart
   }
   async function deleteLevel() { await request(`/api/alert-levels/${encodeURIComponent(level.id)}`, { method: "DELETE" }); }
 
+  // Channel entries in visual order: the dragged one removed, a placeholder
+  // slot inserted where it would land.
+  const channels = level.entries.filter(entry => entry.kind === "channel" && entry.id !== entryDrag?.id);
+  const slot = entryDrag && entryDrag.targetLevelId === level.id ? Math.min(entryDrag.targetIndex, channels.length) : -1;
+  const rows: Array<{ kind: "entry"; entry: AlertLevelEntry } | { kind: "slot" }> = channels.map(entry => ({ kind: "entry" as const, entry }));
+  if (slot >= 0) rows.splice(slot, 0, { kind: "slot" });
+  const listed = useLeaving(rows.filter((row): row is { kind: "entry"; entry: AlertLevelEntry } => row.kind === "entry").map(row => row.entry), entry => entry.id);
+
   return (
-    <section
-      className={`w-[290px] flex-none rounded-panel border bg-panel p-3.5 ${dragged === level.id ? "border-orange opacity-70" : "border-line"}`}
-      draggable
-      onDragStart={event => { event.dataTransfer.effectAllowed = "move"; onDragStart(); }}
-      onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-      onDrop={event => { event.preventDefault(); onDrop(); }}
-    >
+    <section ref={sectionRef} data-level={level.id} className="flex h-full flex-col rounded-panel border border-line bg-panel p-3.5">
       <header className="mb-3 flex items-center gap-1.5">
-        <span className="cursor-grab text-faint" title="Drag to reorder" aria-hidden="true">⠿</span>
-        <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+        <button type="button" className="cursor-grab touch-none rounded px-1 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag ${level.label} to reorder`} onPointerDown={event => onGrabColumn(event, sectionRef.current!)}>⠿</button>
+        <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
         <LevelMenu index={index} count={count} canAdd={count < 8} canDelete={count > 1} onMove={onMove} onAddBefore={onAddBefore} onAddAfter={onAddAfter} onDelete={() => void deleteLevel()} />
       </header>
-      <div className="grid gap-2">
-        {level.entries.filter(entry => entry.kind === "channel").map(entry => <ChannelEntry key={entry.id} entry={entry} target={targets.targets.find(target => target.id === entry.targetId)} token={token} levelId={level.id} onChanged={onChanged} onError={onError} />)}
+      <div className="grid gap-2" data-entry-list={level.id}>
+        {rows.map((row, position) => row.kind === "slot"
+          ? <div key="slot" data-flip-key={`slot:${entryDrag?.id}`} data-entry-slot={position} className="h-[74px] rounded-field border-2 border-dashed border-orange/60 bg-orange-soft/30" aria-hidden="true" />
+          : (
+            <ChannelEntry
+              key={row.entry.id}
+              entry={row.entry}
+              slotIndex={position}
+              leaving={listed.find(item => item.item.id === row.entry.id)?.leaving ?? false}
+              target={targets.targets.find(target => target.id === row.entry.targetId)}
+              token={token}
+              levelId={level.id}
+              onGrab={(event, element) => onGrabEntry(event, row.entry.id, element)}
+              onChanged={onChanged}
+              onError={onError}
+            />
+          ))}
         {actionEntries.prepare.length > 0 && <ActionEntry mode="prepare" onRemove={() => void removeEntries(actionEntries.prepare)} />}
         {actionEntries.auto.length > 0 && <ActionEntry mode="auto" onRemove={() => void removeEntries(actionEntries.auto)} />}
         {newChannel ? (
           <div className="rounded-field border border-line-soft p-2.5"><ChannelCredentialsForm channel={newChannel} token={token} onCancel={() => setNewChannel(null)} onSaved={async targetId => { await targets.load(); await addEntry("channel", targetId); setNewChannel(null); }} /></div>
-        ) : <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />}
+        ) : <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} usedTargets={usedTargets} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />}
       </div>
     </section>
   );
 }
 
-function ChannelEntry({ entry, target, token, levelId, onChanged, onError }: { entry: AlertLevelEntry; target: NotificationTargetsState["targets"][number] | undefined; token: string; levelId: string; onChanged: () => Promise<void>; onError: (error: string) => void }) {
+function EntryHead({ target }: { target: Target | undefined }) {
+  return <div className="flex items-center gap-2">{target && <ChannelLogo kind={target.kind} />}<strong className="min-w-0 flex-1 truncate text-[12.5px]">{target ? targetName(target) : "Removed channel"}</strong></div>;
+}
+
+function ChannelEntry({ entry, slotIndex, leaving, target, token, levelId, onGrab, onChanged, onError }: {
+  entry: AlertLevelEntry; slotIndex: number; leaving: boolean; target: Target | undefined; token: string; levelId: string;
+  onGrab: (event: React.PointerEvent, element: HTMLElement) => void; onChanged: () => Promise<void>; onError: (error: string) => void;
+}) {
+  const ref = useRef<HTMLElement>(null);
   async function patch(repeatIntervalMs: number | null) { try { await api(`/api/alert-levels/${encodeURIComponent(levelId)}/entries/${encodeURIComponent(entry.id)}`, token, { method: "PATCH", body: JSON.stringify({ repeatIntervalMs }) }); await onChanged(); } catch (cause) { onError(message(cause)); } }
   async function remove() { try { await api(`/api/alert-levels/${encodeURIComponent(levelId)}/entries/${encodeURIComponent(entry.id)}`, token, { method: "DELETE" }); await onChanged(); } catch (cause) { onError(message(cause)); } }
-  return <article className="rounded-field border border-line-soft bg-panel-soft p-2.5"><div className="flex items-center gap-2">{target && <ChannelLogo kind={target.kind} />}<strong className="min-w-0 flex-1 truncate text-[12.5px]">{target ? targetName(target) : "Removed channel"}</strong><button type="button" aria-label={`Remove ${target ? targetName(target) : "channel"}`} className="text-faint hover:text-danger" onClick={() => void remove()}><Icon name="x" className="size-4" /></button></div><label className="mt-2 flex items-center justify-between gap-2 text-[11.5px] text-muted">Repeat<select aria-label={`Repeat interval for ${target ? targetName(target) : "channel"}`} className="min-h-8 rounded-field border border-field-line bg-field px-2 text-[12px] text-ink" value={entry.repeatIntervalMs ?? ""} onChange={event => void patch(event.target.value ? Number(event.target.value) : null)}>{INTERVALS.map(interval => <option key={interval.label} value={interval.value}>{interval.label}</option>)}</select></label></article>;
+  return (
+    <article ref={ref} data-flip-key={`entry:${entry.id}`} data-entry-slot={slotIndex} className={`rounded-field border border-line-soft bg-panel-soft p-2.5 ${leaving ? "board-out" : "board-in"}`}>
+      <div className="flex items-center gap-2">
+        <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 text-faint hover:text-ink active:cursor-grabbing" aria-label={`Drag ${target ? targetName(target) : "channel"} to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
+        <div className="min-w-0 flex-1"><EntryHead target={target} /></div>
+        <button type="button" aria-label={`Remove ${target ? targetName(target) : "channel"}`} className="text-faint hover:text-danger" onClick={() => void remove()}><Icon name="x" className="size-4" /></button>
+      </div>
+      <label className="mt-2 flex items-center justify-between gap-2 text-[11.5px] text-muted">Repeat<select aria-label={`Repeat interval for ${target ? targetName(target) : "channel"}`} className="min-h-8 rounded-field border border-field-line bg-field px-2 text-[12px] text-ink" value={entry.repeatIntervalMs ?? ""} onChange={event => void patch(event.target.value ? Number(event.target.value) : null)}>{INTERVALS.map(interval => <option key={interval.label} value={interval.value}>{interval.label}</option>)}</select></label>
+    </article>
+  );
 }
 
 function ActionEntry({ mode, onRemove }: { mode: "prepare" | "auto"; onRemove: () => void }) {
   const auto = mode === "auto";
-  return <article className={`rounded-field border p-2.5 ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}><div className="flex items-start gap-2"><Icon name="alert" className="mt-px size-4" /><span className="min-w-0 flex-1"><strong className="block text-[12.5px]">{auto ? "Auto quarantine / pause" : "Prepare quarantine / pause"}</strong><span className="block text-[11.5px] leading-[1.4]">Workers, Durable Objects, and Queues. Recovery is manual.</span></span><button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button></div></article>;
+  return <article className={`board-in rounded-field border p-2.5 ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}><div className="flex items-start gap-2"><Icon name="alert" className="mt-px size-4" /><span className="min-w-0 flex-1"><strong className="block text-[12.5px]">{auto ? "Auto quarantine / pause" : "Prepare quarantine / pause"}</strong><span className="block text-[11.5px] leading-[1.4]">Workers, Durable Objects, and Queues. Recovery is manual.</span></span><button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button></div></article>;
 }
 
-function LevelAddMenu({ open, setOpen, level, targets, onChannel, onNewChannel, onAction }: { open: boolean; setOpen: (open: boolean) => void; level: AlertLevel; targets: NotificationTargetsState; onChannel: (targetId: string) => void; onNewChannel: (channel: NotificationChannel) => void; onAction: (mode: "prepare" | "auto") => void }) {
+function LevelAddMenu({ open, setOpen, level, targets, usedTargets, onChannel, onNewChannel, onAction }: { open: boolean; setOpen: (open: boolean) => void; level: AlertLevel; targets: NotificationTargetsState; usedTargets: Set<string | null>; onChannel: (targetId: string) => void; onNewChannel: (channel: NotificationChannel) => void; onAction: (mode: "prepare" | "auto") => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useOutsideClose([ref, panel], open, () => setOpen(false));
-  const used = new Set(level.entries.filter(entry => entry.kind === "channel").map(entry => entry.targetId));
+  // A channel can sit in one level only; it applies to every level to the right.
+  const available = targets.targets.filter(target => !usedTargets.has(target.id));
   const grouped = groupedActions(level.entries);
-  return <div ref={ref} className="relative"><button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button><Popover anchor={ref} open={open} side="top" align="stretch"><div ref={panel} role="menu" className="grid gap-1 rounded-panel border border-line bg-panel p-1.5 shadow-panel">{targets.targets.filter(target => !used.has(target.id)).map(target => <button key={target.id} type="button" role="menuitem" className="flex items-center gap-2 rounded-field px-2 py-1.5 text-left text-[12px] hover:bg-panel-soft" onClick={() => { setOpen(false); onChannel(target.id); }}><ChannelLogo kind={target.kind} />{targetName(target)}</button>)}<AddChannelRow label="Add new channel" onPick={channel => { setOpen(false); onNewChannel(channel); }} />{grouped.prepare.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-warn hover:bg-warn-bg" onClick={() => { setOpen(false); onAction("prepare"); }}>Prepare quarantine / pause</button>}{grouped.auto.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-danger hover:bg-danger-bg" onClick={() => { setOpen(false); onAction("auto"); }}>Auto quarantine / pause</button>}</div></Popover></div>;
+  return <div ref={ref} className="relative"><button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button><Popover anchor={ref} open={open} side="top" align="stretch"><div ref={panel} role="menu" className="grid gap-1 rounded-panel border border-line bg-panel p-1.5 shadow-panel">{available.map(target => <button key={target.id} type="button" role="menuitem" className="flex items-center gap-2 rounded-field px-2 py-1.5 text-left text-[12px] hover:bg-panel-soft" onClick={() => { setOpen(false); onChannel(target.id); }}><ChannelLogo kind={target.kind} />{targetName(target)}</button>)}{available.length === 0 && targets.targets.length > 0 && <p className="px-2 py-1.5 text-[11.5px] text-faint">Every channel is placed. Drag one here to move it.</p>}<AddChannelRow label="Add new channel" onPick={channel => { setOpen(false); onNewChannel(channel); }} />{grouped.prepare.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-warn hover:bg-warn-bg" onClick={() => { setOpen(false); onAction("prepare"); }}>Prepare quarantine / pause</button>}{grouped.auto.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-danger hover:bg-danger-bg" onClick={() => { setOpen(false); onAction("auto"); }}>Auto quarantine / pause</button>}</div></Popover></div>;
 }
 
 function LevelMenu({ index, count, canAdd, canDelete, onMove, onAddBefore, onAddAfter, onDelete }: { index: number; count: number; canAdd: boolean; canDelete: boolean; onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void; onDelete: () => void }) {
@@ -190,3 +336,62 @@ function MenuButton({ children, disabled, tone, onClick }: { children: React.Rea
 
 function groupedActions(entries: AlertLevelEntry[]) { return { prepare: entries.filter(entry => entry.kind === "prepare_stop" || entry.kind === "prepare_quarantine"), auto: entries.filter(entry => entry.kind === "auto_pause" || entry.kind === "auto_quarantine") }; }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
+
+/** Move the level with `id` to `index`, keeping the others in order. */
+function reorder(levels: AlertLevel[], id: string, index: number): AlertLevel[] {
+  const moved = levels.find(level => level.id === id);
+  if (!moved) return levels;
+  const rest = levels.filter(level => level.id !== id);
+  rest.splice(Math.max(0, Math.min(index, rest.length)), 0, moved);
+  return rest;
+}
+
+/** Column rects in board order, excluding the dragged column's own slot. */
+function columnRects(board: HTMLDivElement | null, draggedId: string): DOMRect[] {
+  if (!board) return [];
+  return [...board.querySelectorAll<HTMLElement>("[data-column]")].filter(node => node.dataset.column !== draggedId).map(node => node.getBoundingClientRect());
+}
+
+/** The level and channel-slot index under the pointer for an entry drag. */
+function entryTarget(board: HTMLDivElement | null, session: DragSession<{ id: string; levelId: string }>): { levelId: string; index: number } | null {
+  if (!board) return null;
+  const columns = [...board.querySelectorAll<HTMLElement>("[data-level]")];
+  const column = columns.find(node => { const rect = node.getBoundingClientRect(); return session.x >= rect.left && session.x <= rect.right; })
+    ?? columns.reduce<HTMLElement | null>((closest, node) => {
+      const rect = node.getBoundingClientRect();
+      const distance = Math.min(Math.abs(session.x - rect.left), Math.abs(session.x - rect.right));
+      if (!closest) return node;
+      const closestRect = closest.getBoundingClientRect();
+      return distance < Math.min(Math.abs(session.x - closestRect.left), Math.abs(session.x - closestRect.right)) ? node : closest;
+    }, null);
+  if (!column) return null;
+  const levelId = column.dataset.level!;
+  const rects = [...column.querySelectorAll<HTMLElement>("[data-entry-slot]")]
+    .filter(node => node.dataset.flipKey !== `slot:${session.data.id}` && node.dataset.flipKey !== `entry:${session.data.id}`)
+    .map(node => node.getBoundingClientRect());
+  return { levelId, index: slotIndexAt(rects, session.y, "y") };
+}
+
+/**
+ * Local (optimistic) version of an entry move. Returns the new level list
+ * and the entry's position inside the destination level's full entry list.
+ */
+export function moveEntryLocally(levels: AlertLevel[], entryId: string, fromLevelId: string, toLevelId: string, toChannelIndex: number): { levels: AlertLevel[]; position: number } | null {
+  const from = levels.find(level => level.id === fromLevelId);
+  const entry = from?.entries.find(item => item.id === entryId);
+  if (!from || !entry) return null;
+  const withoutEntry = levels.map(level => ({ ...level, entries: level.entries.filter(item => item.id !== entryId) }));
+  const to = withoutEntry.find(level => level.id === toLevelId);
+  if (!to) return null;
+  const channelPositions = to.entries.map((item, index) => ({ item, index })).filter(({ item }) => item.kind === "channel");
+  const clampedIndex = Math.max(0, Math.min(toChannelIndex, channelPositions.length));
+  const position = clampedIndex < channelPositions.length
+    ? channelPositions[clampedIndex]!.index
+    : (channelPositions.at(-1)?.index ?? -1) + 1;
+  const entries = [...to.entries];
+  entries.splice(position, 0, { ...entry, levelId: toLevelId });
+  return {
+    levels: withoutEntry.map(level => (level.id === toLevelId ? { ...level, entries: entries.map((item, index) => ({ ...item, position: index })) } : level)),
+    position,
+  };
+}
