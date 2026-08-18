@@ -175,11 +175,14 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const pad = 14;
   const trackWidth = Math.max(120, width - pad * 2);
   const xFor = (percent: number) => pad + trackPosition(percent, max) * trackWidth;
-  const percentAt = (clientX: number) => {
+  // While dragging the value follows the pointer continuously (no snap), so
+  // the diamond glides; it snaps to a nice number on release.
+  const percentAt = (clientX: number, snap: boolean) => {
     const rect = trackRect.current ?? svgRef.current?.getBoundingClientRect();
     if (!rect) return MIN_TOLERANCE_PERCENT;
     const x = ((clientX - rect.left) / rect.width) * width;
-    return Math.max(MIN_TOLERANCE_PERCENT, snapToNice(trackPercent((x - pad) / trackWidth, max), 1));
+    const raw = trackPercent((x - pad) / trackWidth, max);
+    return Math.max(MIN_TOLERANCE_PERCENT, snap ? snapToNice(raw, 1) : Math.round(raw * 10) / 10);
   };
   const change = (id: string, next: number) => onChange(changeToleranceValue(value, order, id, next));
 
@@ -187,7 +190,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
     frame.current = null;
     const move = pending.current;
     if (!move) return;
-    setDragValues(changeToleranceValue(dragBase.current ?? value, order, move.id, percentAt(move.clientX)));
+    setDragValues(changeToleranceValue(dragBase.current ?? value, order, move.id, percentAt(move.clientX, false)));
   };
   const pointerDown = (id: string) => (event: PointerEvent<SVGElement>) => {
     event.preventDefault();
@@ -196,7 +199,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
     dragBase.current = value;
     draggingRef.current = id;
     setDragging(id);
-    setDragValues(changeToleranceValue(value, order, id, percentAt(event.clientX)));
+    setDragValues(changeToleranceValue(value, order, id, percentAt(event.clientX, false)));
   };
   const pointerMove = (id: string) => (event: PointerEvent<SVGElement>) => {
     if (draggingRef.current !== id) return;
@@ -210,7 +213,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
     const last = pending.current;
     const active = draggingRef.current;
     const final = active
-      ? (last ? changeToleranceValue(dragBase.current ?? value, order, last.id, percentAt(last.clientX)) : dragValues ?? changeToleranceValue(dragBase.current ?? value, order, active, percentAt(event.clientX)))
+      ? changeToleranceValue(dragBase.current ?? value, order, active, percentAt(last?.clientX ?? event.clientX, true))
       : null;
     pending.current = null;
     trackRect.current = null;
