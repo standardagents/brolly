@@ -171,7 +171,8 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
 
   return (
     <section ref={ref} className="min-w-0 scroll-mt-[140px]" aria-label={`${label} limits`}>
-      <header className="mb-4 flex items-center gap-3 border-b border-line pb-3">
+      {/* Sticky under the page header and step rail; the next product's header pushes it away. */}
+      <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel px-2 pt-2 pb-3" style={{ top: STICKY_TOP - 8 }}>
         <ProductIcon family={family} />
         <h3 className="text-[17px] font-[750]">{label}</h3>
         <span className="ml-1 inline-flex items-center gap-1.5">
