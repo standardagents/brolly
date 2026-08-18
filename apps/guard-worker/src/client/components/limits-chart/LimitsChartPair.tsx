@@ -39,7 +39,6 @@ export interface LimitsChartPairProps {
   onCostLevelEnabledChange?(next: Record<string, boolean>): void;
   usageLevelEnabled?: Record<string, Record<string, boolean>>;
   onUsageLevelEnabledChange?(next: Record<string, Record<string, boolean>>): void;
-  cycleFill?: "bands" | "time";
 }
 
 /**
@@ -48,7 +47,7 @@ export interface LimitsChartPairProps {
  * the selected row expands into its chart, and each usage dimension has its
  * own limit map and an on/off switch. Below `md` the pair stacks.
  */
-export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, cycleFill }: LimitsChartPairProps) {
+export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: LimitsChartPairProps) {
   const { data, loading, error } = useUsageSeries(token, scope);
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   // `undefined` = nothing chosen yet (first row opens); `null` = user collapsed everything.
@@ -113,7 +112,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
   const costTolerance = tolerance ? toleranceDefaults(costHistory, data.cycles, data.today, order, tolerance, window) : undefined;
   const costReset = costTolerance ? defaultLevelValues(costHistory, data.cycles, data.today, order, {}, undefined, scaleFloor(costFloor), costTolerance) : undefined;
   const costChart = !floorReady(costFloor) ? waitingNote : (
-    <LimitsChart kind="cost" unit="USD" window={window} series={costHistory} cycles={data.cycles} today={data.today} cycleFill={cycleFill}
+    <LimitsChart kind="cost" unit="USD" window={window} series={costHistory} cycles={data.cycles} today={data.today}
       levels={levels} value={cost} seed={scaleFloor(costFloor)} tolerance={costTolerance} resetToTolerance={costReset}
       reference={window === "cycle" ? costFloor : undefined} onChange={onCostChange} readOnly={readOnly}
       levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} history={histories("cost")} />
@@ -123,7 +122,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
     const series = metricSeries(data, id);
     const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
     const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance) : undefined;
-    return <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={series} cycleFill={cycleFill}
+    return <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={series}
       cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id])}
       tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}

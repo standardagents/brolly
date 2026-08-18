@@ -42,12 +42,6 @@ export interface LimitsChartProps {
   onLevelEnabledChange?(next: Record<string, boolean>): void;
   /** Accessible name for the chart. */
   label?: string;
-  /**
-   * How the cycle running total is colored: "bands" paints horizontal
-   * value bands between the level lines; "time" paints each day's slice in
-   * the color of the highest level the total had crossed by that day.
-   */
-  cycleFill?: "bands" | "time";
   /** Optional heading rendered above the chart. */
   title?: string;
   /** Product family glyph rendered before the heading. */
@@ -83,7 +77,7 @@ export function formatLimitValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unitLabel(unit)}`;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, cycleFill = "bands" }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -306,17 +300,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         ))}
 
         {/* Cumulative sawtooth per cycle */}
-        {cycleMode && cycleFill === "time" ? (
-          // Time split: one column per day, filled to the running total and
-          // colored by the highest level that total had crossed on that day.
-          cumulative.map((point, index) => {
-            const crossed = crossedLevel(activeOrder, shown, point.cumulative);
-            const color = (crossed && colorById.get(crossed)) || accent;
-            const top = yFor(point.cumulative);
-            const base = PLOT.top + plotHeight;
-            return <rect key={point.day} x={PLOT.left + index * barSlot} y={top} width={barSlot + 0.5} height={Math.max(0, base - top)} fill={color} opacity=".82" />;
-          })
-        ) : cycleMode ? (
+        {cycleMode ? (
           // Cycle step: the running total is the primary mark. Each horizontal
           // band between two level lines paints the total in that level's
           // color; the band under the lowest line keeps the accent.

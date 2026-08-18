@@ -220,21 +220,36 @@ export function MiniChart({ series, cycles, today, window, levels, values, accen
   const bars = useMemo(() => {
     const derived = deriveSeries(series, cycles, today);
     const points = window === "cycle" ? derived.cumulative.map(point => point.cumulative) : derived.dense.map(point => point.value);
-    const axis = chooseAxis(points);
-    const order = levels.map(level => level.id); // active levels only; the parent filters
+    const levelValues = levels.map(level => values[level.id] ?? 0);
+    // Same axis rule as the full chart: level values extend the domain and
+    // the symlog switch depends on the same outlier test.
+    const axis = chooseAxis(derived.heightValues, levelValues);
+    const order = levels.map(level => level.id);
     const colorById = new Map(levels.map(level => [level.id, level.color]));
     const width = 72;
     const height = 24;
     const slot = width / Math.max(1, points.length);
-    return points.map((point, index) => {
-      const crossed = crossedLevel(order, values, point);
-      const barHeight = Math.max(0.6, axis.position(point) * (height - 1));
-      return { x: index * slot, width: Math.max(0.6, slot * 0.7), y: height - barHeight, height: barHeight, color: (crossed && colorById.get(crossed)) || accent };
+    const yFor = (value: number) => height - axis.position(value) * (height - 1);
+    return points.flatMap((point, index) => {
+      const x = index * slot;
+      const barWidth = Math.max(0.6, slot * 0.7);
+      if (window === "day") {
+        const crossed = crossedLevel(order, values, point);
+        return [{ key: `${index}`, x, width: barWidth, y: yFor(point), height: Math.max(0.6, height - yFor(point)), color: (crossed && colorById.get(crossed)) || accent }];
+      }
+      // Cycle mode: stack the running total into value bands, like the full chart.
+      const edges = [0, ...levelValues.map(value => Math.min(value, point)).filter(value => value > 0 && value < point), point];
+      const bounds = [...new Set(edges)].sort((left, right) => left - right);
+      return bounds.slice(1).map((top, segment) => {
+        const bottom = bounds[segment]!;
+        const crossed = crossedLevel(order, values, bottom + (top - bottom) / 2 + 1e-9);
+        return { key: `${index}-${segment}`, x, width: barWidth, y: yFor(top), height: Math.max(0.4, yFor(bottom) - yFor(top)), color: (crossed && colorById.get(crossed)) || accent };
+      });
     });
   }, [series, cycles, today, window, levels, values, accent]);
   return (
     <svg viewBox="0 0 72 24" className={className} aria-hidden="true" preserveAspectRatio="none">
-      {bars.map((bar, index) => <rect key={index} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} />)}
+      {bars.map(bar => <rect key={bar.key} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} opacity={window === "cycle" ? 0.82 : 1} />)}
     </svg>
   );
 }
