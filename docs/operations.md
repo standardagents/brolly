@@ -383,6 +383,8 @@ action instead.
 
 ```bash
 pnpm --filter @standardagents/brolly-guard dev
+pnpm dev:demo
+BROLLY_DEMO_FIRST_RUN=1 pnpm dev:demo
 pnpm --filter @standardagents/brolly-guard build
 pnpm --filter @standardagents/brolly-guard preview
 ```
@@ -390,3 +392,8 @@ pnpm --filter @standardagents/brolly-guard preview
 Development and preview both run through the Cloudflare Vite plugin so Worker
 bindings and SPA routing match production. The development server is pinned to
 port `5173` with `strictPort` enabled.
+
+The dashboard demo is pinned to `[::1]:5199`. Its startup guard checks both
+`127.0.0.1:5199` and `[::1]:5199` before Vite listens. A process on either
+address blocks startup with the process-cleanup instruction. This keeps
+`devurl 5199` from reaching a stale listener on the other address family.

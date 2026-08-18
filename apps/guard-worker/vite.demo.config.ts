@@ -5,6 +5,9 @@
  *
  *   pnpm dev:demo        # from the repository root or this package
  *
+ * The harness owns [::1]:5199 and checks both loopback address families before
+ * Vite starts so a stale demo process cannot coexist on the same logical port.
+ *
  * Run it to review or change dashboard UI. `pnpm dev` boots the real Worker
  * instead and requires Cloudflare OAuth plus account binding before any page
  * past the login screen renders.
@@ -26,12 +29,54 @@
  */
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { createServer as createNetServer } from "node:net";
 import { defineConfig, type Plugin } from "vite";
 import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget } from "./src/client/types.ts";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
 
 const now = Date.now();
 const HOUR = 3_600_000;
+const DEMO_PORT = 5199;
+const DEMO_HOST = "::1";
+const DEMO_PORT_GUARD_STATE = "__brollyDemoPortGuardChecked" as const;
+
+/**
+ * Reserve-check both loopback families before Vite starts. macOS treats
+ * 127.0.0.1 and ::1 as separate listeners, while `devurl` resolves localhost
+ * through ::1. A stale listener on either family must stop a second demo from
+ * starting on the same logical port.
+ */
+export async function assertDemoLoopbackPortAvailable(port = DEMO_PORT): Promise<void> {
+  for (const host of ["127.0.0.1", "::1"]) {
+    await new Promise<void>((resolve, reject) => {
+      const probe = createNetServer();
+      probe.once("error", cause => {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        reject(new Error(`Brolly demo port ${port} is occupied on ${host}. Stop the existing demo server before starting another. ${detail}`));
+      });
+      probe.listen({ host, port, exclusive: true }, () => {
+        probe.close(error => error ? reject(error) : resolve());
+      });
+    });
+  }
+}
+
+function demoLoopbackGuard(): Plugin {
+  const runtime = globalThis as typeof globalThis & { [DEMO_PORT_GUARD_STATE]?: boolean };
+  return {
+    name: "brolly-demo-loopback-guard",
+    configResolved(config) {
+      if (config.server.host !== DEMO_HOST) {
+        throw new Error(`Brolly's demo server is fixed to IPv6 loopback (${DEMO_HOST}) so devurl reaches the intended process. Remove the --host override.`);
+      }
+    },
+    async configureServer() {
+      if (runtime[DEMO_PORT_GUARD_STATE]) return;
+      await assertDemoLoopbackPortAvailable();
+      runtime[DEMO_PORT_GUARD_STATE] = true;
+    },
+  };
+}
 
 const spendLimits = (warning: number, critical: number, emergency: number) => ({ warning, critical, emergency });
 
@@ -837,6 +882,6 @@ function normalizeLevelPositions(): void {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), demoApi()],
-  server: { port: 5199, strictPort: true },
+  plugins: [demoLoopbackGuard(), tailwindcss(), react(), demoApi()],
+  server: { host: DEMO_HOST, port: DEMO_PORT, strictPort: true },
 });
