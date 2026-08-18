@@ -415,7 +415,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : fields === "inline" ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-line-soft pt-2">
+        <div className="mt-2 flex flex-wrap items-start gap-x-6 gap-y-2 border-t border-line-soft pt-2.5">
           {levels.map(level => (
             <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
@@ -475,11 +475,16 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
       </span>
   );
   if (inline) {
+    // Label over value, switch to the right; no box.
     return (
-      <label className={`inline-flex items-center gap-2 transition-opacity ${enabled ? "" : "opacity-55"}`}>
-        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-        <span className="text-[11.5px] font-bold text-muted">{level.label}</span>
-        <span className="rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
+      <label className={`inline-flex items-center gap-2.5 transition-opacity ${enabled ? "" : "opacity-55"}`}>
+        <span className="flex min-w-0 flex-col">
+          <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
+            <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
+            <span className="truncate">{level.label}</span>
+          </span>
+          <span className="rounded-[4px] border border-transparent px-1 -ml-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
+        </span>
         {onToggle && <LevelSwitch label={level.label} on={enabled} onChange={onToggle} />}
       </label>
     );
