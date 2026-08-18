@@ -415,7 +415,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : fields === "inline" ? (
-        <div className="mt-2 flex flex-wrap items-start gap-x-6 gap-y-2 border-t border-line-soft pt-2.5">
+        <div className="mt-2 grid grid-cols-3 gap-x-4 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2">
           {levels.map(level => (
             <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
@@ -477,7 +477,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
   if (inline) {
     // Label over value, switch to the right; no box.
     return (
-      <label className={`inline-flex items-center gap-2.5 transition-opacity ${enabled ? "" : "opacity-55"}`}>
+      <label className={`flex min-w-0 items-center justify-between gap-2.5 transition-opacity ${enabled ? "" : "opacity-55"}`}>
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
             <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
