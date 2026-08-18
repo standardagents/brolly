@@ -396,8 +396,8 @@ function ActionEntry({ mode, onRemove, onGrab, ghost = false }: { mode: "prepare
         <span className="min-w-0 flex-1">
           <strong className="block text-[12.5px]">{auto ? "Automatic Quarantine" : "Present 1-click Quarantine"}</strong>
           <span className="mt-0.5 block text-[11.5px] leading-[1.4]">{auto
-            ? "Brolly stops, quarantines, or pauses the biggest contributors itself. Every action is reversible and audited."
-            : "Brolly finds the biggest contributors and prepares a stop, quarantine, or pause. Nothing changes until you approve it."}</span>
+            ? "Brolly finds the biggest contributors and automatically quarantines them without waiting for approval. Quarantines are reversible."
+            : "Brolly finds the biggest contributors and prepares a quarantine action for your approval. Quarantines are reversible."}</span>
           <span className="mt-1 block text-[11px] font-semibold opacity-80">Workers, Durable Objects, and Queues only.</span>
         </span>
         <button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button>
