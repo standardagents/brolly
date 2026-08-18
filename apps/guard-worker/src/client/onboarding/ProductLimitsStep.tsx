@@ -64,14 +64,16 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const [activeScope, setActiveScope] = useState<string | null>(null);
   const currentActive = activeScope ?? (ordered[0] ? `family:${ordered[0].family}` : null);
 
-  // Scroll spy: the last product section whose top has passed the sticky offset is active.
+  // Scroll spy: a product becomes active once its top has crossed a line
+  // 70% of the way down the viewport, so the sidebar leads the eye slightly.
   useEffect(() => {
     const update = () => {
+      const line = STICKY_TOP + (window.innerHeight - STICKY_TOP) * 0.7;
       let current: string | null = null;
       for (const family of ordered) {
         const scope = `family:${family.family}`;
         const top = sectionRefs.current[scope]?.getBoundingClientRect().top;
-        if (top !== undefined && top <= STICKY_TOP + 24) current = scope;
+        if (top !== undefined && top <= line) current = scope;
       }
       setActiveScope(current);
     };
