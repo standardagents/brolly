@@ -49,13 +49,14 @@ function Harness({ initial = {}, window = "day" as "day" | "cycle", daily }: { i
 }
 
 describe("LimitsChartPair tolerance behavior", () => {
-  it("seeds an empty chart from tolerance and detaches after values exist", async () => {
+  it("seeds an empty chart from tolerance; untouched maps follow a tolerance change, edited maps stay", async () => {
     const container = await render(<Harness />);
     await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!).warn).toBeGreaterThan(0));
-    const seeded = container.querySelector("[data-cost]")!.getAttribute("data-cost");
+    const seeded = JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!);
     const savedUsage = container.querySelector("[data-usage]")!.getAttribute("data-usage");
     await act(async () => button(container, "Change tolerance").click());
-    expect(container.querySelector("[data-cost]")!.getAttribute("data-cost")).toBe(seeded);
+    await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!).warn).toBeGreaterThan(seeded.warn));
+    // The usage map was set by hand (150/300), so it does not move.
     expect(container.querySelector("[data-usage]")!.getAttribute("data-usage")).toBe(savedUsage);
   });
 

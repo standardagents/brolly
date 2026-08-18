@@ -114,6 +114,27 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when data or the level order changes
   }, [data, metricIds, order, usageFloor, tolerance, window]);
 
+  // When the global tolerance changes, every map still sitting on the values
+  // the previous tolerance produced follows it; edited maps stay put.
+  const previousTolerance = useRef(tolerance);
+  useEffect(() => {
+    const previous = previousTolerance.current;
+    previousTolerance.current = tolerance;
+    if (!data || !tolerance || !previous || sameMap(previous, tolerance)) return;
+    const resetFor = (series: ReturnType<typeof costSeries>, floor: LevelValues | undefined, percent: LevelValues) =>
+      defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(floor), toleranceDefaults(series, data.cycles, data.today, order, percent, window));
+    const history = costSeries(data);
+    if (sameMap(cost, resetFor(history, costFloor, previous))) onCostChange(resetFor(history, costFloor, tolerance));
+    const nextUsage = { ...usageRef.current };
+    let changed = false;
+    for (const id of metricIds) {
+      const series = metricSeries(data, id);
+      if (nextUsage[id] && sameMap(nextUsage[id]!, resetFor(series, usageFloor?.[id], previous))) { nextUsage[id] = resetFor(series, usageFloor?.[id], tolerance); changed = true; }
+    }
+    if (changed) publishUsage(nextUsage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to tolerance changes only
+  }, [tolerance]);
+
   if (loading) {
     return <div className="grid h-[290px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>;
   }
@@ -188,4 +209,9 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
 
 function ColumnHead({ family, children }: { family?: string; children: React.ReactNode }) {
   return <h4 className="mb-2 inline-flex min-h-[30px] items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{children}</h4>;
+}
+
+function sameMap(left: LevelValues, right: LevelValues): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...keys].every(key => left[key] === right[key]);
 }
