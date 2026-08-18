@@ -109,7 +109,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
       </header>
-      <div className="mx-auto grid max-w-[1280px] grid-cols-[340px_minmax(0,1fr)] gap-14 px-8 pt-14 pb-[100px] max-xl:grid-cols-[290px_1fr] max-xl:gap-[30px] max-xl:px-6 max-xl:pt-10 max-xl:pb-20 max-md:block max-md:px-3.5 max-md:pt-[26px] max-md:pb-[60px]">
+      <div className="mx-auto grid max-w-[1360px] grid-cols-[250px_minmax(0,1fr)] gap-10 px-8 pt-14 pb-[100px] max-xl:grid-cols-[220px_minmax(0,1fr)] max-xl:gap-[26px] max-xl:px-6 max-xl:pt-10 max-xl:pb-20 max-md:block max-md:px-3.5 max-md:pt-[26px] max-md:pb-[60px]">
         <WizardSidebar editing={editing} active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
           {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
         </WizardSidebar>
@@ -162,7 +162,7 @@ function WizardSidebar({ editing, active, unlocked, onSelect, children }: {
 }) {
   return (
     <aside className="sticky top-24 h-max max-md:static max-md:mb-5">
-      <h1 className="mt-5 mb-3.5 text-[37px] leading-[1.05] tracking-[-.035em] max-md:text-[28px]">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
+      <h1 className="mt-5 mb-3.5 text-[30px] leading-[1.05] tracking-[-.03em] max-md:text-[28px]">{editing ? "Tune your limits" : "Customize Brolly"}</h1>
       <ol className="mt-[26px] list-none border-t border-line pt-[18px] max-md:mt-2 max-md:flex max-md:justify-between max-md:border-t-0 max-md:pt-2">
         {STEPS.map((step, index) => {
           const reachable = index <= unlocked;
