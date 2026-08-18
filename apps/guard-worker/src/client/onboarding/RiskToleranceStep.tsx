@@ -155,9 +155,11 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   // overlap) and a connector line runs from each diamond to its card.
   const positions = levels.map(level => xFor(value[level.id] ?? MIN_TOLERANCE_PERCENT));
   const columns = Math.max(1, levels.length);
-  const cardWidth = Math.min(CARD_WIDTH, Math.max(96, (width - 8 * (columns - 1)) / columns));
-  const cardCenter = (index: number) => (index + 0.5) * (width / columns);
-  const cardLeft = (index: number) => Math.min(Math.max(cardCenter(index) - cardWidth / 2, 0), Math.max(0, width - cardWidth));
+  const gap = 12;
+  const cardWidth = Math.min(CARD_WIDTH, Math.max(96, (width - gap * (columns - 1)) / columns));
+  const rowWidth = columns * cardWidth + (columns - 1) * gap;
+  const rowLeft = (width - rowWidth) / 2;
+  const cardLeft = (index: number) => rowLeft + index * (cardWidth + gap);
   const trackY = TRACK.top;
   const cardTop = trackY + TRACK.height + 30;
   const height = cardTop + TRACK.cards;
