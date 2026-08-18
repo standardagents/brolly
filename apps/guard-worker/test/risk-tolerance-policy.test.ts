@@ -9,7 +9,7 @@ function policy(): Policy {
     ...structuredClone(DEFAULT_POLICY),
     riskTolerance: {
       preset: "balanced",
-      percentOfTypical: { warning: 150, critical: 350, emergency: 800 },
+      percentOfTypical: { warning: 125, critical: 320, emergency: 800 },
       baseline: { computedAt: 1, windowDays: 90 },
     },
   };

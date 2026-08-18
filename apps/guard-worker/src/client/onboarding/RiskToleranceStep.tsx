@@ -72,35 +72,17 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
     </div>
     {usage.loading && <div className="mb-4 inline-flex items-center gap-2 text-[12.5px] text-muted"><Spinner /> Loading account history…</div>}
     {usage.error && <p className="mb-4 text-[12.5px] text-muted">Account history is unavailable. Percentages can still be configured.</p>}
-    <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} onChange={next => commit("custom", next)} />
-    <section className="mt-8" aria-label="Risk tolerance estimates">
-      <h3 className="mb-2 text-[11px] font-extrabold uppercase tracking-[.08em] text-faint">At your current account spend</h3>
-      {typical > 0 ? (
-        <table className="w-max max-w-full text-[13px] tabular-nums">
-          <tbody>
-            {chartLevels.map(level => {
-              const daily = typical * (tolerance.percentOfTypical[level.id] ?? 0) / 100;
-              return (
-                <tr key={level.id}>
-                  <td className="py-1 pr-3"><i className="inline-block size-2 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" /></td>
-                  <td className="py-1 pr-6 font-bold text-ink">{level.label}</td>
-                  <td className="py-1 pr-6 text-right"><span className="font-[740] text-ink">{money(daily)}</span> <span className="text-faint">/ day</span></td>
-                  <td className="py-1 text-right"><span className="font-[740] text-ink">{money(daily * cycleDays)}</span> <span className="text-faint">/ cycle</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      ) : (
-        <p className="text-[12.5px] text-muted">Account history has no nonzero daily spend yet, so there is nothing to estimate.</p>
-      )}
-    </section>
+    <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
+    {typical > 0
+      ? <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Amounts are at your current account spend: {money(typical)} on a typical day.</p>
+      : <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Account history has no nonzero daily spend yet, so there are no amounts to show.</p>}
   </>;
 }
 
 /** Track geometry: linear from 0% to 100% over the first LINEAR_SHARE of the width, log above. */
 const LINEAR_SHARE = 0.16;
-const TRACK = { top: 44, height: 6, captions: 74 } as const;
+const TRACK = { top: 44, height: 6, cards: 96 } as const;
+const CARD_WIDTH = 168;
 const AXIS_TICKS = [0, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000];
 
 export function trackPosition(percent: number, max = TOLERANCE_AXIS_MAX): number {
@@ -122,9 +104,12 @@ export function trackPercent(position: number, max = TOLERANCE_AXIS_MAX): number
  * a diamond per level. Diamonds push each other and never cross. Each
  * level's name and editable percentage hang under its diamond.
  */
-export function ToleranceTrack({ levels, value, onChange }: {
+export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: {
   levels: Array<{ id: string; label: string; color: string }>;
   value: Record<string, number>;
+  /** Typical daily spend; 0 hides the amounts. */
+  typical: number;
+  cycleDays: number;
   onChange: (next: Record<string, number>) => void;
 }) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
@@ -166,12 +151,16 @@ export function ToleranceTrack({ levels, value, onChange }: {
     change(id, current + delta);
   };
 
-  // Captions alternate rows when neighbors sit closer than a caption's width.
+  // Cards sit in one evenly spaced row under the track (so they never
+  // overlap) and a connector line runs from each diamond to its card.
   const positions = levels.map(level => xFor(value[level.id] ?? MIN_TOLERANCE_PERCENT));
-  const rows = positions.map((x, index) => (index > 0 && x - positions[index - 1]! < 84 && (index % 2 === 1) ? 1 : 0));
-  const stagger = rows.some(Boolean);
+  const columns = Math.max(1, levels.length);
+  const cardWidth = Math.min(CARD_WIDTH, Math.max(96, (width - 8 * (columns - 1)) / columns));
+  const cardCenter = (index: number) => (index + 0.5) * (width / columns);
+  const cardLeft = (index: number) => Math.min(Math.max(cardCenter(index) - cardWidth / 2, 0), Math.max(0, width - cardWidth));
   const trackY = TRACK.top;
-  const height = trackY + TRACK.height + TRACK.captions + (stagger ? 40 : 0);
+  const cardTop = trackY + TRACK.height + 30;
+  const height = cardTop + TRACK.cards;
 
   return (
     <div ref={containerRef} className="relative min-w-0 select-none" style={{ height }}>
@@ -215,18 +204,30 @@ export function ToleranceTrack({ levels, value, onChange }: {
               <title>{`${level.label} · ${formatPercent(percent)}`}</title>
               <circle cx={x} cy={y} r="14" fill="transparent" />
               <polygon points={`${x},${y - 9} ${x + 9},${y} ${x},${y + 9} ${x - 9},${y}`} fill={level.color} stroke="var(--panel)" strokeWidth="2" />
-              <line x1={x} x2={x} y1={y + 12} y2={trackY + TRACK.height + 18 + rows[index]! * 40} stroke={level.color} strokeWidth="1" opacity=".5" />
+              <polyline points={`${x},${y + 11} ${x},${y + 19} ${cardLeft(index) + cardWidth / 2},${cardTop - 8} ${cardLeft(index) + cardWidth / 2},${cardTop}`} fill="none" stroke={level.color} strokeWidth="1.25" opacity=".6" />
             </g>
           );
         })}
       </svg>
-      {/* Captions: name and editable percentage under each diamond */}
-      {levels.map((level, index) => (
-        <div key={level.id} className="absolute w-[92px] -translate-x-1/2 text-center" style={{ left: positions[index]!, top: trackY + TRACK.height + 20 + rows[index]! * 40 }}>
-          <div className="truncate text-[11.5px] font-bold" style={{ color: level.color }}>{level.label}</div>
-          <PercentField label={level.label} value={value[level.id] ?? MIN_TOLERANCE_PERCENT} onCommit={next => change(level.id, next)} />
-        </div>
-      ))}
+      {/* Cards: name, editable percentage, and amounts under each diamond */}
+      {levels.map((level, index) => {
+        const percent = value[level.id] ?? MIN_TOLERANCE_PERCENT;
+        const daily = typical * percent / 100;
+        return (
+          <div key={level.id} className="absolute rounded-field border bg-panel px-2.5 py-2 shadow-panel" style={{ width: cardWidth, left: cardLeft(index), top: cardTop, borderColor: level.color }}>
+            <div className="flex items-baseline justify-between gap-1">
+              <span className="truncate text-[11.5px] font-bold" style={{ color: level.color }}>{level.label}</span>
+              <PercentField label={level.label} value={percent} onCommit={next => change(level.id, next)} />
+            </div>
+            {typical > 0 && (
+              <div className="mt-1 grid gap-0.5 text-[11px] tabular-nums text-muted">
+                <span><b className="font-[740] text-ink">{money(daily)}</b> / day</span>
+                <span><b className="font-[740] text-ink">{money(daily * cycleDays)}</b> / cycle</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

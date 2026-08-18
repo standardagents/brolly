@@ -9,9 +9,9 @@ export const MAX_TOLERANCE_PERCENT = 100_000;
 export const TOLERANCE_AXIS_MAX = 10_000;
 
 export const RISK_PRESETS: Record<Exclude<RiskTolerancePreset, "custom">, { low: number; high: number }> = {
-  conservative: { low: 120, high: 300 },
-  balanced: { low: 150, high: 800 },
-  growth: { low: 250, high: 3_000 },
+  conservative: { low: 110, high: 300 },
+  balanced: { low: 125, high: 800 },
+  growth: { low: 150, high: 3_000 },
 };
 
 /** Fixed geometric preset curve, snapped and pushed with the chart's gap rule. */

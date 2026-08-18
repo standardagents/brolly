@@ -21,7 +21,7 @@ const INITIAL_POLICY: Policy = {
   thresholds: [],
   riskTolerance: {
     preset: "balanced",
-    percentOfTypical: { warn: 150, critical: 350, emergency: 800 },
+    percentOfTypical: { warn: 125, critical: 320, emergency: 800 },
     baseline: { computedAt: 1, windowDays: 90 },
   },
 };
@@ -71,7 +71,7 @@ describe("RiskToleranceStep", () => {
     expect(button("Conservative")).toBeTruthy();
     expect(button("Balanced").getAttribute("aria-pressed")).toBe("true");
     expect(button("Growth")).toBeTruthy();
-    expect(document.querySelector("[aria-label='Risk tolerance estimates']")?.textContent).toContain("$15 / day");
+    expect(document.body.textContent).toContain("$13");
   });
 
   it("moves every level when a preset is selected", async () => {
@@ -79,9 +79,9 @@ describe("RiskToleranceStep", () => {
     await act(async () => { button("Growth").click(); });
     const state = document.querySelector("[data-preset]")!;
     expect(state.getAttribute("data-preset")).toBe("growth");
-    expect(JSON.parse(state.getAttribute("data-values")!)).toEqual({ warn: 250, critical: 860, emergency: 3000 });
+    expect(JSON.parse(state.getAttribute("data-values")!)).toEqual({ warn: 150, critical: 680, emergency: 3000 });
     expect([...document.querySelectorAll("[role='slider']")].map(element => element.getAttribute("aria-valuenow")))
-      .toEqual(["250", "860", "3000"]);
+      .toEqual(["150", "680", "3000"]);
   });
 
   it("marks the selection Custom when a slider is dragged", async () => {
@@ -100,7 +100,7 @@ describe("RiskToleranceStep", () => {
     await render();
     const slider = document.querySelector("[role='slider']")!;
     await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })));
-    expect(Number(slider.getAttribute("aria-valuenow"))).toBeGreaterThan(150);
+    expect(Number(slider.getAttribute("aria-valuenow"))).toBeGreaterThan(125);
     const field = document.querySelector("input[aria-label='Warn percent of typical']")!;
     const before = Number((field as HTMLInputElement).value);
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
