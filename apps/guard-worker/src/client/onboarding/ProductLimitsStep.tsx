@@ -9,6 +9,7 @@ import { StepIntro } from "./BudgetSteps";
 type Window = keyof PolicyLimits;
 type OpenState = { cost: boolean; usage: string | null | undefined };
 type SidebarItem = { id: string; label: string };
+type SectionInfo = { items: SidebarItem[]; hasUsage: boolean };
 
 /** Header and rail offset the sticky sidebar and scroll targets clear. */
 const STICKY_TOP = 132;
@@ -29,29 +30,43 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const families = data.families;
   const chartLevels = useMemo(() => levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) })), [levels]);
   const [openByScope, setOpenByScope] = useState<Record<string, OpenState>>({});
-  const [itemsByScope, setItemsByScope] = useState<Record<string, SidebarItem[]>>({});
-  const [activeScope, setActiveScope] = useState<string | null>(families[0] ? `family:${families[0].family}` : null);
+  const [infoByScope, setInfoByScope] = useState<Record<string, SectionInfo>>({});
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  // Order: products with detected historical usage first, then products
+  // without; inside each group, quarantine-capable products lead. Products
+  // whose history has not loaded yet count as detected until known.
+  const ordered = useMemo(() => {
+    const rank = (family: OnboardingData["families"][number]) => {
+      const info = infoByScope[`family:${family.family}`];
+      const detected = info ? info.hasUsage : true;
+      return (detected ? 0 : 2) + (familyControl(family.family) ? 0 : 1);
+    };
+    return [...families].sort((left, right) => rank(left) - rank(right));
+  }, [families, infoByScope]);
+  const detected = ordered.filter(family => infoByScope[`family:${family.family}`]?.hasUsage ?? true);
+  const undetected = ordered.filter(family => !(infoByScope[`family:${family.family}`]?.hasUsage ?? true));
+  const [activeScope, setActiveScope] = useState<string | null>(null);
+  const currentActive = activeScope ?? (ordered[0] ? `family:${ordered[0].family}` : null);
 
   // Scroll spy: the last product section whose top has passed the sticky offset is active.
   useEffect(() => {
     const update = () => {
       let current: string | null = null;
-      for (const family of families) {
+      for (const family of ordered) {
         const scope = `family:${family.family}`;
         const top = sectionRefs.current[scope]?.getBoundingClientRect().top;
         if (top !== undefined && top <= STICKY_TOP + 24) current = scope;
       }
-      setActiveScope(current ?? (families[0] ? `family:${families[0].family}` : null));
+      setActiveScope(current);
     };
     update();
     window.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
     return () => { window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
-  }, [families]);
+  }, [ordered]);
 
-  const reportItems = useCallback((scope: string, items: SidebarItem[]) => {
-    setItemsByScope(current => (sameItems(current[scope], items) ? current : { ...current, [scope]: items }));
+  const reportInfo = useCallback((scope: string, info: SectionInfo) => {
+    setInfoByScope(current => (current[scope] && current[scope]!.hasUsage === info.hasUsage && sameItems(current[scope]!.items, info.items) ? current : { ...current, [scope]: info }));
   }, []);
   const openFor = (scope: string): OpenState => openByScope[scope] ?? { cost: true, usage: undefined };
   const setOpenFor = (scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next }));
@@ -69,41 +84,46 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
     </StepIntro>
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
       <nav className="sticky self-start max-lg:static" style={{ top: STICKY_TOP }} aria-label="Products">
-        <ol className="grid gap-1 text-[13px]">
-          {families.map(family => {
-            const scope = `family:${family.family}`;
-            const active = scope === activeScope;
-            const open = openFor(scope);
-            const items = itemsByScope[scope] ?? [];
-            const openItem = open.usage === undefined ? items[1]?.id : open.usage;
-            return (
-              <li key={scope}>
-                <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
-                  className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"}`}>
-                  <ProductIcon family={family.family} size="sm" />
-                  <span className="min-w-0 flex-1 truncate">{family.label}</span>
-                  {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
-                </button>
-                {active && items.length > 0 && (
-                  <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
-                    {items.map(item => {
-                      const itemActive = item.id === "cost" ? open.cost : item.id === openItem;
-                      return (
-                        <li key={item.id}>
-                          <button type="button" onClick={() => jumpTo(scope, item.id)}
-                            className={`w-full truncate rounded px-1.5 py-1 text-left text-[12.5px] ${itemActive ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>{item.label}</button>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-              </li>
-            );
-          })}
-        </ol>
+        {[{ title: "Detected historical usage", list: detected }, { title: "No usage detected", list: undetected }].filter(group => group.list.length > 0).map(group => (
+          <div key={group.title} className="mb-4">
+            <h4 className="mb-1.5 px-2 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint">{group.title}</h4>
+            <ol className="grid gap-1 text-[13px]">
+              {group.list.map(family => {
+                const scope = `family:${family.family}`;
+                const active = scope === currentActive;
+                const open = openFor(scope);
+                const items = infoByScope[scope]?.items ?? [];
+                const openItem = open.usage === undefined ? items[1]?.id : open.usage;
+                return (
+                  <li key={scope}>
+                    <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
+                      className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"}`}>
+                      <ProductIcon family={family.family} size="sm" />
+                      <span className="min-w-0 flex-1 truncate">{family.label}</span>
+                      {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
+                    </button>
+                    {active && items.length > 0 && (
+                      <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
+                        {items.map(item => {
+                          const itemActive = item.id === "cost" ? open.cost : item.id === openItem;
+                          return (
+                            <li key={item.id}>
+                              <button type="button" onClick={() => jumpTo(scope, item.id)}
+                                className={`w-full truncate rounded px-1.5 py-1 text-left text-[12.5px] ${itemActive ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>{item.label}</button>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        ))}
       </nav>
       <div className="grid min-w-0 gap-12">
-        {families.map(family => {
+        {ordered.map(family => {
           const scope = `family:${family.family}`;
           return (
             <ProductSection
@@ -118,7 +138,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
               setPolicy={setPolicy}
               open={openFor(scope)}
               onOpenChange={next => setOpenFor(scope, next)}
-              onItems={items => reportItems(scope, items)}
+              onInfo={info => reportInfo(scope, info)}
             />
           );
         })}
@@ -127,7 +147,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   </>;
 }
 
-function ProductSection({ ref, token, scope, family, label, levels, policy, setPolicy, open, onOpenChange, onItems }: {
+function ProductSection({ ref, token, scope, family, label, levels, policy, setPolicy, open, onOpenChange, onInfo }: {
   ref: (element: HTMLElement | null) => void;
   token: string;
   scope: string;
@@ -138,13 +158,14 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
   setPolicy: Dispatch<SetStateAction<Policy>>;
   open: OpenState;
   onOpenChange: (next: OpenState) => void;
-  onItems: (items: SidebarItem[]) => void;
+  onInfo: (info: SectionInfo) => void;
 }) {
   const usage = useUsageSeries(token, scope);
   useEffect(() => {
     if (!usage.data) return;
-    onItems([{ id: "cost", label: "Cost" }, ...billableMetricIds(usage.data).map(id => ({ id, label: usage.data!.metrics[id]?.label ?? id }))]);
-  }, [usage.data, onItems]);
+    const hasUsage = usage.data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
+    onInfo({ hasUsage, items: [{ id: "cost", label: "Cost" }, ...billableMetricIds(usage.data).map(id => ({ id, label: usage.data!.metrics[id]?.label ?? id }))] });
+  }, [usage.data, onInfo]);
   const daily = policy.limits?.day?.[scope];
   const control = familyControl(family);
 
@@ -153,7 +174,12 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
       <header className="mb-4 flex items-center gap-3 border-b border-line pb-3">
         <ProductIcon family={family} />
         <h3 className="text-[17px] font-[750]">{label}</h3>
-        {control && <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="shield" className="size-3.5" /> Quarantine available</span>}
+        <span className="ml-1 inline-flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="bell" className="size-3.5" /> Alerts</span>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${control ? "bg-chip text-chip-ink" : "border border-dashed border-line text-faint"}`} title={control ? "Brolly can quarantine this product." : "Quarantine is not available for this product."}>
+            <Icon name="shield" className="size-3.5" /> Quarantine
+          </span>
+        </span>
       </header>
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
       {usage.error && <p className="text-[13px] text-faint">Usage history is unavailable. {usage.error}</p>}
