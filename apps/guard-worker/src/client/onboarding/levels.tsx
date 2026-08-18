@@ -397,8 +397,8 @@ function ActionEntry({ mode, onRemove, onGrab, ghost = false }: { mode: "prepare
         <span className="min-w-0 flex-1">
           <strong className="block text-[12.5px]">{auto ? "Act automatically" : "Prepare an action for your approval"}</strong>
           <span className="block text-[11.5px] leading-[1.4]">{auto
-            ? "Brolly stops the Worker, quarantines the Durable Object, or pauses the queue that is driving the spike. Every action is reversible and audited."
-            : "Brolly finds the biggest contributor and prepares a stop, quarantine, or pause for you to approve. Nothing changes until you approve it."}</span>
+            ? "Brolly stops, quarantines, or pauses the biggest contributors itself. Every action is reversible and audited."
+            : "Brolly finds the biggest contributors and prepares a stop, quarantine, or pause. Nothing changes until you approve it."}</span>
         </span>
         <button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button>
       </div>
