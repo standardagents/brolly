@@ -78,7 +78,7 @@ describe("BudgetWizard", () => {
       "Billing-cycle limits",
       "Install shutdown fuse",
     ]);
-    expect(container.textContent).toContain("How far above your normal usage each alert level should sit.");
+    expect(container.textContent).toContain("How far above your daily historical average each alert should sit.");
     expect(container.textContent).toContain("Set cost and billable usage limits for one calendar day.");
   });
 

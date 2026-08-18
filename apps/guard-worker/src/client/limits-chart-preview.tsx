@@ -1,14 +1,20 @@
 import { useState } from "react";
 import { LimitsChartPair, levelColor, type LevelValues, type UsageLimitValues } from "./components/limits-chart";
+import { RiskToleranceStep } from "./onboarding/RiskToleranceStep";
+import type { AlertLevel, Policy } from "./types";
 
-const LEVELS = ["Warn", "Critical", "Emergency", "Shutdown"].map((label, index, all) => ({
+const LEVELS_SPEC = ["Warn", "Critical", "Emergency", "Shutdown"];
+const LEVELS = LEVELS_SPEC.map((label, index, all) => ({
   id: label.toLowerCase(),
   label,
   color: levelColor(index, all.length),
 }));
 
+const ALERT_LEVELS: AlertLevel[] = LEVELS_SPEC.map((label, index) => ({ id: label.toLowerCase(), position: index, label, entries: [] }));
+
 /** Internal visual QA surface for the editable daily and billing-cycle charts. */
 export function LimitsChartPreview() {
+  const [policy, setPolicy] = useState<Policy>({ version: "preview", accountDailySpend: {}, familyDailySpend: {}, assetDailySpend: {}, thresholds: [] });
   const [cost, setCost] = useState<LevelValues>({});
   const [usage, setUsage] = useState<UsageLimitValues>({});
   const [cycleCost, setCycleCost] = useState<LevelValues>({});
@@ -22,6 +28,9 @@ export function LimitsChartPreview() {
 
   return (
     <main className="mx-auto max-w-[1180px] p-8 text-ink">
+      <section className="mb-12 max-w-[900px] rounded-panel border border-line bg-panel p-8">
+        <RiskToleranceStep token="session" policy={policy} levels={ALERT_LEVELS} setPolicy={setPolicy} />
+      </section>
       <h2 className="mb-1 text-[22px]">Daily limits · Durable Objects (6 dimensions)</h2>
       <p className="mb-4 text-[13px] text-muted">Every dimension is a sparkline row with its level values and an on/off switch. The selected row expands into its chart.</p>
       <LimitsChartPair token="session" scope="family:durable_objects" family="durable_objects" window="day" levels={LEVELS}

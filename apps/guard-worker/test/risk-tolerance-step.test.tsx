@@ -67,11 +67,11 @@ describe("RiskToleranceStep", () => {
   it("renders one slider per level, presets, and account-spend readouts", async () => {
     await render();
     expect(document.querySelectorAll("[role='slider']")).toHaveLength(3);
-    expect(document.querySelector("[role='slider']")?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(document.querySelector("[role='slider']")?.getAttribute("aria-orientation")).toBe("horizontal");
     expect(button("Conservative")).toBeTruthy();
     expect(button("Balanced").getAttribute("aria-pressed")).toBe("true");
     expect(button("Growth")).toBeTruthy();
-    expect(document.querySelector("[aria-label='Risk tolerance estimates']")?.textContent).toContain("about $15/day");
+    expect(document.querySelector("[aria-label='Risk tolerance estimates']")?.textContent).toContain("$15 / day");
   });
 
   it("moves every level when a preset is selected", async () => {
@@ -88,9 +88,9 @@ describe("RiskToleranceStep", () => {
     await render();
     const slider = document.querySelector("[role='slider']")!;
     await act(async () => {
-      slider.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientY: 140 }));
-      slider.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientY: 120 }));
-      slider.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientY: 120 }));
+      slider.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 300 }));
+      slider.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 340 }));
+      slider.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 340 }));
     });
     expect(document.querySelector("[data-preset]")?.getAttribute("data-preset")).toBe("custom");
     expect(document.body.textContent).toContain("Custom");
