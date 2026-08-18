@@ -399,7 +399,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : (
-        {/* Four across when there are four or more levels; fewer levels share the row three-wide so each card gets a third. */}
+        // Four across when there are four or more levels; fewer levels share the row three-wide so each card gets a third.
         <div className={`mt-2.5 grid gap-2 max-sm:grid-cols-2 ${levels.length >= 4 ? "grid-cols-4" : "grid-cols-3"}`}>
           {levels.map(level => (
             <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
