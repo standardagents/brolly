@@ -44,7 +44,7 @@ export function useAlertLevels(token: string) {
 /** What is being dragged and where it would land. */
 type Drag =
   | { kind: "column"; id: string; targetIndex: number; height: number }
-  | { kind: "entry"; id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number };
+  | { kind: "entry"; id: string; action?: "prepare" | "auto"; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number };
 
 export function AlertLevelsStep({ token, targets, board }: { token: string; targets: NotificationTargetsState; board: ReturnType<typeof useAlertLevels> }) {
   const [draft, setDraft] = useState("");
@@ -138,19 +138,40 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     },
   });
 
-  const entryDrag = useDragSession<{ id: string; levelId: string }>({
+  /** Move a prepare/auto action group to another level (both entries of the group travel together). */
+  async function moveAction(mode: "prepare" | "auto", fromLevelId: string, toLevelId: string) {
+    if (fromLevelId === toLevelId) return;
+    const kinds: AlertEntryKind[] = mode === "prepare" ? ["prepare_stop", "prepare_quarantine"] : ["auto_pause", "auto_quarantine"];
+    const from = board.levels.find(level => level.id === fromLevelId);
+    const moving = from?.entries.filter(entry => kinds.includes(entry.kind)) ?? [];
+    if (!moving.length) return;
+    board.setLevels(current => current.map(level => level.id === fromLevelId
+      ? { ...level, entries: level.entries.filter(entry => !kinds.includes(entry.kind)) }
+      : level.id === toLevelId
+        ? { ...level, entries: [...level.entries.filter(entry => !kinds.includes(entry.kind)), ...moving.map(entry => ({ ...entry, levelId: toLevelId }))] }
+        : level));
+    board.setError("");
+    try {
+      for (const entry of moving) await api(`/api/alert-levels/${encodeURIComponent(fromLevelId)}/entries/${encodeURIComponent(entry.id)}`, token, { method: "DELETE" });
+      for (const kind of kinds) await api(`/api/alert-levels/${encodeURIComponent(toLevelId)}/entries`, token, { method: "POST", body: JSON.stringify({ kind }) });
+      await board.load();
+    } catch (cause) { board.setError(message(cause)); await board.load(); }
+  }
+
+  const entryDrag = useDragSession<{ id: string; levelId: string; action?: "prepare" | "auto" }>({
     onMove(session) {
       const target = entryTarget(boardRef.current, session);
       if (!target) return;
       setDrag(current => (current?.kind === "entry" && current.targetLevelId === target.levelId && current.targetIndex === target.index
         ? current
-        : { kind: "entry", id: session.data.id, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index, height: session.height }));
+        : { kind: "entry", id: session.data.id, action: session.data.action, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index, height: session.height }));
     },
     onDrop(session) {
       const target = entryTarget(boardRef.current, session);
       setDrag(null);
       if (!target) return;
-      void moveEntry(session.data.id, session.data.levelId, target.levelId, target.index);
+      if (session.data.action) void moveAction(session.data.action, session.data.levelId, target.levelId);
+      else void moveEntry(session.data.id, session.data.levelId, target.levelId, target.index);
     },
   });
 
@@ -161,7 +182,11 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     return reorder(board.levels, drag.id, drag.targetIndex);
   }, [board.levels, drag]);
   const usedTargets = useMemo(() => new Set(board.levels.flatMap(level => level.entries.filter(entry => entry.kind === "channel").map(entry => entry.targetId))), [board.levels]);
-  const draggedEntry = drag?.kind === "entry" ? board.levels.flatMap(level => level.entries).find(entry => entry.id === drag.id) ?? null : null;
+  const draggedEntry = drag?.kind === "entry" && !drag.action ? board.levels.flatMap(level => level.entries).find(entry => entry.id === drag.id) ?? null : null;
+  const usedActions = useMemo(() => ({
+    prepare: board.levels.some(level => groupedActions(level.entries).prepare.length > 0),
+    auto: board.levels.some(level => groupedActions(level.entries).auto.length > 0),
+  }), [board.levels]);
   const columns = useLeaving(visualLevels, level => level.id);
 
   return <>
@@ -187,9 +212,11 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
                     token={token}
                     targets={targets}
                     usedTargets={usedTargets}
+                    usedActions={usedActions}
                     entryDrag={drag?.kind === "entry" ? { ...drag, entry: draggedEntry } : null}
                     onGrabColumn={(event, element) => columnDrag.startDrag(event, { id: level.id }, element, scrollerRef.current)}
                     onGrabEntry={(event, entryId, element) => entryDrag.startDrag(event, { id: entryId, levelId: level.id }, element, scrollerRef.current)}
+                    onGrabAction={(event, mode, element) => entryDrag.startDrag(event, { id: `action:${mode}`, levelId: level.id, action: mode }, element, scrollerRef.current)}
                     onMove={position => void move(level, position)}
                     onAddBefore={() => addBefore(level)}
                     onAddAfter={() => setAddingAfter(level.id)}
@@ -207,11 +234,14 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
       const level = board.levels.find(item => item.id === columnDrag.session!.data.id);
       return level ? <Ghost session={columnDrag.session}>
         <div className="rounded-panel shadow-drawer" style={{ width: COLUMN_WIDTH, height: columnDrag.session.height }}>
-          <LevelColumn level={level} index={level.position} count={board.levels.length} token={token} targets={targets} usedTargets={usedTargets} entryDrag={null}
-            onGrabColumn={() => {}} onGrabEntry={() => {}} onMove={() => {}} onAddBefore={() => {}} onAddAfter={() => {}} onChanged={async () => {}} onError={() => {}} ghost />
+          <LevelColumn level={level} index={level.position} count={board.levels.length} token={token} targets={targets} usedTargets={usedTargets} usedActions={usedActions} entryDrag={null}
+            onGrabColumn={() => {}} onGrabEntry={() => {}} onGrabAction={() => {}} onMove={() => {}} onAddBefore={() => {}} onAddAfter={() => {}} onChanged={async () => {}} onError={() => {}} ghost />
         </div>
       </Ghost> : null;
     })()}
+    {entryDrag.session?.data.action && <Ghost session={entryDrag.session}>
+      <div className="shadow-drawer" style={{ width: entryDrag.session.width }}><ActionEntry mode={entryDrag.session.data.action} onRemove={() => {}} onGrab={() => {}} ghost /></div>
+    </Ghost>}
     {entryDrag.session && draggedEntry && <Ghost session={entryDrag.session}>
       <div className="shadow-drawer" style={{ width: entryDrag.session.width }}>
         <ChannelEntry entry={draggedEntry} slotIndex={-1} leaving={false} target={targets.targets.find(target => target.id === draggedEntry.targetId)} token={token} levelId={draggedEntry.levelId}
@@ -246,11 +276,13 @@ function Ghost({ session, children }: { session: DragSession<unknown>; children:
   );
 }
 
-function LevelColumn({ level, index, count, token, targets, usedTargets, entryDrag, onGrabColumn, onGrabEntry, onMove, onAddBefore, onAddAfter, onChanged, onError, ghost = false }: {
+function LevelColumn({ level, index, count, token, targets, usedTargets, usedActions, entryDrag, onGrabColumn, onGrabEntry, onGrabAction, onMove, onAddBefore, onAddAfter, onChanged, onError, ghost = false }: {
   level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; usedTargets: Set<string | null>;
-  entryDrag: { id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number; entry: AlertLevelEntry | null } | null;
+  usedActions: { prepare: boolean; auto: boolean };
+  entryDrag: { id: string; action?: "prepare" | "auto"; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number; entry: AlertLevelEntry | null } | null;
   onGrabColumn: (event: React.PointerEvent, element: HTMLElement) => void;
   onGrabEntry: (event: React.PointerEvent, entryId: string, element: HTMLElement) => void;
+  onGrabAction: (event: React.PointerEvent, mode: "prepare" | "auto", element: HTMLElement) => void;
   onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void;
   onChanged: () => Promise<void>; onError: (error: string) => void;
   /** Non-interactive copy rendered inside the drag ghost. */
@@ -288,7 +320,9 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, entryDr
   // Channel entries in visual order: the dragged one removed, a placeholder
   // slot inserted where it would land.
   const channels = level.entries.filter(entry => entry.kind === "channel" && entry.id !== entryDrag?.id);
-  const slot = entryDrag && entryDrag.targetLevelId === level.id ? Math.min(entryDrag.targetIndex, channels.length) : -1;
+  const slot = entryDrag && !entryDrag.action && entryDrag.targetLevelId === level.id ? Math.min(entryDrag.targetIndex, channels.length) : -1;
+  const actionDragHere = entryDrag?.action && entryDrag.fromLevelId === level.id ? entryDrag.action : null;
+  const actionSlotHere = entryDrag?.action && entryDrag.targetLevelId === level.id && entryDrag.fromLevelId !== level.id ? entryDrag.action : null;
   const rows: Array<{ kind: "entry"; entry: AlertLevelEntry } | { kind: "slot" }> = channels.map(entry => ({ kind: "entry" as const, entry }));
   if (slot >= 0) rows.splice(slot, 0, { kind: "slot" });
   const listed = useLeaving(rows.filter((row): row is { kind: "entry"; entry: AlertLevelEntry } => row.kind === "entry").map(row => row.entry), entry => entry.id);
@@ -317,11 +351,12 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, entryDr
               onError={onError}
             />
           ))}
-        {actionEntries.prepare.length > 0 && <ActionEntry mode="prepare" onRemove={() => void removeEntries(actionEntries.prepare)} />}
-        {actionEntries.auto.length > 0 && <ActionEntry mode="auto" onRemove={() => void removeEntries(actionEntries.auto)} />}
+        {actionEntries.prepare.length > 0 && actionDragHere !== "prepare" && <ActionEntry mode="prepare" onRemove={() => void removeEntries(actionEntries.prepare)} onGrab={(event, element) => onGrabAction(event, "prepare", element)} />}
+        {actionEntries.auto.length > 0 && actionDragHere !== "auto" && <ActionEntry mode="auto" onRemove={() => void removeEntries(actionEntries.auto)} onGrab={(event, element) => onGrabAction(event, "auto", element)} />}
+        {actionSlotHere && <div data-flip-key={`slot:action:${actionSlotHere}`} className="rounded-field border-2 border-dashed border-orange/60 bg-orange-soft/30" style={{ height: entryDrag?.height ?? 74 }} aria-hidden="true" />}
         {newChannel ? (
           <div className="rounded-field border border-line-soft p-2.5"><ChannelCredentialsForm channel={newChannel} token={token} onCancel={() => setNewChannel(null)} onSaved={async targetId => { await targets.load(); await addEntry("channel", targetId); setNewChannel(null); }} /></div>
-        ) : <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} usedTargets={usedTargets} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />}
+        ) : <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} usedTargets={usedTargets} usedActions={usedActions} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />}
       </div>
     </section>
   );
@@ -351,18 +386,29 @@ function ChannelEntry({ entry, slotIndex, leaving, target, token, levelId, onGra
   );
 }
 
-function ActionEntry({ mode, onRemove }: { mode: "prepare" | "auto"; onRemove: () => void }) {
+function ActionEntry({ mode, onRemove, onGrab, ghost = false }: { mode: "prepare" | "auto"; onRemove: () => void; onGrab: (event: React.PointerEvent, element: HTMLElement) => void; ghost?: boolean }) {
   const auto = mode === "auto";
-  return <article className={`board-in rounded-field border p-2.5 ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}><div className="flex items-start gap-2"><Icon name="alert" className="mt-px size-4" /><span className="min-w-0 flex-1"><strong className="block text-[12.5px]">{auto ? "Auto quarantine / pause" : "Prepare quarantine / pause"}</strong><span className="block text-[11.5px] leading-[1.4]">Workers, Durable Objects, and Queues. Recovery is manual.</span></span><button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button></div></article>;
+  const ref = useRef<HTMLElement>(null);
+  return (
+    <article ref={ref} data-flip-key={ghost ? undefined : `action:${mode}`} className={`rounded-field border p-2.5 ${ghost ? "pointer-events-none" : "board-in"} ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}>
+      <div className="flex items-start gap-2">
+        <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 opacity-70 hover:opacity-100 active:cursor-grabbing" aria-label={`Drag ${auto ? "auto" : "prepare"} action to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
+        <Icon name="alert" className="mt-px size-4" />
+        <span className="min-w-0 flex-1"><strong className="block text-[12.5px]">{auto ? "Auto quarantine / pause" : "Prepare quarantine / pause"}</strong><span className="block text-[11.5px] leading-[1.4]">Workers, Durable Objects, and Queues. Recovery is manual.</span></span>
+        <button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button>
+      </div>
+    </article>
+  );
 }
 
-function LevelAddMenu({ open, setOpen, level, targets, usedTargets, onChannel, onNewChannel, onAction }: { open: boolean; setOpen: (open: boolean) => void; level: AlertLevel; targets: NotificationTargetsState; usedTargets: Set<string | null>; onChannel: (targetId: string) => void; onNewChannel: (channel: NotificationChannel) => void; onAction: (mode: "prepare" | "auto") => void }) {
+function LevelAddMenu({ open, setOpen, level, targets, usedTargets, usedActions, onChannel, onNewChannel, onAction }: { open: boolean; setOpen: (open: boolean) => void; level: AlertLevel; targets: NotificationTargetsState; usedTargets: Set<string | null>; usedActions: { prepare: boolean; auto: boolean }; onChannel: (targetId: string) => void; onNewChannel: (channel: NotificationChannel) => void; onAction: (mode: "prepare" | "auto") => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useOutsideClose([ref, panel], open, () => setOpen(false));
   // A channel can sit in one level only; it applies to every level to the right.
   const available = targets.targets.filter(target => !usedTargets.has(target.id));
-  const grouped = groupedActions(level.entries);
+  // Actions, like channels, sit in one level and apply to every level to the right.
+  const grouped = { prepare: usedActions.prepare ? [level] : [], auto: usedActions.auto ? [level] : [] };
   return <div ref={ref} className="relative"><button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button><Popover anchor={ref} open={open} side="top" align="stretch"><div ref={panel} role="menu" className="grid gap-1 rounded-panel border border-line bg-panel p-1.5 shadow-panel">{available.map(target => <button key={target.id} type="button" role="menuitem" className="flex items-center gap-2 rounded-field px-2 py-1.5 text-left text-[12px] hover:bg-panel-soft" onClick={() => { setOpen(false); onChannel(target.id); }}><ChannelLogo kind={target.kind} />{targetName(target)}</button>)}{available.length === 0 && targets.targets.length > 0 && <p className="px-2 py-1.5 text-[11.5px] text-faint">Every channel is placed. Drag one here to move it.</p>}<AddChannelRow label="Add new channel" onPick={channel => { setOpen(false); onNewChannel(channel); }} />{grouped.prepare.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-warn hover:bg-warn-bg" onClick={() => { setOpen(false); onAction("prepare"); }}>Prepare quarantine / pause</button>}{grouped.auto.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-danger hover:bg-danger-bg" onClick={() => { setOpen(false); onAction("auto"); }}>Auto quarantine / pause</button>}</div></Popover></div>;
 }
 
