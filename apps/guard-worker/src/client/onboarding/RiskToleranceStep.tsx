@@ -161,7 +161,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const rowLeft = (width - rowWidth) / 2;
   const cardLeft = (index: number) => rowLeft + index * (cardWidth + gap);
   const trackY = TRACK.top;
-  const cardTop = trackY + TRACK.height + 30;
+  const cardTop = trackY + TRACK.height + 44;
   const height = cardTop + TRACK.cards;
 
   return (
@@ -206,7 +206,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
               <title>{`${level.label} · ${formatPercent(percent)}`}</title>
               <circle cx={x} cy={y} r="14" fill="transparent" />
               <polygon points={`${x},${y - 9} ${x + 9},${y} ${x},${y + 9} ${x - 9},${y}`} fill={level.color} stroke="var(--panel)" strokeWidth="2" />
-              <polyline points={`${x},${y + 11} ${x},${y + 19} ${cardLeft(index) + cardWidth / 2},${cardTop - 8} ${cardLeft(index) + cardWidth / 2},${cardTop}`} fill="none" stroke={level.color} strokeWidth="1.25" opacity=".6" />
+              <path d={connector(x, y + 11, cardLeft(index) + cardWidth / 2, cardTop)} fill="none" stroke={level.color} strokeWidth="1.25" opacity=".6" />
             </g>
           );
         })}
@@ -232,6 +232,12 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
       })}
     </div>
   );
+}
+
+/** S-curve from a diamond to the top center of its card. Diamonds and cards share an order, so curves never cross. */
+function connector(x1: number, y1: number, x2: number, y2: number): string {
+  const midY = (y1 + y2) / 2;
+  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
 }
 
 function PercentField({ label, value, onCommit }: { label: string; value: number; onCommit: (next: number) => void }) {
