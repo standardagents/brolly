@@ -15,12 +15,12 @@ export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
   setPolicy: Dispatch<SetStateAction<Policy>>;
 }) {
   const scopes = useMemo<ScopeOption[]>(() => [
-    { key: "account", label: "Whole account", kind: "account" },
     ...data.families.map(item => ({ key: `family:${item.family}`, label: item.label, family: item.family, kind: "family" as const, legacyKey: item.family })),
     ...data.scopedAssets.map(item => ({ key: `asset:${item.key}`, label: item.name, family: item.family, kind: "asset" as const, legacyKey: item.key })),
   ], [data.families, data.scopedAssets]);
-  const [selectedKey, setSelectedKey] = useState("account");
-  const selected = scopes.find(scope => scope.key === selectedKey) ?? scopes[0]!;
+  const [selectedKey, setSelectedKey] = useState(scopes[0]?.key ?? "");
+  const selected = scopes.find(scope => scope.key === selectedKey) ?? scopes[0];
+  if (!selected) return <StepIntro title={window === "day" ? "Daily limits" : "Billing-cycle limits"}>No products with usage were found for this account yet.</StepIntro>;
   const current = policy.limits?.[window]?.[selected.key] ?? emptyScope();
   const daily = policy.limits?.day?.[selected.key];
   const chartLevels = levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) }));
@@ -39,7 +39,6 @@ export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
         value={selected.key}
         onChange={event => setSelectedKey(event.target.value)}
       >
-        <optgroup label="Account"><option value="account">Whole account</option></optgroup>
         <optgroup label="Products">{scopes.filter(scope => scope.kind === "family").map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</optgroup>
         {scopes.some(scope => scope.kind === "asset") && <optgroup label="Resources">{scopes.filter(scope => scope.kind === "asset").map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</optgroup>}
       </select>
@@ -67,6 +66,51 @@ export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
       usageLevelEnabled={current.usageLevelEnabled}
       onUsageLevelEnabledChange={usageLevelEnabled => update(scope => ({ ...scope, usageLevelEnabled }))}
     />
+  </>;
+}
+
+const ACCOUNT_SCOPE: ScopeOption = { key: "account", label: "Whole account", kind: "account" };
+
+/**
+ * Whole-account step: cost only (usage units do not sum across products),
+ * with the daily and billing-cycle charts side by side.
+ */
+export function AccountLimitStep({ token, policy, levels, setPolicy }: {
+  token: string;
+  policy: Policy;
+  levels: AlertLevel[];
+  setPolicy: Dispatch<SetStateAction<Policy>>;
+}) {
+  const chartLevels = levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) }));
+  const dayScope = policy.limits?.day?.account ?? emptyScope();
+  const cycleScope = policy.limits?.cycle?.account ?? emptyScope();
+  const update = (window: Window, change: (scope: ScopeLimits) => ScopeLimits) => setPolicy(previous => updateScope(previous, window, ACCOUNT_SCOPE, change));
+  const pair = (window: Window, current: ScopeLimits) => (
+    <LimitsChartPair
+      key={`${window}:account`}
+      token={token}
+      scope="account"
+      window={window}
+      levels={chartLevels}
+      costOnly
+      cost={current.cost}
+      onCostChange={cost => update(window, scope => ({ ...scope, cost }))}
+      usage={{}}
+      onUsageChange={() => {}}
+      costFloor={window === "cycle" ? dayScope.cost : undefined}
+      tolerance={policy.riskTolerance?.percentOfTypical}
+      costEnabled={current.costEnabled ?? true}
+      onCostEnabledChange={costEnabled => update(window, scope => ({ ...scope, costEnabled }))}
+      costLevelEnabled={current.costLevelEnabled}
+      onCostLevelEnabledChange={costLevelEnabled => update(window, scope => ({ ...scope, costLevelEnabled }))}
+    />
+  );
+  return <>
+    <StepIntro title="Account limits">One dollar limit for the whole Cloudflare account per day and per billing cycle, across every product. Product limits on the next steps sit under these.</StepIntro>
+    <div className="grid grid-cols-2 gap-6 max-lg:grid-cols-1">
+      {pair("day", dayScope)}
+      {pair("cycle", cycleScope)}
+    </div>
   </>;
 }
 

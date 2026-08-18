@@ -68,12 +68,13 @@ describe("BudgetWizard", () => {
       root!.render(<BudgetWizard data={data} token="test" editing onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
-    await waitFor(() => expect(container.querySelectorAll("aside ol li")).toHaveLength(7));
+    await waitFor(() => expect(container.querySelectorAll("aside ol li")).toHaveLength(8));
     expect([...container.querySelectorAll("aside ol li")].map(item => item.textContent?.replace(/^[✓\d]+/, "").trim())).toEqual([
       "Connect Cloudflare",
       "Alert channels",
       "Alert levels",
       "Risk tolerance",
+      "Account limits",
       "Daily limits",
       "Billing-cycle limits",
       "Install shutdown fuse",

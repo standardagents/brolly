@@ -9,7 +9,7 @@ import {
 import { AlertsStep } from "./alerts";
 import { AlertLevelsStep, useAlertLevels } from "./levels";
 import { RiskToleranceStep } from "./RiskToleranceStep";
-import { LimitStep } from "./LimitSteps";
+import { AccountLimitStep, LimitStep } from "./LimitSteps";
 import { GrantBillingAccessButton } from "./access";
 import { ImportProgress } from "./ingest";
 import { useNotificationTargets } from "../components/notifications";
@@ -28,8 +28,9 @@ const STEPS = [
   { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
   { key: "levels", label: "Alert levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
   { key: "tolerance", label: "Risk tolerance", preview: "How far above typical usage each alert level starts." },
-  { key: "daily", label: "Daily limits", preview: "Cost and billable usage limits for each calendar day." },
-  { key: "cycle", label: "Billing-cycle limits", preview: "Cost and billable usage limits for each billing cycle." },
+  { key: "account", label: "Account limits", preview: "One cost limit for the whole account, per day and per billing cycle." },
+  { key: "daily", label: "Daily limits", preview: "Cost and billable usage limits for each product and resource, per calendar day." },
+  { key: "cycle", label: "Billing-cycle limits", preview: "Cost and billable usage limits for each product and resource, per billing cycle." },
   { key: "runtime", label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
 ] as const;
 type StepKey = typeof STEPS[number]["key"];
@@ -94,6 +95,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
     <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <LimitStep window="day" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <LimitStep window="cycle" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,

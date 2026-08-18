@@ -29,6 +29,8 @@ export interface LimitsChartPairProps {
   /** levelId → percent of typical usage. */
   tolerance?: LevelValues;
   readOnly?: boolean;
+  /** Cost column only (the whole-account scope: usage units do not sum across products). */
+  costOnly?: boolean;
   /** metricId → monitored. Missing ids are monitored. Omit both to hide the switches. */
   usageEnabled?: Record<string, boolean>;
   onUsageEnabledChange?(next: Record<string, boolean>): void;
@@ -47,7 +49,7 @@ export interface LimitsChartPairProps {
  * the selected row expands into its chart, and each usage dimension has its
  * own limit map and an on/off switch. Below `md` the pair stacks.
  */
-export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: LimitsChartPairProps) {
+export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, costOnly = false }: LimitsChartPairProps) {
   const { data, loading, error } = useUsageSeries(token, scope);
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   // `undefined` = nothing chosen yet (first row opens); `null` = user collapsed everything.
@@ -144,6 +146,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
             onCostChange(pushed);
           }} />
       </section>
+      {!costOnly && (
       <section className="min-w-0">
         <ColumnHead family={family}>{window === "day" ? "Usage per day" : "Usage per billing cycle"}</ColumnHead>
         {metricIds.length ? (
@@ -162,6 +165,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
           <div className="grid h-[250px] place-content-center text-[13px] text-faint">No billable usage recorded for this scope yet.</div>
         )}
       </section>
+      )}
     </div>
   );
 }
