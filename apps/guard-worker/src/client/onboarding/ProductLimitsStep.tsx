@@ -84,7 +84,8 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const reportInfo = useCallback((scope: string, info: SectionInfo) => {
     setInfoByScope(current => (current[scope] && current[scope]!.hasUsage === info.hasUsage && sameItems(current[scope]!.items, info.items) ? current : { ...current, [scope]: info }));
   }, []);
-  const openFor = (scope: string): OpenState => openByScope[scope] ?? { cost: true, usage: undefined };
+  // Product sections start collapsed; the sidebar or a row click opens one.
+  const openFor = (scope: string): OpenState => openByScope[scope] ?? { cost: false, usage: null };
   const setOpenFor = (scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next }));
   const jumpTo = (scope: string, item?: string) => {
     if (item) setOpenFor(scope, item === "cost" ? { ...openFor(scope), cost: true } : { ...openFor(scope), usage: item });
