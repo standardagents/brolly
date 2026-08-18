@@ -13,7 +13,7 @@ export const TOLERANCE_AXIS_MAX = 1_000;
 export const RISK_PRESETS: Record<Exclude<RiskTolerancePreset, "custom">, readonly number[]> = {
   conservative: [75, 150, 200],
   balanced: [90, 200, 300],
-  growth: [120, 300, 1_000],
+  growth: [100, 300, 1_000],
 };
 
 /** Preset curve sampled for `order.length` levels, snapped and pushed with the chart's gap rule. */
