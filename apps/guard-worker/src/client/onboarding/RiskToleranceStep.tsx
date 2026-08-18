@@ -33,6 +33,19 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
   const usage = useUsageSeries(token, "account");
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const tolerance = normalizeRiskTolerance(policy.riskTolerance, order);
+  // First render: a policy without tolerance starts on Balanced with the
+  // Balanced values written into the policy, and a saved named preset whose
+  // values no longer match its curve (older defaults) snaps back to it.
+  useEffect(() => {
+    if (!order.length) return;
+    const saved = policy.riskTolerance;
+    const preset = saved?.preset && saved.preset !== "custom" ? saved.preset : saved ? null : "balanced";
+    if (!preset) return;
+    const expected = tolerancePresetValues(preset, order);
+    if (saved && order.every(id => saved.percentOfTypical?.[id] === expected[id])) return;
+    commit(preset, expected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the policy or level set changes
+  }, [policy.riskTolerance, order]);
   const series = usage.data ? costSeries(usage.data) : [];
   const typical = usage.data ? typicalDay(series, usage.data.today, tolerance.baseline.windowDays) : 0;
   const cycleDays = useMemo(() => {

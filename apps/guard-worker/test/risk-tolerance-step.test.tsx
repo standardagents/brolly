@@ -21,7 +21,7 @@ const INITIAL_POLICY: Policy = {
   thresholds: [],
   riskTolerance: {
     preset: "balanced",
-    percentOfTypical: { warn: 125, critical: 320, emergency: 800 },
+    percentOfTypical: { warn: 90, critical: 200, emergency: 300 },
     baseline: { computedAt: 1, windowDays: 90 },
   },
 };
@@ -71,7 +71,7 @@ describe("RiskToleranceStep", () => {
     expect(button("Conservative")).toBeTruthy();
     expect(button("Balanced").getAttribute("aria-pressed")).toBe("true");
     expect(button("Growth")).toBeTruthy();
-    expect(document.body.textContent).toContain("$13");
+    expect(document.body.textContent).toContain("$9.00");
   });
 
   it("moves every level when a preset is selected", async () => {
@@ -100,7 +100,7 @@ describe("RiskToleranceStep", () => {
     await render();
     const slider = document.querySelector("[role='slider']")!;
     await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true })));
-    expect(Number(slider.getAttribute("aria-valuenow"))).toBeGreaterThan(125);
+    expect(Number(slider.getAttribute("aria-valuenow"))).toBeGreaterThan(90);
     const field = document.querySelector("input[aria-label='Warn percent of typical']")!;
     const before = Number((field as HTMLInputElement).value);
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
