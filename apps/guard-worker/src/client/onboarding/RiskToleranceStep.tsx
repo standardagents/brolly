@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction } from "react";
 import { costSeries, useUsageSeries } from "../components/limits-chart/api";
 import { cycleIndexFor, daysBetween } from "../components/limits-chart/cycles";
 import { levelColor } from "../components/limits-chart/LimitsChart";
@@ -74,7 +74,7 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
     {usage.error && <p className="mb-4 text-[12.5px] text-muted">Account history is unavailable. Percentages can still be configured.</p>}
     <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
     {typical > 0
-      ? <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Amounts are at your current account spend: {money(typical)} on a typical day.</p>
+      ? <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Amounts are computed from your current {tolerance.baseline.windowDays}-day average account spend: {money(typical)} per day.</p>
       : <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Account history has no nonzero daily spend yet, so there are no amounts to show.</p>}
   </>;
 }
@@ -83,7 +83,20 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
 const LINEAR_SHARE = 0.16;
 const TRACK = { top: 44, height: 6, cards: 96 } as const;
 const CARD_WIDTH = 168;
-const AXIS_TICKS = [0, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000];
+/** Axis ticks: 0, 50, then 1/2/5 × 10^n from 100% to the current maximum. */
+function axisTicks(max: number): number[] {
+  const ticks = [0, 50];
+  for (let decade = 100; decade <= max; decade *= 10) for (const mantissa of [1, 2, 5]) if (mantissa * decade <= max) ticks.push(mantissa * decade);
+  if (ticks.at(-1) !== max) ticks.push(max);
+  return ticks;
+}
+
+/** Smallest decade multiple of `base` that keeps `highest` under 92% of the track. */
+export function fitAxisMax(base: number, highest: number): number {
+  let max = Math.max(TOLERANCE_AXIS_MAX, base);
+  while (trackPosition(highest, max) > 0.92 && max < MAX_TOLERANCE_PERCENT * 10) max *= 10;
+  return max;
+}
 
 export function trackPosition(percent: number, max = TOLERANCE_AXIS_MAX): number {
   if (percent <= 0) return 0;
@@ -116,7 +129,18 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  const max = Math.max(TOLERANCE_AXIS_MAX, ...Object.values(value));
+  // The visible maximum grows when a diamond nears the right edge and
+  // relaxes when everything sits well below it, so nothing is capped.
+  const highest = Math.max(MIN_TOLERANCE_PERCENT, ...Object.values(value));
+  const [axisMax, setAxisMax] = useState(() => fitAxisMax(TOLERANCE_AXIS_MAX, highest));
+  const max = axisMax;
+  useEffect(() => {
+    setAxisMax(current => {
+      if (trackPosition(highest, current) > 0.92) return fitAxisMax(current * 10, highest);
+      if (current > TOLERANCE_AXIS_MAX && trackPosition(highest, current / 10) < 0.8) return fitAxisMax(TOLERANCE_AXIS_MAX, highest);
+      return current;
+    });
+  }, [highest]);
   const pad = 14;
   const trackWidth = Math.max(120, width - pad * 2);
   const xFor = (percent: number) => pad + trackPosition(percent, max) * trackWidth;
@@ -168,19 +192,19 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
     <div ref={containerRef} className="relative min-w-0 select-none" style={{ height }}>
       <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="absolute inset-0 block h-full w-full touch-none overflow-visible" role="group" aria-label="Percent of daily historical average by alert level">
         {/* Axis labels */}
-        {AXIS_TICKS.filter(tick => tick <= max).map(tick => (
-          <text key={tick} x={xFor(tick)} y={trackY - 8} textAnchor={tick === 0 ? "start" : tick >= max ? "end" : "middle"} className={`text-[10.5px] tabular-nums ${tick === 100 ? "fill-ink font-bold" : "fill-faint"}`}>{formatPercent(tick)}</text>
+        {axisTicks(max).map(tick => (
+          <text key={tick} x={xFor(tick)} y={trackY - 8} style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }} textAnchor={tick === 0 ? "start" : tick >= max ? "end" : "middle"} className={`text-[10.5px] tabular-nums ${tick === 100 ? "fill-ink font-bold" : "fill-faint"}`}>{formatPercent(tick)}</text>
         ))}
-        <text x={xFor(100)} y={trackY - 24} textAnchor="middle" className="fill-muted text-[10.5px] font-bold">Daily historical average</text>
+        <text x={xFor(100)} y={trackY - 24} textAnchor="middle" className="fill-muted text-[10.5px] font-bold" style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }}>Daily historical average</text>
         {/* Track: neutral base, tinted segment per level from its diamond to the next */}
         <rect x={pad} y={trackY} width={trackWidth} height={TRACK.height} rx={TRACK.height / 2} className="fill-line-soft" />
         {levels.map((level, index) => {
           const start = positions[index]!;
           const end = index + 1 < positions.length ? positions[index + 1]! : pad + trackWidth;
-          return <rect key={level.id} x={start} y={trackY} width={Math.max(0, end - start)} height={TRACK.height} fill={level.color} opacity=".85" />;
+          return <rect key={level.id} x={start} y={trackY} width={Math.max(0, end - start)} height={TRACK.height} fill={level.color} opacity=".85" style={{ transition: dragging ? "none" : "x 240ms cubic-bezier(.2,.7,.2,1), width 240ms cubic-bezier(.2,.7,.2,1)" }} />;
         })}
         {/* Heavy tick at the average */}
-        <rect x={xFor(100) - 1} y={trackY - 6} width="2" height={TRACK.height + 12} className="fill-ink" />
+        <rect x={xFor(100) - 1} y={trackY - 6} width="2" height={TRACK.height + 12} className="fill-ink" style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }} />
         {/* Diamonds */}
         {levels.map((level, index) => {
           const percent = value[level.id] ?? MIN_TOLERANCE_PERCENT;
@@ -204,9 +228,12 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
               onKeyDown={keyDown(level.id)}
             >
               <title>{`${level.label} · ${formatPercent(percent)}`}</title>
-              <circle cx={x} cy={y} r="14" fill="transparent" />
-              <polygon points={`${x},${y - 9} ${x + 9},${y} ${x},${y + 9} ${x - 9},${y}`} fill={level.color} stroke="var(--panel)" strokeWidth="2" />
-              <path d={connector(x, y + 11, cardLeft(index) + cardWidth / 2, cardTop)} fill="none" stroke={level.color} strokeWidth="1.25" opacity=".6" />
+              <path d={connector(x, y + 11, cardLeft(index) + cardWidth / 2, cardTop)} fill="none" stroke={level.color} strokeWidth="1.25" opacity=".6"
+                style={{ d: `path("${connector(x, y + 11, cardLeft(index) + cardWidth / 2, cardTop)}")`, transition: dragging === level.id ? "none" : "d 240ms cubic-bezier(.2,.7,.2,1)" } as React.CSSProperties} />
+              <g style={{ transform: `translate(${x}px, ${y}px)`, transition: dragging === level.id ? "none" : "transform 240ms cubic-bezier(.2,.7,.2,1)" }}>
+                <circle r="14" fill="transparent" />
+                <polygon points="0,-9 9,0 0,9 -9,0" fill={level.color} stroke="var(--panel)" strokeWidth="2" />
+              </g>
             </g>
           );
         })}
