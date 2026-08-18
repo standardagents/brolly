@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chooseAxis, niceCeil, niceFloor, niceLadder, snapToNice, snapUpToNice } from "../src/client/components/limits-chart/scale";
-import { GAP_FRACTION, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
+import { GAP_FRACTION, GAP_RATIO, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
 import { cycleCumulative, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "../src/client/components/limits-chart/cycles";
 
 const ORDER = ["warn", "critical", "emergency"];
@@ -88,17 +88,22 @@ describe("level pushing", () => {
     expect(next.warn).toBeGreaterThanOrEqual(0);
   });
 
-  it("pushes the changed line back up when the lines below cannot fit under it", () => {
+  it("pushes lower lines down by ratio when a high line is dragged near the baseline, never to zero", () => {
     const next = pushLevels(axis, ORDER, { warn: 10, critical: 20, emergency: 50 }, "emergency", 3);
-    expect(next.warn).toBe(0);
-    expect(next.critical).toBeGreaterThan(next.warn);
-    expect(next.emergency).toBeGreaterThan(next.critical);
+    expect(next.emergency).toBe(3);
+    expect(next.critical).toBeLessThan(3);
+    expect(next.warn).toBeLessThan(next.critical);
+    expect(next.warn).toBeGreaterThan(0);
   });
 
-  it("keeps a minimum gap of a fraction of the axis between neighbors", () => {
+  it("keeps a minimum gap between neighbors: the axis fraction, capped at a ratio of the lower value", () => {
     const next = pushLevels(axis, ORDER, { warn: 10, critical: 20, emergency: 50 }, "critical", 10);
-    expect(axis.position(next.critical) - axis.position(next.warn)).toBeGreaterThanOrEqual(GAP_FRACTION - 1e-9);
-    expect(axis.position(next.emergency) - axis.position(next.critical)).toBeGreaterThanOrEqual(GAP_FRACTION - 1e-9);
+    for (const [low, high] of [["warn", "critical"], ["critical", "emergency"]] as const) {
+      const byAxis = axis.position(next[high]!) - axis.position(next[low]!) >= GAP_FRACTION - 1e-9;
+      const byRatio = next[high]! >= next[low]! * (1 + GAP_RATIO) - 1e-9;
+      expect(byAxis || byRatio).toBe(true);
+      expect(next[high]!).toBeGreaterThan(next[low]!);
+    }
   });
 
   it("respects floors by pushing the changed line back up instead of breaking them", () => {

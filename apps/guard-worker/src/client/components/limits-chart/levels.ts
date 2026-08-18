@@ -2,12 +2,15 @@
  * Threshold-line ordering for the limits chart. Pure functions, no DOM.
  *
  * Levels are ordered lowest severity first. Adjacent lines keep a minimum
- * gap of GAP_FRACTION of the axis height; a dragged line pushes its
- * neighbors so order and gap always hold.
+ * gap: GAP_FRACTION of the axis height, capped at GAP_RATIO of the lower
+ * value so a tall axis cannot force neighbors far apart. A dragged line
+ * pushes its neighbors so order and gap always hold.
  */
 import { type Axis, niceLadder, snapDownToNice, snapUpToNice } from "./scale";
 
 export const GAP_FRACTION = 0.05;
+/** Upper bound on the gap as a ratio of the lower value, so a tall axis never forces neighbors far apart in value. */
+export const GAP_RATIO = 0.1;
 
 export type LevelValues = Record<string, number>;
 
@@ -17,15 +20,18 @@ export type LevelValues = Record<string, number>;
  */
 export function minGapAbove(axis: Axis, value: number, fraction = GAP_FRACTION): number {
   const raw = axis.invert(Math.min(1, axis.position(value) + fraction));
-  const next = raw <= value ? value + axis.invert(fraction) : raw;
-  return Math.max(snapUpToNice(next), snapUpToNice(value + 1e-9));
+  const byAxis = raw <= value ? value + axis.invert(fraction) : raw;
+  const byRatio = value > 0 ? value * (1 + GAP_RATIO) : byAxis;
+  return Math.max(snapUpToNice(Math.min(byAxis, byRatio)), snapUpToNice(value + 1e-9));
 }
 
 /** Largest value below `value` that satisfies the gap; never below 0. */
 export function maxGapBelow(axis: Axis, value: number, fraction = GAP_FRACTION): number {
   const position = axis.position(value) - fraction;
-  if (position <= 0) return 0;
-  return Math.max(0, snapDownToNice(axis.invert(position)));
+  const byAxis = position <= 0 ? 0 : axis.invert(position);
+  const byRatio = value / (1 + GAP_RATIO);
+  const below = Math.max(byAxis, byRatio);
+  return Math.max(0, Math.min(snapDownToNice(below), snapDownToNice(value - 1e-9)));
 }
 
 /**

@@ -1,9 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { number as formatNumber } from "../../format";
 import type { UsageSeriesResponse } from "./api";
-import { cycleIndexFor, type DayPoint } from "./cycles";
-import type { LevelValues } from "./levels";
-import { formatLimitValue, type LimitsChartLevel } from "./LimitsChart";
+import { type CycleBounds, cycleIndexFor, type DayPoint } from "./cycles";
+import { deriveSeries } from "./defaults";
+import { type LevelValues, crossedLevel } from "./levels";
+import { chooseAxis } from "./scale";
+import { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel, type LimitsChartLevel } from "./LimitsChart";
 
 /**
  * Dimension rows for the limits chart pair: every billable dimension as a
@@ -53,9 +55,9 @@ export function summarizeCost(data: UsageSeriesResponse): DimensionSummary {
  * selected row expands and `renderChart` draws the full chart under it; the
  * open/close transition animates through a `grid-template-rows` tween.
  */
-const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_72px_84px_180px_36px] items-center gap-3";
+const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_72px_80px_212px_36px] items-center gap-3";
 
-export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled }: {
+export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled, onValueChange, window = "day", cycles, today }: {
   dimensions: DimensionSummary[];
   levels: LimitsChartLevel[];
   values: Record<string, LevelValues>;
@@ -70,6 +72,12 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
   onToggle?(id: string, next: boolean): void;
   /** id → levelId → active. Inactive levels render as dimmed chips. */
   levelEnabled?: Record<string, Record<string, boolean>>;
+  /** Click-to-edit for the level chips. Omit to render them read-only. */
+  onValueChange?(id: string, levelId: string, next: number): void;
+  /** Mini chart mode: daily bars, or the running total per billing cycle. */
+  window?: "day" | "cycle";
+  cycles?: CycleBounds[];
+  today?: string;
 }) {
   return (
     <ul className="grid gap-1.5" aria-label={label}>
@@ -83,21 +91,22 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
               <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${dimension.label}`} disabled={!on} onClick={() => onSelect(dimension.id)} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
               <span className="pointer-events-none relative min-w-0">
                 <strong className="block truncate text-[12.5px]">{dimension.label}</strong>
-                <small className="block text-[10.5px] text-faint">{dimension.unit}</small>
+                <small className="block text-[10.5px] text-faint">{unitLabel(dimension.unit)}</small>
               </span>
-              <Sparkline series={dimension.series} className={`pointer-events-none relative h-6 w-[72px] transition-opacity duration-200 ${open ? "opacity-0" : "opacity-100"}`} style={{ color: accent }} />
+              <MiniChart series={dimension.series} cycles={cycles} today={today} window={window} accent={accent}
+                levels={levels.filter(level => levelEnabled?.[dimension.id]?.[level.id] ?? true)} values={values[dimension.id] ?? {}}
+                className="pointer-events-none relative h-6 w-[72px]" />
               <span className="pointer-events-none relative text-right text-[12.5px] font-[740] tabular-nums">
                 {dimension.unit === "USD" ? formatLimitValue(dimension.cycleToDate, "USD") : formatNumber(dimension.cycleToDate)}
                 <small className="block text-[10px] font-medium text-faint">this cycle</small>
               </span>
-              <span className="pointer-events-none relative flex items-center justify-end gap-2">
+              <span className="relative flex items-center justify-end gap-2">
                 {levels.map(level => {
                   const levelOn = levelEnabled?.[dimension.id]?.[level.id] ?? true;
+                  const value = values[dimension.id]?.[level.id];
                   return (
-                    <span key={level.id} className={`inline-flex items-center gap-1 text-[10.5px] tabular-nums text-muted ${levelOn ? "" : "opacity-40 line-through"}`} title={`${level.label} limit${levelOn ? "" : " (off)"}`}>
-                      <i className="size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" />
-                      {shortValue(values[dimension.id]?.[level.id])}
-                    </span>
+                    <LevelChip key={level.id} level={level} value={value} on={levelOn} unit={dimension.unit}
+                      onCommit={onValueChange && on && levelOn && value !== undefined ? next => onValueChange(dimension.id, level.id, next) : undefined} />
                   );
                 })}
               </span>
@@ -105,17 +114,36 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
                 {onToggle ? <MonitorSwitch label={dimension.label} on={on} onChange={next => onToggle(dimension.id, next)} /> : null}
               </span>
             </div>
-            {renderChart && (
-              <div className="grid transition-[grid-template-rows] duration-300 ease-out" style={{ gridTemplateRows: open ? "1fr" : "0fr" }} aria-hidden={!open}>
-                <div className="min-h-0 overflow-hidden">
-                  <div className={`px-3 pb-3 pt-1 transition-opacity duration-300 ${open ? "opacity-100" : "opacity-0"}`}>{open && renderChart(dimension.id)}</div>
-                </div>
-              </div>
-            )}
+            {renderChart && <Expander open={open}>{renderChart(dimension.id)}</Expander>}
           </li>
         );
       })}
     </ul>
+  );
+}
+
+const EXPAND_MS = 260;
+
+/**
+ * Height + opacity transition on one clock. The chart stays mounted while it
+ * collapses, so open and close both animate over the same duration and the
+ * closing row never snaps.
+ */
+function Expander({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) { setMounted(true); return; }
+    const timer = setTimeout(() => setMounted(false), EXPAND_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  return (
+    <div className="grid" style={{ gridTemplateRows: open ? "1fr" : "0fr", transition: `grid-template-rows ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }} aria-hidden={!open}>
+      <div className="min-h-0 overflow-hidden">
+        <div className="px-3 pb-3 pt-1" style={{ opacity: open ? 1 : 0, transition: `opacity ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }}>
+          {mounted && children}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -129,22 +157,73 @@ function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; on
   );
 }
 
-function shortValue(value: number | undefined): string {
-  if (value === undefined) return "–";
-  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+/** One level value in a row: click to edit in place, Enter/blur commits, Escape cancels. */
+function LevelChip({ level, value, on, unit, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onCommit?(next: number): void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = value === undefined ? "–" : compactValue(value, unit);
+  const commit = () => {
+    if (draft === null) return;
+    const parsed = parseCompact(draft);
+    setDraft(null);
+    if (parsed !== null && parsed >= 0 && onCommit) onCommit(parsed);
+  };
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10.5px] tabular-nums text-muted ${on ? "" : "opacity-40 line-through"}`} title={`${level.label} limit${on ? "" : " (off)"}${onCommit ? " · click to edit" : ""}`}>
+      <i className="size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" />
+      {onCommit ? (
+        <input
+          className="w-[5ch] rounded-[3px] border border-transparent bg-transparent px-0.5 text-[10.5px] tabular-nums text-muted outline-none hover:border-line focus:border-orange focus:bg-field focus:text-ink"
+          style={{ width: `${Math.max(3, (draft ?? shown).length) + 1.5}ch` }}
+          value={draft ?? shown}
+          aria-label={`${level.label} limit`}
+          inputMode="decimal"
+          onFocus={event => { const text = editableValue(value ?? 0, unit); setDraft(text); selectNumber(event.target, text); }}
+          onChange={event => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={event => {
+            if (event.key === "Enter") { event.preventDefault(); commit(); (event.target as HTMLInputElement).blur(); }
+            if (event.key === "Escape") { setDraft(null); (event.target as HTMLInputElement).blur(); }
+          }}
+        />
+      ) : shown}
+    </span>
+  );
 }
 
-export function Sparkline({ series, className, style }: { series: DayPoint[]; className?: string; style?: React.CSSProperties }) {
-  const points = useMemo(() => {
-    const width = 84;
+/**
+ * Miniature of the main chart: one thin bar per day, colored like the main
+ * chart's bars (accent under every active line, the highest crossed level's
+ * color above). In cycle mode the bars are the running total per billing
+ * cycle, so the sawtooth and its level colors show at row scale.
+ */
+export function MiniChart({ series, cycles, today, window, levels, values, accent, className }: {
+  series: DayPoint[];
+  cycles?: CycleBounds[];
+  today?: string;
+  window: "day" | "cycle";
+  levels: LimitsChartLevel[];
+  values: LevelValues;
+  accent: string;
+  className?: string;
+}) {
+  const bars = useMemo(() => {
+    const derived = deriveSeries(series, cycles, today);
+    const points = window === "cycle" ? derived.cumulative.map(point => point.cumulative) : derived.dense.map(point => point.value);
+    const axis = chooseAxis(points);
+    const order = levels.map(level => level.id); // active levels only; the parent filters
+    const colorById = new Map(levels.map(level => [level.id, level.color]));
+    const width = 72;
     const height = 24;
-    const max = Math.max(1e-9, ...series.map(point => point.value));
-    const step = width / Math.max(1, series.length - 1);
-    return series.map((point, index) => `${(index * step).toFixed(1)},${(height - (point.value / max) * (height - 2) - 1).toFixed(1)}`).join(" ");
-  }, [series]);
+    const slot = width / Math.max(1, points.length);
+    return points.map((point, index) => {
+      const crossed = crossedLevel(order, values, point);
+      const barHeight = Math.max(0.6, axis.position(point) * (height - 1));
+      return { x: index * slot, width: Math.max(0.6, slot * 0.7), y: height - barHeight, height: barHeight, color: (crossed && colorById.get(crossed)) || accent };
+    });
+  }, [series, cycles, today, window, levels, values, accent]);
   return (
-    <svg viewBox="0 0 84 24" className={className} style={style} aria-hidden="true" preserveAspectRatio="none">
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <svg viewBox="0 0 72 24" className={className} aria-hidden="true" preserveAspectRatio="none">
+      {bars.map((bar, index) => <rect key={index} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} />)}
     </svg>
   );
 }

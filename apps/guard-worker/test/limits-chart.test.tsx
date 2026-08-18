@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LimitsChart, levelColor } from "../src/client/components/limits-chart";
-import { compactValue, parseCompact } from "../src/client/components/limits-chart/LimitsChart";
+import { compactValue, editableValue, parseCompact } from "../src/client/components/limits-chart/LimitsChart";
 
 const LEVELS = [
   { id: "warn", label: "Warn", color: "#e79021" },
@@ -55,7 +55,7 @@ describe("LimitsChart", () => {
   it("labels usage charts with the unit and uses the teal accent", () => {
     const html = render({ kind: "usage", unit: "requests", value: { warn: 100, critical: 200, emergency: 500 } });
     expect(html).toContain('data-limits-chart="usage"');
-    expect(html).toContain("500 requests");
+    expect(html).toContain("500 reqs");
     expect(html).toContain('fill="#1a9c8c"');
   });
 
@@ -79,14 +79,29 @@ describe("LimitsChart", () => {
     expect((html.match(/role="switch"/g) ?? []).length).toBe(3);
   });
 
+  it("keeps switched-off levels in the push order so their fields hold real values", () => {
+    // Warn sits above the switched-off Critical; Critical still gets pushed up past Warn.
+    const html = render({ levelEnabled: { critical: false }, onLevelEnabledChange: () => {}, value: { warn: 30, critical: 20, emergency: 50 } });
+    const critical = html.match(/aria-label="Critical limit in dollars"[^>]*value="([^"]+)"/)?.[1] ?? html.match(/value="([^"]+)"[^>]*aria-label="Critical limit in dollars"/)?.[1];
+    expect(critical).toBeDefined();
+    expect(Number(critical!.replace(/[^0-9.]/g, ""))).toBeGreaterThan(30);
+  });
+
   it("abbreviates large values in fields and parses abbreviations back", () => {
     expect(compactValue(5_800_000_000, "bytes")).toBe("5.8B");
-    expect(compactValue(2_000, "USD")).toBe("2,000");
-    expect(compactValue(12_500, "USD")).toBe("12.5K");
+    expect(compactValue(2_000, "USD")).toBe("2K");
+    expect(compactValue(2_100, "USD")).toBe("2.1K");
+    expect(compactValue(950, "USD")).toBe("950");
+    expect(compactValue(100_500_000, "rows")).toBe("100.5M");
     expect(parseCompact("5.8B")).toBe(5_800_000_000);
     expect(parseCompact("12k")).toBe(12_000);
     expect(parseCompact("$2,000")).toBe(2_000);
     expect(parseCompact("nope")).toBeNull();
+    expect(editableValue(5_830_000_000, "bytes")).toBe("5.83B");
+    expect(editableValue(2_000, "USD")).toBe("2K");
+    expect(editableValue(950, "USD")).toBe("950");
+    expect(editableValue(12_500, "USD")).toBe("12.5K");
+    expect(parseCompact(editableValue(5_830_000_000, "bytes"))).toBe(5_830_000_000);
     const html = render({ kind: "usage", unit: "bytes", value: { warn: 5_800_000_000, critical: 20_000_000_000, emergency: 50_000_000_000 } });
     expect(html).toContain('value="5.8B"');
   });

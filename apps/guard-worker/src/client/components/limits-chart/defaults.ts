@@ -1,5 +1,5 @@
 import { type CycleBounds, type DayPoint, cycleCumulative, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
-import { type LevelValues, completeLevels } from "./levels";
+import { type LevelValues, completeLevels, pushLevels } from "./levels";
 import { chooseAxis, niceLadder } from "./scale";
 
 /**
@@ -27,11 +27,23 @@ export function deriveSeries(series: DayPoint[], cyclesProp: CycleBounds[] | und
 export function completeWithDefaults(heightValues: number[], observedMax: number, order: readonly string[], value: LevelValues, floor?: LevelValues, seed?: LevelValues): LevelValues {
   const ladder = niceLadder(observedMax, order.length);
   const axis = chooseAxis(heightValues, [...order.map(id => value[id] ?? 0), ...ladder, ...Object.values(floor ?? {}), ...Object.values(seed ?? {})]);
-  return completeLevels(axis, order, value, observedMax, floor, seed);
+  const filled = completeLevels(axis, order, value, observedMax, floor, seed);
+  // Values that arrive out of order (an outside edit) are pushed back into
+  // order, lowest level first, so switched-off levels also stay consistent.
+  let ordered = filled;
+  for (const id of order) ordered = pushLevels(axis, order, ordered, id, ordered[id]!, floor);
+  return order.every(id => ordered[id] === filled[id]) ? filled : ordered;
 }
 
 /** Defaults for a series that has no chart mounted yet (collapsed rows). */
 export function defaultLevelValues(series: DayPoint[], cycles: CycleBounds[] | undefined, today: string | undefined, order: readonly string[], value: LevelValues, floor?: LevelValues, seed?: LevelValues): LevelValues {
   const derived = deriveSeries(series, cycles, today);
   return completeWithDefaults(derived.heightValues, derived.observedMax, order, value, floor, seed);
+}
+
+/** Set one level on a series with no chart mounted, pushing neighbors like a drag would. */
+export function pushLevelValue(series: DayPoint[], cycles: CycleBounds[] | undefined, today: string | undefined, order: readonly string[], values: LevelValues, levelId: string, next: number, floor?: LevelValues): LevelValues {
+  const derived = deriveSeries(series, cycles, today);
+  const axis = chooseAxis(derived.heightValues, [...order.map(id => values[id] ?? 0), next, ...Object.values(floor ?? {})]);
+  return pushLevels(axis, order, values, levelId, next, floor);
 }

@@ -40,6 +40,8 @@ export interface LimitsChartProps {
   title?: string;
   /** Product family glyph rendered before the heading. */
   family?: string;
+  /** Undo/redo store shared with a parent (survives unmount). Defaults to a private one. */
+  history?: LimitHistory;
   /** Content placed beside the history controls in the heading row. */
   headerContent?: ReactNode;
 }
@@ -57,16 +59,28 @@ export function levelColor(index: number, count: number): string {
   return LEVEL_PALETTE[Math.min(LEVEL_PALETTE.length - 1, Math.round(index * step))]!;
 }
 
-export function formatLimitValue(value: number, unit: string): string {
-  if (unit === "USD") return money(value);
-  return `${formatNumber(value)} ${unit}`;
+/** Short unit labels for tight cells; anything not listed shows as-is. */
+const UNIT_ABBREVIATIONS: Record<string, string> = { requests: "reqs", messages: "msgs", operations: "ops", transformations: "xforms" };
+
+export function unitLabel(unit: string): string {
+  return UNIT_ABBREVIATIONS[unit] ?? unit;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange }: LimitsChartProps) {
+export function formatLimitValue(value: number, unit: string): string {
+  if (unit === "USD") return money(value);
+  return `${formatNumber(value)} ${unitLabel(unit)}`;
+}
+
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
+  // Every level, on or off, takes part in ordering, pushing, and defaults, so
+  // a switched-off level keeps a consistent value and can be switched back
+  // on without landing out of order. Only active levels are drawn and used
+  // for bar and band colors.
+  const order = useMemo(() => levels.map(level => level.id), [levels]);
   const activeLevels = useMemo(() => levels.filter(level => levelEnabled?.[level.id] ?? true), [levels, levelEnabled]);
-  const order = useMemo(() => activeLevels.map(level => level.id), [activeLevels]);
+  const activeOrder = useMemo(() => activeLevels.map(level => level.id), [activeLevels]);
   const today = todayProp ?? series.at(-1)?.day ?? new Date().toISOString().slice(0, 10);
   const cycles = useMemo(
     () => (cyclesProp?.length ? cyclesProp : monthlyCycles(series[0]?.day ?? today, today)),
@@ -92,9 +106,19 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // pushed on an axis that already contains the default ladder, so a ladder
   // above today's data does not get clamped to the top of the chart.
   const complete = useMemo(() => completeWithDefaults(heightValues, observedMax, order, value, floor, seed), [heightValues, order, value, observedMax, floor, seed]);
+  // Values this chart itself emitted. Anything else that arrives in `value`
+  // (a chip edit in the dimension row, an outside reset) is recorded in the
+  // chart's undo history so undo/redo covers every edit of this map.
+  const emitted = useRef<LevelValues | null>(null);
+  const emit = (next: LevelValues) => { emitted.current = next; onChange(next); };
   useEffect(() => {
-    if (order.some(id => complete[id] !== value[id])) onChange(complete);
-  }, [complete, order, value, onChange]);
+    if (order.some(id => complete[id] !== value[id])) { emit(complete); return; }
+    const last = emitted.current;
+    if (last && order.every(id => last[id] === value[id])) return;
+    emitted.current = value;
+    history.record(value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- record only when the map or order changes
+  }, [complete, order, value]);
 
   const plotWidth = Math.max(80, width - PLOT.left - PLOT.right);
   const plotHeight = PLOT.height - PLOT.top - PLOT.bottom;
@@ -114,7 +138,10 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // per animation frame.
   const [dragValues, setDragValues] = useState<LevelValues | null>(null);
   const shown = dragValues ?? complete;
-  const history = useLimitHistory(complete);
+  const ownHistory = useLimitHistory();
+  const history = historyProp ?? ownHistory;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- seed is idempotent; the handle changes identity every render
+  useEffect(() => { history.seed(complete); }, [complete]);
   const dragBase = useRef<LevelValues | null>(null);
   const frame = useRef<number | null>(null);
   const pending = useRef<{ id: string; clientY: number } | null>(null);
@@ -123,7 +150,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const commit = (id: string, next: number) => {
     const result = pushLevels(axis, order, complete, id, next, floor);
     history.record(result);
-    onChange(result);
+    emit(result);
   };
 
   const valueAtClientY = (clientY: number) => {
@@ -171,7 +198,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     setDragValues(null);
     setFrozenAxis(null);
     history.record(final);
-    onChange(final);
+    emit(final);
   };
   const keyStep = (id: string) => (event: KeyboardEvent<SVGElement>) => {
     if (readOnly) return;
@@ -187,7 +214,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const historyStep = (direction: "undo" | "redo") => {
     if (readOnly) return;
     const next = direction === "undo" ? history.undo() : history.redo();
-    if (next) onChange(next);
+    if (next) emit(next);
   };
   const historyKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (readOnly || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
@@ -211,11 +238,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // Horizontal color bands for the cycle sawtooth: accent under the lowest
   // line, then each level's color up to the next line, the top one open.
   const bands = useMemo(() => {
-    const edges = order.map(id => ({ id, value: shown[id] ?? 0 }));
+    const edges = activeOrder.map(id => ({ id, value: shown[id] ?? 0 }));
     const list: Array<{ id: string; color: string; bottom: number; top: number }> = [{ id: "base", color: ACCENT[kind], bottom: 0, top: edges[0]?.value ?? Number.POSITIVE_INFINITY }];
     edges.forEach((edge, index) => list.push({ id: edge.id, color: activeLevels[index]?.color ?? ACCENT[kind], bottom: edge.value, top: edges[index + 1]?.value ?? Number.POSITIVE_INFINITY }));
     return list;
-  }, [order, shown, activeLevels, kind]);
+  }, [activeOrder, shown, activeLevels, kind]);
   const colorById = useMemo(() => new Map(levels.map(level => [level.id, level.color])), [levels]);
   const cycleStarts = cycles.filter(cycle => cycle.startsAt > dayStart(window.fromDay) && cycle.startsAt <= dayStart(window.toDay));
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
@@ -300,12 +327,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           </g>;
         })}
         <text x={PLOT.left} y={PLOT.top + plotHeight + 16} className="fill-faint text-[10.5px]">{dayLabel(window.fromDay)}</text>
-        <text x={xFor(dense.length - 1)} y={PLOT.top + plotHeight + 16} textAnchor={remainingDays > 2 ? "middle" : "end"} className="fill-ink text-[10.5px] font-bold">Today</text>
         {remainingDays > 2 && <text x={PLOT.left + plotWidth} y={PLOT.top + plotHeight + 16} textAnchor="end" className="fill-faint text-[10.5px]">Cycle end</text>}
 
         {/* Bars */}
         {dense.map((point, index) => {
-          const crossed = crossedLevel(order, shown, point.value);
+          const crossed = crossedLevel(activeOrder, shown, point.value);
           const color = (crossed && colorById.get(crossed)) || accent;
           const top = yFor(point.value);
           const base = PLOT.top + plotHeight;
@@ -358,7 +384,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : (
-        <div className="mt-2.5 grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(128px, 1fr))` }}>
+        <div className="mt-2.5 grid grid-cols-4 gap-2 max-sm:grid-cols-2">
           {levels.map(level => (
             <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
@@ -380,7 +406,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
     if (parsed !== null && parsed >= 0) onCommit(parsed);
   };
   return (
-    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2.5 py-2 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
+    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2 py-1.5 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
       <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
         <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
         <span className="truncate">{level.label}</span>
@@ -395,7 +421,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
           disabled={!enabled}
           value={shown}
           aria-label={`${level.label} limit${unit === "USD" ? " in dollars" : ` in ${unit}`}`}
-          onFocus={() => setDraft(String(roundForField(value)))}
+          onFocus={event => { const text = editableValue(value, unit); setDraft(text); selectNumber(event.target, text); }}
           onChange={event => setDraft(event.target.value)}
           onBlur={commitDraft}
           onKeyDown={event => {
@@ -404,11 +430,11 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level
             event.preventDefault();
             const step = snapStep(value) * (event.shiftKey ? 10 : 1);
             const next = Math.max(0, value + (event.key === "ArrowUp" ? step : -step));
-            setDraft(String(roundForField(next)));
+            setDraft(editableValue(next, unit));
             onCommit(next);
           }}
         />
-        {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unit}</small>}
+        {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unitLabel(unit)}</small>}
       </span>
     </label>
   );
@@ -428,11 +454,33 @@ function LevelSwitch({ label, on, onChange }: { label: string; on: boolean; onCh
   );
 }
 
-/** Short display form: $2,000 / $12.5K for money, 5.8B for counts. */
+/** Short display form: values from 1,000 up carry a K/M/B/T suffix ("2.1K", "100.5M"), so a value is at most 6 characters. */
 export function compactValue(value: number, _unit: string): string {
-  return value >= 10_000
+  return value >= 1_000
     ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
     : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
+}
+
+/** Select the digits of an edit value but leave a K/M/B/T suffix unselected, so typing keeps the scale. */
+export function selectNumber(input: HTMLInputElement, text: string): void {
+  const digits = text.match(/^[0-9.]*/)?.[0].length ?? text.length;
+  requestAnimationFrame(() => { try { input.setSelectionRange(0, digits); } catch { /* unsupported input type */ } });
+}
+
+/**
+ * The text a field shows while editing. Large values keep their K/M/B/T
+ * suffix with a little more precision ("5.83B"), so users edit in that
+ * form and can swap the suffix; small values are plain numbers.
+ */
+export function editableValue(value: number, _unit: string): string {
+  if (!(value >= 1_000)) return String(roundForField(value));
+  const units: Array<[number, string]> = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+  const [scale, suffix] = units.find(([limit]) => value >= limit)!;
+  return `${roundFloatText(value / scale)}${suffix}`;
+}
+
+function roundFloatText(value: number): string {
+  return String(Number(value.toPrecision(4)));
 }
 
 /** Accepts "5.8B", "12k", "2,000", "1.5 M". Returns null when unreadable. */
