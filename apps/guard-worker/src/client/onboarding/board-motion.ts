@@ -97,10 +97,13 @@ export function useDragSession<T>(handlers: { onMove?(session: DragSession<T>): 
       const current = live.current;
       if (!current) { frame.current = null; return; }
       const rect = scroller.getBoundingClientRect();
-      const edge = 48;
-      const speed = 12;
-      if (current.x > rect.right - edge) scroller.scrollLeft += speed;
-      else if (current.x < rect.left + edge) scroller.scrollLeft -= speed;
+      // Scroll only when the pointer is past the scroller's edge (or within
+      // a thin band inside it) and there is somewhere left to scroll.
+      const edge = 20;
+      const canRight = scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 1;
+      const canLeft = scroller.scrollLeft > 0;
+      if (canRight && current.x > rect.right - edge) scroller.scrollLeft += Math.min(16, 4 + (current.x - (rect.right - edge)) / 2);
+      else if (canLeft && current.x < rect.left + edge) scroller.scrollLeft -= Math.min(16, 4 + ((rect.left + edge) - current.x) / 2);
       frame.current = requestAnimationFrame(tick);
     };
     if (frame.current === null) frame.current = requestAnimationFrame(tick);

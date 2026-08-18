@@ -53,7 +53,14 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
   const boardRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [scroll, setScroll] = useState({ atStart: true, atEnd: true });
+  const [lockedHeight, setLockedHeight] = useState<number | null>(null);
   useFlip(boardRef);
+  // While something is dragged the board keeps its starting height, so a
+  // column losing or gaining a card cannot make the page height jitter.
+  useEffect(() => {
+    if (drag && lockedHeight === null) setLockedHeight(boardRef.current?.getBoundingClientRect().height ?? null);
+    if (!drag && lockedHeight !== null) setLockedHeight(null);
+  }, [drag, lockedHeight]);
 
   const updateScroll = useCallback(() => {
     const scroller = scrollerRef.current;
@@ -164,7 +171,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     {!board.loading && (
       /* The scroller bleeds to the wizard card's border (its padding is clamp(26px,4vw,48px), 16px below md) so columns scroll to the edge instead of clipping inside the content box. */
       <div ref={scrollerRef} onScroll={updateScroll} className="-mx-[clamp(26px,4vw,48px)] min-w-0 overflow-x-auto px-[clamp(26px,4vw,48px)] pb-3 max-md:-mx-4 max-md:px-4" aria-label="Alert level board">
-        <div ref={boardRef} className="flex min-w-max items-stretch gap-3">
+        <div ref={boardRef} className="flex min-w-max items-stretch gap-3" style={{ minHeight: lockedHeight ?? undefined }}>
           {columns.map(({ item: level, leaving }) => {
             const index = visualLevels.findIndex(item => item.id === level.id);
             const isDraggedColumn = drag?.kind === "column" && drag.id === level.id;
@@ -287,7 +294,7 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, entryDr
   const listed = useLeaving(rows.filter((row): row is { kind: "entry"; entry: AlertLevelEntry } => row.kind === "entry").map(row => row.entry), entry => entry.id);
 
   return (
-    <section ref={sectionRef} data-level={ghost ? undefined : level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 ${ghost ? "pointer-events-none border-orange" : "border-line"}`}>
+    <section ref={sectionRef} data-level={ghost ? undefined : level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 transition-colors ${ghost ? "pointer-events-none border-orange" : entryDrag && entryDrag.targetLevelId === level.id ? "border-orange shadow-[0_0_0_3px_#f6821f1f]" : "border-line"}`}>
       <header className="mb-3 flex items-center gap-1.5">
         <button type="button" className="cursor-grab touch-none rounded px-1 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag ${level.label} to reorder`} onPointerDown={event => onGrabColumn(event, sectionRef.current!)}>⠿</button>
         <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
