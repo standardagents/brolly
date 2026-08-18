@@ -166,7 +166,7 @@ function WizardStepper({ active, unlocked, onSelect, children }: {
   onSelect: (index: number) => void;
 }) {
   return (
-    <aside className="sticky top-[60px] z-30 border-b border-line bg-panel/95 backdrop-blur">
+    <aside data-wizard-rail className="sticky top-[60px] z-30 border-b border-line bg-panel/95 backdrop-blur">
       <div className="mx-auto flex max-w-[1440px] items-center gap-6 px-8 py-2.5 max-xl:px-6 max-md:gap-3 max-md:px-3.5">
         <ol className="flex min-w-0 flex-1 list-none items-center gap-1 overflow-x-auto">
           {STEPS.map((step, index) => {

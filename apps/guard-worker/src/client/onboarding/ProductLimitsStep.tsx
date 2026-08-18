@@ -11,8 +11,23 @@ type OpenState = { cost: boolean; usage: string | null | undefined };
 type SidebarItem = { id: string; label: string };
 type SectionInfo = { items: SidebarItem[]; hasUsage: boolean };
 
-/** Header and rail offset the sticky sidebar and scroll targets clear. */
-const STICKY_TOP = 132;
+/** Fallback offset (page header + step rail) when the rail cannot be measured. */
+const DEFAULT_STICKY_TOP = 108;
+
+/** Bottom edge of the wizard's sticky step rail, so sticky parts sit right under it. */
+function useStickyTop(): number {
+  const [top, setTop] = useState(DEFAULT_STICKY_TOP);
+  useEffect(() => {
+    const measure = () => {
+      const rail = document.querySelector<HTMLElement>("[data-wizard-rail]");
+      if (rail) setTop(Math.round(rail.getBoundingClientRect().bottom));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  return top;
+}
 
 /**
  * Product limits: every product family down the page, each with its per-day
@@ -28,6 +43,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   setPolicy: Dispatch<SetStateAction<Policy>>;
 }) {
   const families = data.families;
+  const STICKY_TOP = useStickyTop();
   const chartLevels = useMemo(() => levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) })), [levels]);
   const [openByScope, setOpenByScope] = useState<Record<string, OpenState>>({});
   const [infoByScope, setInfoByScope] = useState<Record<string, SectionInfo>>({});
@@ -63,7 +79,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
     window.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
     return () => { window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
-  }, [ordered]);
+  }, [ordered, STICKY_TOP]);
 
   const reportInfo = useCallback((scope: string, info: SectionInfo) => {
     setInfoByScope(current => (current[scope] && current[scope]!.hasUsage === info.hasUsage && sameItems(current[scope]!.items, info.items) ? current : { ...current, [scope]: info }));
@@ -83,7 +99,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
       Cost and billable usage limits for each product: per day on the left, per billing cycle on the right. Each starts from its typical history and your risk tolerance.
     </StepIntro>
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
-      <nav className="sticky self-start max-lg:static" style={{ top: STICKY_TOP }} aria-label="Products">
+      <nav className="sticky self-start max-lg:static" style={{ top: STICKY_TOP + 16 }} aria-label="Products">
         {[{ title: "Detected historical usage", list: detected }, { title: "No usage detected", list: undetected }].filter(group => group.list.length > 0).map(group => (
           <div key={group.title} className="mb-4">
             <h4 className="mb-1.5 px-2 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint">{group.title}</h4>
@@ -161,6 +177,7 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
   onInfo: (info: SectionInfo) => void;
 }) {
   const usage = useUsageSeries(token, scope);
+  const STICKY_TOP = useStickyTop();
   useEffect(() => {
     if (!usage.data) return;
     const hasUsage = usage.data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
@@ -170,9 +187,9 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
   const control = familyControl(family);
 
   return (
-    <section ref={ref} className="min-w-0 scroll-mt-[140px]" aria-label={`${label} limits`}>
+    <section ref={ref} className="min-w-0" style={{ scrollMarginTop: STICKY_TOP + 8 }} aria-label={`${label} limits`}>
       {/* Sticky under the page header and step rail; the next product's header pushes it away. */}
-      <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel px-2 pt-2 pb-3" style={{ top: STICKY_TOP - 8 }}>
+      <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel px-2 pt-2 pb-3" style={{ top: STICKY_TOP }}>
         <ProductIcon family={family} />
         <h3 className="text-[17px] font-[750]">{label}</h3>
         <span className="ml-1 inline-flex items-center gap-1.5">
