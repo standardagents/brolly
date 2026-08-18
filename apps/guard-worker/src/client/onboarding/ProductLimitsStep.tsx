@@ -195,9 +195,7 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
         <h3 className="text-[17px] font-[750]">{label}</h3>
         <span className="ml-1 inline-flex items-center gap-1.5">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="bell" className="size-3.5" /> Alerts</span>
-          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${control ? "bg-chip text-chip-ink" : "border border-dashed border-line text-faint"}`} title={control ? "Brolly can quarantine this product." : "Quarantine is not available for this product."}>
-            <Icon name="shield" className="size-3.5" /> Quarantine
-          </span>
+          {control && <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink" title="Brolly can quarantine this product."><Icon name="shield" className="size-3.5" /> Quarantine</span>}
         </span>
       </header>
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
