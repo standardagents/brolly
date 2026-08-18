@@ -4,13 +4,14 @@ import { pushLevels, type LevelValues } from "../components/limits-chart/levels"
 import type { RiskTolerance, RiskTolerancePreset } from "../types";
 
 export const RISK_TOLERANCE_WINDOW_DAYS = 90;
-export const MIN_TOLERANCE_PERCENT = 100;
-export const MAX_TOLERANCE_PERCENT = 100_000;
-export const TOLERANCE_AXIS_MAX = 10_000;
+export const MIN_TOLERANCE_PERCENT = 1;
+export const MAX_TOLERANCE_PERCENT = 10_000;
+/** Starting visible maximum of the track: 10× the average. It grows toward MAX_TOLERANCE_PERCENT on release. */
+export const TOLERANCE_AXIS_MAX = 1_000;
 
 export const RISK_PRESETS: Record<Exclude<RiskTolerancePreset, "custom">, { low: number; high: number }> = {
-  conservative: { low: 110, high: 300 },
-  balanced: { low: 125, high: 800 },
+  conservative: { low: 75, high: 300 },
+  balanced: { low: 90, high: 800 },
   growth: { low: 150, high: 3_000 },
 };
 
@@ -20,7 +21,8 @@ export function tolerancePresetValues(preset: Exclude<RiskTolerancePreset, "cust
   const last = Math.max(0, order.length - 1);
   let values: LevelValues = Object.fromEntries(order.map((id, index) => {
     const t = last === 0 ? 1 : index / last;
-    return [id, snapToNice(curve.low * (curve.high / curve.low) ** t, 1)];
+    const raw = curve.low * (curve.high / curve.low) ** t;
+    return [id, raw < 100 ? Math.round(raw) : snapToNice(raw, 1)];
   }));
   const axis = toleranceAxis(Math.max(TOLERANCE_AXIS_MAX, ...Object.values(values)));
   const floor = Object.fromEntries(order.map(id => [id, MIN_TOLERANCE_PERCENT]));
@@ -59,7 +61,7 @@ export function changeToleranceValue(values: LevelValues, order: readonly string
   return result;
 }
 
-/** Logarithmic percent axis. Position zero corresponds to 100 percent. */
+/** Logarithmic percent axis from MIN_TOLERANCE_PERCENT; used for the push gap. */
 export function toleranceAxis(top = TOLERANCE_AXIS_MAX): Axis {
   const max = Math.max(TOLERANCE_AXIS_MAX, top);
   const span = Math.log10(max / MIN_TOLERANCE_PERCENT);

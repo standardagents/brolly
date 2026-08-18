@@ -554,7 +554,7 @@ export function validPolicy(policy: Policy, requireEveryFamily = false, levelIds
     if (!["conservative", "balanced", "growth", "custom"].includes(tolerance.preset)) return false;
     if (!tolerance.percentOfTypical || !levelIds.every(levelId => {
       const value = tolerance.percentOfTypical[levelId];
-      return typeof value === "number" && Number.isFinite(value) && value >= 100 && value <= 100_000;
+      return typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 10_000;
     })) return false;
     if (!levelIds.every((levelId, index) => index === 0 || tolerance.percentOfTypical[levelIds[index - 1]!]! < tolerance.percentOfTypical[levelId]!)) return false;
     if (!tolerance.baseline || !finiteNonnegative(tolerance.baseline.computedAt)

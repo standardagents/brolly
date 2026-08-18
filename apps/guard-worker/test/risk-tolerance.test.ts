@@ -24,16 +24,16 @@ describe("risk tolerance presets", () => {
     }
   }
 
-  it("places three balanced levels near 125, 320, and 800 percent", () => {
+  it("places three balanced levels near 90, 270, and 800 percent", () => {
     expect(tolerancePresetValues("balanced", ["warn", "critical", "emergency"]))
-      .toEqual({ warn: 125, critical: 320, emergency: 800 });
+      .toEqual({ warn: 90, critical: 270, emergency: 800 });
   });
 
   it("treats a missing policy value as balanced", () => {
     const value = normalizeRiskTolerance(undefined, ["warn", "critical", "emergency"], 1234);
     expect(value).toEqual({
       preset: "balanced",
-      percentOfTypical: { warn: 125, critical: 320, emergency: 800 },
+      percentOfTypical: { warn: 90, critical: 270, emergency: 800 },
       baseline: { computedAt: 1234, windowDays: 90 },
     });
   });

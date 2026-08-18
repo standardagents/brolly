@@ -101,7 +101,7 @@ describe("BudgetWizard", () => {
     const saved = JSON.parse(String(call![1]?.body));
     expect(saved.policy.riskTolerance).toMatchObject({
       preset: "balanced",
-      percentOfTypical: { warning: 125, critical: 320, emergency: 800 },
+      percentOfTypical: { warning: 90, critical: 270, emergency: 800 },
       baseline: { windowDays: 90 },
     });
     expect(saved.policy.riskTolerance.baseline.computedAt).toBeGreaterThan(0);

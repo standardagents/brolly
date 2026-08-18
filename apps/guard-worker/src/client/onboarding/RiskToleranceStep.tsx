@@ -91,11 +91,17 @@ function axisTicks(max: number): number[] {
   return ticks;
 }
 
-/** Smallest decade multiple of `base` that keeps `highest` under 92% of the track. */
+/** Smallest nice maximum at or above `base` that keeps `highest` under 92% of the track, capped at MAX_TOLERANCE_PERCENT. */
 export function fitAxisMax(base: number, highest: number): number {
   let max = Math.max(TOLERANCE_AXIS_MAX, base);
-  while (trackPosition(highest, max) > 0.92 && max < MAX_TOLERANCE_PERCENT * 10) max *= 10;
+  while (trackPosition(highest, max) > 0.92 && max < MAX_TOLERANCE_PERCENT) max = Math.min(MAX_TOLERANCE_PERCENT, nextNice(max));
   return max;
+}
+
+function nextNice(value: number): number {
+  const decade = 10 ** Math.floor(Math.log10(value));
+  const mantissa = value / decade;
+  return mantissa < 2 ? 2 * decade : mantissa < 5 ? 5 * decade : 10 * decade;
 }
 
 export function trackPosition(percent: number, max = TOLERANCE_AXIS_MAX): number {
@@ -129,18 +135,20 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
-  // The visible maximum grows when a diamond nears the right edge and
-  // relaxes when everything sits well below it, so nothing is capped.
+  // The visible maximum starts at TOLERANCE_AXIS_MAX and, once a drag is
+  // released (never mid-drag), grows when a diamond sits near the right
+  // edge and relaxes when everything sits well below it, up to the cap.
   const highest = Math.max(MIN_TOLERANCE_PERCENT, ...Object.values(value));
   const [axisMax, setAxisMax] = useState(() => fitAxisMax(TOLERANCE_AXIS_MAX, highest));
   const max = axisMax;
   useEffect(() => {
+    if (dragging) return;
     setAxisMax(current => {
-      if (trackPosition(highest, current) > 0.92) return fitAxisMax(current * 10, highest);
-      if (current > TOLERANCE_AXIS_MAX && trackPosition(highest, current / 10) < 0.8) return fitAxisMax(TOLERANCE_AXIS_MAX, highest);
+      if (trackPosition(highest, current) > 0.92) return fitAxisMax(current, highest);
+      if (current > TOLERANCE_AXIS_MAX && trackPosition(highest, TOLERANCE_AXIS_MAX) < 0.85) return fitAxisMax(TOLERANCE_AXIS_MAX, highest);
       return current;
     });
-  }, [highest]);
+  }, [highest, dragging]);
   const pad = 14;
   const trackWidth = Math.max(120, width - pad * 2);
   const xFor = (percent: number) => pad + trackPosition(percent, max) * trackWidth;
@@ -148,7 +156,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return MIN_TOLERANCE_PERCENT;
     const x = ((clientX - rect.left) / rect.width) * width;
-    return snapToNice(Math.max(MIN_TOLERANCE_PERCENT, trackPercent((x - pad) / trackWidth, max)), 1);
+    return Math.max(MIN_TOLERANCE_PERCENT, snapToNice(trackPercent((x - pad) / trackWidth, max), 1));
   };
   const change = (id: string, next: number) => onChange(changeToleranceValue(value, order, id, next));
 

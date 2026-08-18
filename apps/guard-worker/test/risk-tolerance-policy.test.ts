@@ -23,13 +23,13 @@ describe("risk tolerance policy validation", () => {
     expect(validPolicy(existing, false, LEVELS)).toBe(true);
   });
 
-  it("rejects percentages outside 100 through 100,000", () => {
+  it("rejects percentages outside 1 through 10,000", () => {
     const below = policy();
-    below.riskTolerance!.percentOfTypical.warning = 99;
+    below.riskTolerance!.percentOfTypical.warning = 0;
     expect(validPolicy(below, false, LEVELS)).toBe(false);
 
     const above = policy();
-    above.riskTolerance!.percentOfTypical.emergency = 100_001;
+    above.riskTolerance!.percentOfTypical.emergency = 10_001;
     expect(validPolicy(above, false, LEVELS)).toBe(false);
   });
 
