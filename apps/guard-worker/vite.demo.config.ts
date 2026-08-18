@@ -644,7 +644,9 @@ function realUsageSeries(scope: string): UsageSeriesResponse | null {
     return { ...base, scope, metrics: Object.assign({}, ...families.map(family => family.metrics)), series: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)) };
   }
   const family = realUsage.families[scope.replace(/^family:/, "")];
-  if (!family) return null;
+  // With real data loaded, a product the fetch did not cover has no usage;
+  // it must not fall back to invented numbers.
+  if (!family) return { ...base, scope, metrics: {}, series: [] };
   return { ...base, scope, metrics: family.metrics, series: family.series };
 }
 

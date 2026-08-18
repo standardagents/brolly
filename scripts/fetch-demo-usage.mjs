@@ -60,6 +60,21 @@ const FAMILIES = {
   vectorize: { label: "Vectorize", retentionDays: 30, queries: [
     { dataset: "vectorizeV2QueriesAdaptiveGroups", time: "datetime", fields: { queried_dimensions: "sum { queriedVectorDimensions }" } },
   ], metrics: { queried_dimensions: ["Queried dimensions", "dimensions", 0.01 / 1e6] } },
+  pages: { label: "Pages", retentionDays: 30, queries: [
+    { dataset: "pagesFunctionsInvocationsAdaptiveGroups", time: "datetime", fields: { requests: "sum { requests }" } },
+  ], metrics: { requests: ["Function requests", "requests", 0.30 / 1e6] } },
+  images: { label: "Images", retentionDays: 30, queries: [
+    { dataset: "imagesRequestsAdaptiveGroups", time: "datetime", fields: { delivery: "count" } },
+  ], metrics: { delivery: ["Images delivered", "requests", 1 / 100_000] } },
+  stream: { label: "Stream", retentionDays: 30, queries: [
+    { dataset: "streamMinutesViewedAdaptiveGroups", time: "datetime", fields: { minutes_delivered: "sum { minutesViewed }" } },
+  ], metrics: { minutes_delivered: ["Minutes delivered", "minutes", 1 / 1000] } },
+  hyperdrive: { label: "Hyperdrive", retentionDays: 30, queries: [
+    { dataset: "hyperdriveQueriesAdaptiveGroups", time: "datetime", fields: { database_queries: "count" } },
+  ], metrics: { database_queries: ["Database queries", "queries", 0] } },
+  ai_gateway: { label: "AI Gateway", retentionDays: 30, queries: [
+    { dataset: "aiGatewayRequestsAdaptiveGroups", time: "datetime", fields: { requests: "count" } },
+  ], metrics: { requests: ["Requests", "requests", 0] } },
   workflows: { label: "Workflows", retentionDays: 30, queries: [
     { dataset: "workflowsAdaptiveGroups", time: "datetime", fields: { requests: "count" } },
   ], metrics: { requests: ["Requests", "requests", 0.30 / 1e6] } },
