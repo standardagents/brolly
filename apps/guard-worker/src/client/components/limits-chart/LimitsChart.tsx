@@ -415,7 +415,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </ul>
       ) : fields === "inline" ? (
-        <div className="mt-2 grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2">
+        // Aligned with the plot area, not the axis gutter, so values sit under the lines they set.
+        <div className="mt-2 grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
           {levels.map(level => (
             <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
