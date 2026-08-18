@@ -397,3 +397,7 @@ The dashboard demo is pinned to `[::1]:5199`. Its startup guard checks both
 `127.0.0.1:5199` and `[::1]:5199` before Vite listens. A process on either
 address blocks startup with the process-cleanup instruction. This keeps
 `devurl 5199` from reaching a stale listener on the other address family.
+
+The internal `/__limits-chart-preview` route renders the editable daily and
+billing-cycle charts against the demo API. The route is available in both demo
+onboarding states.
