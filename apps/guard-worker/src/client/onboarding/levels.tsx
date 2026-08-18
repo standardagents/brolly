@@ -40,8 +40,8 @@ export function useAlertLevels(token: string) {
 
 /** What is being dragged and where it would land. */
 type Drag =
-  | { kind: "column"; id: string; targetIndex: number }
-  | { kind: "entry"; id: string; fromLevelId: string; targetLevelId: string; targetIndex: number };
+  | { kind: "column"; id: string; targetIndex: number; height: number }
+  | { kind: "entry"; id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number };
 
 export function AlertLevelsStep({ token, targets, board }: { token: string; targets: NotificationTargetsState; board: ReturnType<typeof useAlertLevels> }) {
   const [draft, setDraft] = useState("");
@@ -104,7 +104,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     onMove(session) {
       const rects = columnRects(boardRef.current, session.data.id);
       const targetIndex = slotIndexAt(rects, session.x, "x");
-      setDrag(current => (current?.kind === "column" && current.targetIndex === targetIndex ? current : { kind: "column", id: session.data.id, targetIndex }));
+      setDrag(current => (current?.kind === "column" && current.targetIndex === targetIndex ? current : { kind: "column", id: session.data.id, targetIndex, height: session.height }));
     },
     onDrop(session) {
       const rects = columnRects(boardRef.current, session.data.id);
@@ -121,7 +121,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
       if (!target) return;
       setDrag(current => (current?.kind === "entry" && current.targetLevelId === target.levelId && current.targetIndex === target.index
         ? current
-        : { kind: "entry", id: session.data.id, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index }));
+        : { kind: "entry", id: session.data.id, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index, height: session.height }));
     },
     onDrop(session) {
       const target = entryTarget(boardRef.current, session);
@@ -155,7 +155,7 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
             return (
               <div key={level.id} data-flip-key={`column:${level.id}`} data-column={level.id} className={`flex-none ${leaving ? "board-out" : "board-in"}`} style={{ width: COLUMN_WIDTH }}>
                 {isDraggedColumn ? (
-                  <div className="h-full min-h-[120px] rounded-panel border-2 border-dashed border-orange/60 bg-orange-soft/30" aria-hidden="true" />
+                  <div className="rounded-panel border-2 border-dashed border-orange/60 bg-orange-soft/30" style={{ height: drag.kind === "column" ? drag.height : undefined, minHeight: 120 }} aria-hidden="true" />
                 ) : (
                   <LevelColumn
                     level={level}
@@ -215,7 +215,7 @@ function Ghost({ session, children }: { session: DragSession<unknown>; children:
 
 function LevelColumn({ level, index, count, token, targets, usedTargets, entryDrag, onGrabColumn, onGrabEntry, onMove, onAddBefore, onAddAfter, onChanged, onError, ghost = false }: {
   level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; usedTargets: Set<string | null>;
-  entryDrag: { id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; entry: AlertLevelEntry | null } | null;
+  entryDrag: { id: string; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number; entry: AlertLevelEntry | null } | null;
   onGrabColumn: (event: React.PointerEvent, element: HTMLElement) => void;
   onGrabEntry: (event: React.PointerEvent, entryId: string, element: HTMLElement) => void;
   onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void;
@@ -269,7 +269,7 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, entryDr
       </header>
       <div className="grid gap-2" data-entry-list={level.id}>
         {rows.map((row, position) => row.kind === "slot"
-          ? <div key="slot" data-flip-key={`slot:${entryDrag?.id}`} data-entry-slot={position} className="h-[74px] rounded-field border-2 border-dashed border-orange/60 bg-orange-soft/30" aria-hidden="true" />
+          ? <div key="slot" data-flip-key={`slot:${entryDrag?.id}`} data-entry-slot={position} className="rounded-field border-2 border-dashed border-orange/60 bg-orange-soft/30" style={{ height: entryDrag?.height ?? 74 }} aria-hidden="true" />
           : (
             <ChannelEntry
               key={row.entry.id}
