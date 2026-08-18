@@ -135,10 +135,20 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  // While dragging, values live here and the parent hears once on release
+  // (the parent is the whole wizard; per-move updates re-render every step).
+  // Moves are coalesced to one per frame and the track rect is measured once.
+  const [dragValues, setDragValues] = useState<Record<string, number> | null>(null);
+  const shown = dragValues ?? value;
+  const dragBase = useRef<Record<string, number> | null>(null);
+  const draggingRef = useRef<string | null>(null);
+  const trackRect = useRef<DOMRect | null>(null);
+  const frame = useRef<number | null>(null);
+  const pending = useRef<{ id: string; clientX: number } | null>(null);
   // The visible maximum starts at TOLERANCE_AXIS_MAX and, once a drag is
   // released (never mid-drag), grows when a diamond sits near the right
   // edge and relaxes when everything sits well below it, up to the cap.
-  const highest = Math.max(MIN_TOLERANCE_PERCENT, ...Object.values(value));
+  const highest = Math.max(MIN_TOLERANCE_PERCENT, ...Object.values(shown));
   const [axisMax, setAxisMax] = useState(() => fitAxisMax(TOLERANCE_AXIS_MAX, highest));
   const max = axisMax;
   useEffect(() => {
@@ -153,28 +163,52 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
   const trackWidth = Math.max(120, width - pad * 2);
   const xFor = (percent: number) => pad + trackPosition(percent, max) * trackWidth;
   const percentAt = (clientX: number) => {
-    const rect = svgRef.current?.getBoundingClientRect();
+    const rect = trackRect.current ?? svgRef.current?.getBoundingClientRect();
     if (!rect) return MIN_TOLERANCE_PERCENT;
     const x = ((clientX - rect.left) / rect.width) * width;
     return Math.max(MIN_TOLERANCE_PERCENT, snapToNice(trackPercent((x - pad) / trackWidth, max), 1));
   };
   const change = (id: string, next: number) => onChange(changeToleranceValue(value, order, id, next));
 
+  const flushDrag = () => {
+    frame.current = null;
+    const move = pending.current;
+    if (!move) return;
+    setDragValues(changeToleranceValue(dragBase.current ?? value, order, move.id, percentAt(move.clientX)));
+  };
   const pointerDown = (id: string) => (event: PointerEvent<SVGElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    trackRect.current = svgRef.current?.getBoundingClientRect() ?? null;
+    dragBase.current = value;
+    draggingRef.current = id;
     setDragging(id);
-    change(id, percentAt(event.clientX));
+    setDragValues(changeToleranceValue(value, order, id, percentAt(event.clientX)));
   };
   const pointerMove = (id: string) => (event: PointerEvent<SVGElement>) => {
-    if (dragging === id) change(id, percentAt(event.clientX));
+    if (draggingRef.current !== id) return;
+    pending.current = { id, clientX: event.clientX };
+    if (frame.current === null) frame.current = requestAnimationFrame(flushDrag);
   };
   const pointerUp = (event: PointerEvent<SVGElement>) => {
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+    const last = pending.current;
+    const active = draggingRef.current;
+    const final = active
+      ? (last ? changeToleranceValue(dragBase.current ?? value, order, last.id, percentAt(last.clientX)) : dragValues ?? changeToleranceValue(dragBase.current ?? value, order, active, percentAt(event.clientX)))
+      : null;
+    pending.current = null;
+    trackRect.current = null;
+    dragBase.current = null;
+    draggingRef.current = null;
     setDragging(null);
+    setDragValues(null);
+    if (final) onChange(final);
   };
   const keyDown = (id: string) => (event: KeyboardEvent<SVGElement>) => {
-    const current = value[id] ?? MIN_TOLERANCE_PERCENT;
+    const current = shown[id] ?? MIN_TOLERANCE_PERCENT;
     const step = snapStep(current, 1) * (event.shiftKey ? 10 : 1);
     const jumps: Record<string, number> = { ArrowRight: step, ArrowUp: step, ArrowLeft: -step, ArrowDown: -step, PageUp: step * 10, PageDown: -step * 10, Home: MIN_TOLERANCE_PERCENT - current, End: max - current };
     const delta = jumps[event.key];
@@ -185,7 +219,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
 
   // Cards sit in one evenly spaced row under the track (so they never
   // overlap) and a connector line runs from each diamond to its card.
-  const positions = levels.map(level => xFor(value[level.id] ?? MIN_TOLERANCE_PERCENT));
+  const positions = levels.map(level => xFor(shown[level.id] ?? MIN_TOLERANCE_PERCENT));
   const columns = Math.max(1, levels.length);
   const gap = 12;
   const cardWidth = Math.min(CARD_WIDTH, Math.max(96, (width - gap * (columns - 1)) / columns));
@@ -215,7 +249,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
         <rect x={xFor(100) - 1} y={trackY - 6} width="2" height={TRACK.height + 12} className="fill-ink" style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }} />
         {/* Diamonds */}
         {levels.map((level, index) => {
-          const percent = value[level.id] ?? MIN_TOLERANCE_PERCENT;
+          const percent = shown[level.id] ?? MIN_TOLERANCE_PERCENT;
           const x = positions[index]!;
           const y = trackY + TRACK.height / 2;
           return (
@@ -248,7 +282,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
       </svg>
       {/* Cards: name, editable percentage, and amounts under each diamond */}
       {levels.map((level, index) => {
-        const percent = value[level.id] ?? MIN_TOLERANCE_PERCENT;
+        const percent = shown[level.id] ?? MIN_TOLERANCE_PERCENT;
         const daily = typical * percent / 100;
         return (
           <div key={level.id} className="absolute rounded-field border bg-panel px-2.5 py-2 shadow-panel" style={{ width: cardWidth, left: cardLeft(index), top: cardTop, borderColor: level.color }}>
