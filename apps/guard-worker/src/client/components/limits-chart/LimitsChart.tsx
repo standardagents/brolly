@@ -52,6 +52,7 @@ export interface LimitsChartProps {
   headerContent?: ReactNode;
 }
 
+const EASE = "cubic-bezier(.2,.7,.2,1)";
 const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
 /** Bar accents sit outside the warm level ramp: cool blue for cost, teal for usage. */
 const ACCENT = { cost: "#2f6fd6", usage: "#1a9c8c" } as const;
@@ -294,8 +295,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {/* Y ticks */}
         {axis.ticks.map(tick => (
           <g key={tick}>
-            {tick > 0 && <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(tick)} y2={yFor(tick)} className="stroke-line-soft" strokeDasharray="2 5" />}
-            <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums">{formatTick(tick, unit)}</text>
+            {tick > 0 && <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(tick)} y2={yFor(tick)} className="stroke-line-soft" strokeDasharray="2 5" style={{ transition: dragging ? "none" : `y1 260ms ${EASE}, y2 260ms ${EASE}` }} />}
+            <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums" style={{ transition: dragging ? "none" : `y 260ms ${EASE}` }}>{formatTick(tick, unit)}</text>
           </g>
         ))}
 
@@ -308,7 +309,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             <defs>
               {bands.map(band => (
                 <clipPath key={band.id} id={`${patternId}-band-${band.id}`}>
-                  <rect x={PLOT.left} width={plotWidth} y={Number.isFinite(band.top) ? yFor(band.top) : PLOT.top} height={Math.max(0, yFor(band.bottom) - (Number.isFinite(band.top) ? yFor(band.top) : PLOT.top))} />
+                  <rect x={PLOT.left} width={plotWidth} y={Number.isFinite(band.top) ? yFor(band.top) : PLOT.top} height={Math.max(0, yFor(band.bottom) - (Number.isFinite(band.top) ? yFor(band.top) : PLOT.top))} style={{ transition: dragging ? "none" : `y 260ms ${EASE}, height 260ms ${EASE}` }} />
                 </clipPath>
               ))}
             </defs>
@@ -352,7 +353,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           const base = PLOT.top + plotHeight;
           return (
             <rect key={point.day} x={xFor(index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
-              fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.16 : crossed ? 1 : 0.9}>
+              fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.16 : crossed ? 1 : 0.9}
+              style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }}>
               <title>{barTitles[index]}</title>
             </rect>
           );
@@ -374,6 +376,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               aria-valuetext={interactive ? formatLimitValue(current, unit) : undefined}
               aria-orientation={interactive ? "vertical" : undefined}
               className={interactive ? "cursor-ns-resize outline-none focus-visible:[&>polygon]:stroke-ink focus-visible:[&>polygon]:stroke-[2.5]" : undefined}
+              // Lines and handles ease to a new position when a value changes
+              // without a drag (tolerance change, preset, undo, chip edit).
+              style={{ transform: `translateY(${y}px)`, transition: dragging ? "none" : `transform 260ms ${EASE}` }}
               onPointerDown={startDrag(level.id)}
               onPointerMove={moveDrag(level.id)}
               onPointerUp={endDrag(level.id)}
@@ -381,9 +386,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               onKeyDown={keyStep(level.id)}
             >
               <title>{`${level.label} · ${formatLimitValue(current, unit)}`}</title>
-              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={y} y2={y} stroke="transparent" strokeWidth="14" />
-              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={y} y2={y} stroke={level.color} strokeWidth="2" strokeDasharray="7 5" />
-              <polygon points={diamond(PLOT.left - 3, y, 6.5)} fill={level.color} stroke="var(--panel)" strokeWidth="1.5" />
+              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke="transparent" strokeWidth="14" />
+              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke={level.color} strokeWidth="2" strokeDasharray="7 5" />
+              <polygon points={diamond(PLOT.left - 3, 0, 6.5)} fill={level.color} stroke="var(--panel)" strokeWidth="1.5" />
             </g>
           );
         })}
