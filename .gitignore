@@ -9,3 +9,4 @@ packages/cli/worker/
 
 # Disposable planning docs; local only
 docs/plans/
+apps/guard-worker/demo/

@@ -29,7 +29,10 @@
  */
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget } from "./src/client/types.ts";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
@@ -604,7 +607,48 @@ const metricDefinitions = [
  * 90 days of per-scope daily cost and usage for the limits chart, with one
  * billing anomaly so the symlog axis is reviewable. Deterministic per scope.
  */
+/**
+ * Real usage pulled by `node scripts/fetch-demo-usage.mjs` (git-ignored).
+ * When present it replaces the synthetic series for every family it holds
+ * and for the account total; families it lacks fall back to the generator.
+ */
+type RealUsageFixture = { today: string; families: Record<string, { label: string; metrics: UsageSeriesResponse["metrics"]; series: UsageSeriesResponse["series"] }> };
+const realUsage: RealUsageFixture | null = (() => {
+  const file = join(dirname(fileURLToPath(import.meta.url)), "demo", "usage-series.json");
+  if (!existsSync(file)) return null;
+  try { return JSON.parse(readFileSync(file, "utf8")) as RealUsageFixture; } catch { return null; }
+})();
+
 function demoUsageSeries(scope: string): UsageSeriesResponse {
+  const real = realUsageSeries(scope);
+  if (real) return real;
+  return syntheticUsageSeries(scope);
+}
+
+function realUsageSeries(scope: string): UsageSeriesResponse | null {
+  if (!realUsage) return null;
+  const cycles = [-2, -1, 0, 1].map(offset => {
+    const date = new Date(now);
+    return { startsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1), endsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset + 1, 1), approximate: false };
+  });
+  const base = { resourceId: `real:${scope}`, found: true, today: realUsage.today, cycles };
+  if (scope === "account") {
+    const families = Object.values(realUsage.families);
+    const days = new Map<string, UsageSeriesResponse["series"][number]>();
+    for (const family of families) for (const point of family.series) {
+      const entry = days.get(point.day) ?? { day: point.day, costUsd: 0, metrics: {}, sealed: point.sealed };
+      entry.costUsd += point.costUsd;
+      for (const [id, value] of Object.entries(point.metrics)) entry.metrics[id] = (entry.metrics[id] ?? 0) + value;
+      days.set(point.day, entry);
+    }
+    return { ...base, scope, metrics: Object.assign({}, ...families.map(family => family.metrics)), series: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)) };
+  }
+  const family = realUsage.families[scope.replace(/^family:/, "")];
+  if (!family) return null;
+  return { ...base, scope, metrics: family.metrics, series: family.series };
+}
+
+function syntheticUsageSeries(scope: string): UsageSeriesResponse {
   const seed = [...scope].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7);
   const random = (index: number) => ((Math.sin(seed + index * 12.9898) * 43758.5453) % 1 + 1) % 1;
   const base = scope === "account" ? 42 : scope.startsWith("family:") ? 9 : 1.4;

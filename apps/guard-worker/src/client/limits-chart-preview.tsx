@@ -41,8 +41,12 @@ export function LimitsChartPreview() {
           data={{ accountId: "demo", complete: false, policy, families: [
             { family: "workers", label: "Workers", metrics: [], protection: "active" },
             { family: "durable_objects", label: "Durable Objects", metrics: [], protection: "active" },
-            { family: "kv", label: "KV", metrics: [], protection: "active" },
-            { family: "email", label: "Email", metrics: [], protection: "active" },
+            { family: "kv", label: "Workers KV", metrics: [], protection: "active" },
+            { family: "d1", label: "D1", metrics: [], protection: "active" },
+            { family: "r2", label: "R2", metrics: [], protection: "active" },
+            { family: "queues", label: "Queues", metrics: [], protection: "active" },
+            { family: "workers_ai", label: "Workers AI", metrics: [], protection: "active" },
+            { family: "vectorize", label: "Vectorize", metrics: [], protection: "active" },
           ], scopedAssets: [] }} />
       </section>
       <section className="mb-12 max-w-[900px] rounded-panel border border-line bg-panel p-8">

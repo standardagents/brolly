@@ -99,8 +99,17 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
 
   // Collapsed rows show the same defaults the chart would compute, so no
   // dimension sits at "–" until it is opened.
+  const costRef = useRef(cost);
+  costRef.current = cost;
   useEffect(() => {
     if (!data) return;
+    const costMissing = order.some(levelId => !Number.isFinite(costRef.current[levelId]))
+      && (window !== "cycle" || (!!costFloor && order.every(levelId => Number.isFinite(costFloor[levelId]))));
+    if (costMissing) {
+      const series = costSeries(data);
+      const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
+      onCostChange(defaultLevelValues(series, data.cycles, data.today, order, costRef.current, undefined, scaleFloor(costFloor), fromTolerance));
+    }
     const missing = metricIds.filter(id => order.some(levelId => !(Number.isFinite(usageRef.current[id]?.[levelId]))))
       .filter(id => window !== "cycle" || (!!usageFloor?.[id] && order.every(levelId => Number.isFinite(usageFloor[id]?.[levelId]))));
     if (!missing.length) return;
@@ -112,7 +121,7 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
     }
     publishUsage(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when data or the level order changes
-  }, [data, metricIds, order, usageFloor, tolerance, window]);
+  }, [data, metricIds, order, usageFloor, costFloor, tolerance, window]);
 
   // When the global tolerance changes, every map still sitting on the values
   // the previous tolerance produced follows it; edited maps stay put.
