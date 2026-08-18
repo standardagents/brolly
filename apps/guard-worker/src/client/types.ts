@@ -2,14 +2,53 @@ export type Severity = "info" | "warning" | "critical" | "emergency";
 export type IncidentStatus = "open" | "acknowledged";
 export type AssetTier = "control_plane" | "critical" | "standard" | "disposable" | "unclassified";
 
-export interface SpendLimits { warning: number; critical: number; emergency: number }
+/**
+ * Spend thresholds are keyed by the ordered alert-level IDs returned by the
+ * alert-level API. The fixed warning/critical/emergency shape remains only
+ * for raw threshold and estimate responses from the backend.
+ */
+export type SpendLimits = Record<string, number>;
+
+export interface FixedSpendLimits { warning: number; critical: number; emergency: number }
+
 export interface Threshold {
   metric: string; windowMs: number; warning?: number; critical?: number; emergency?: number;
   minimumBaselineSamples?: number; anomalyMultiplier?: number;
 }
+
+export type AlertEntryKind = "channel" | "prepare_stop" | "prepare_quarantine" | "auto_pause" | "auto_quarantine";
+
+export interface AlertLevelEntry {
+  id: string;
+  levelId: string;
+  kind: AlertEntryKind;
+  targetId: string | null;
+  repeatIntervalMs: number | null;
+  position: number;
+}
+
+export interface AlertLevel {
+  id: string;
+  position: number;
+  label: string;
+  entries: AlertLevelEntry[];
+}
+
+export interface AlertLevelsResponse { levels: AlertLevel[] }
+
+export type ProviderKind = "twilio" | "cloudflare_email" | "resend" | "postmark";
+
+export interface NotificationProvider {
+  kind: ProviderKind;
+  from: string;
+  updatedAt: number;
+}
+
+export type Provider = NotificationProvider;
+export interface ProvidersResponse { providers: NotificationProvider[] }
+
 export interface Policy {
   version: string;
-  mode: "observe" | "approval" | "automatic";
   accountDailySpend: SpendLimits;
   familyDailySpend: Record<string, SpendLimits>;
   assetDailySpend: Record<string, SpendLimits>;
@@ -26,7 +65,7 @@ export interface OnboardingData {
 
 export interface SuggestedBudget {
   observedUsd: number;
-  limits: SpendLimits;
+  limits: FixedSpendLimits;
   source: "analytics" | "billing";
   partial: boolean;
 }
@@ -37,7 +76,7 @@ export interface OnboardingBudgetEstimates {
   windowEndAt: number;
   cached: boolean;
   apiCalls: number;
-  headroom: { warning: number; critical: number; emergency: number };
+  headroom: FixedSpendLimits;
   account: SuggestedBudget | null;
   families: Record<string, SuggestedBudget>;
   assets: Record<string, SuggestedBudget>;
@@ -100,7 +139,8 @@ export interface ControlActionRow {
 export interface DashboardData {
   generatedAt: number;
   account: { id: string; timezone: string };
-  policy: { mode: Policy["mode"]; version: string; accountDailySpend: SpendLimits; familyDailySpend: Record<string, SpendLimits>; assetDailySpend: Record<string, SpendLimits> };
+  alertLevels?: AlertLevel[];
+  policy: { version: string; accountDailySpend: SpendLimits; familyDailySpend: Record<string, SpendLimits>; assetDailySpend: Record<string, SpendLimits> };
   summary: {
     openIncidents: number; acknowledgedIncidents: number; emergencyIncidents: number; criticalIncidents: number;
     coverageGaps: number; assets: number; lastCheckAt: number | null;
@@ -155,13 +195,13 @@ export interface ConfigurationData {
   namespaces: ConfigurationNamespace[];
 }
 
-export type NotificationKind = "discord" | "slack" | "webhook" | "resend" | "postmark" | "twilio";
+export type NotificationKind = "discord" | "slack" | "webhook" | "cloudflare_email" | "resend" | "postmark" | "twilio";
 export interface NotificationTarget {
   id: string;
   kind: NotificationKind;
   label: string | null;
+  providerId: string | null;
   enabled: boolean;
-  minimumSeverity: Severity;
   createdAt: number;
   updatedAt: number;
   lastDeliveryAt: number | null;
@@ -250,6 +290,7 @@ export interface UsageResponse {
 export interface AlertLineView {
   id: string;
   alertRuleId: string;
+  levelId: string;
   label: string;
   color: string;
   priority: number;
@@ -290,13 +331,13 @@ export interface AlertInstanceView {
   thresholdValue: number;
   evidence: Record<string, unknown>;
   dataQuality: DataQuality;
-  status: "open" | "silenced" | "expired" | "resolved";
+  status: "open" | "acknowledged" | "expired" | "resolved";
   firstBreachedAt: number;
   lastBreachedAt: number;
   nextNotificationAt: number | null;
   notificationCount: number;
-  silencedAt: number | null;
-  silencedBy: string | null;
+  acknowledgedAt: number | null;
+  acknowledgedBy: string | null;
   linkedActionId: string | null;
   historical: number;
   metricDefinitionId: string;

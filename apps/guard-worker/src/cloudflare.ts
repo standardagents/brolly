@@ -108,6 +108,15 @@ export class CloudflareClient {
     private readonly ledgerBudget?: LedgerRunBudget,
   ) {}
 
+  async zones(): Promise<Array<{ id: string; name: string }>> {
+    const listed = await this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`);
+    return listed.rows.flatMap(row => {
+      const id = stringValue(row.id);
+      const name = stringValue(row.name);
+      return id && name ? [{ id, name }] : [];
+    });
+  }
+
   async inventory(): Promise<{ assets: AssetRef[]; coverage: CoverageResult[] }> {
     const endpoints = [
       ["workers", `/accounts/${this.env.BROLLY_ACCOUNT_ID}/workers/scripts`, "resource"],

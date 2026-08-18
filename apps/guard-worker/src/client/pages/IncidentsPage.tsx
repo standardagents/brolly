@@ -1,16 +1,11 @@
 import { useEffect, useState } from "react";
 import { ActionDrawer, actionKindLabel } from "../components/ActionDrawer";
 import { IncidentDrawer } from "../components/IncidentDrawer";
-import { ActionStatePill, EmptyState, Icon, InfoTip, LinkButton, Panel, PanelHead, Pill, Segmented, SeverityBadge, Table, TableScroll, Td, Th, Tr, type Tone } from "../components/ui";
+import { ActionStatePill, EmptyState, Icon, InfoTip, LinkButton, Panel, PanelHead, Segmented, SeverityBadge, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 import { compactId, measurement, money, number, relativeTime } from "../format";
 import type { ControlActionRow, DashboardData, Incident } from "../types";
 
 type StatusFilter = "open" | "acknowledged" | "all";
-
-const MODE_TONE: Record<string, Tone> = {
-  approval: "warn",
-  automatic: "danger",
-};
 
 export function IncidentsPage({ data, token, onRefresh, focusIncidentId, onFocusHandled }: {
   data: DashboardData;
@@ -116,11 +111,6 @@ export function IncidentsPage({ data, token, onRefresh, focusIncidentId, onFocus
             </InfoTip>
           }
           sub="Open an action to inspect its impact, execute a prepared control, or restore service."
-          actions={
-            <Pill tone={MODE_TONE[data.policy.mode] ?? "neutral"} className="px-2.5 py-1.5 text-[12px] font-bold capitalize">
-              {data.policy.mode} mode
-            </Pill>
-          }
         />
         {data.actions.length ? (
           <TableScroll>

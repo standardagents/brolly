@@ -4,7 +4,7 @@ import { CloudflareClient } from "./cloudflare.js";
 import type { Env } from "./env.js";
 import { Store } from "./store.js";
 import { openJson } from "./credentials.js";
-import { AutomaticDeploymentLimitError, executeDeploymentFuseBatch } from "./control.js";
+import { AutomaticDeploymentLimitError, executeCloudflareControl, executeDeploymentFuseBatch, prepareCloudflareControl } from "./control.js";
 import { LedgerStore } from "./ledger-store.js";
 import { ingestWindow } from "./ingest.js";
 import { dispatchAlertNotifications, evaluateUsageAlerts } from "./alert-engine.js";
@@ -12,6 +12,7 @@ import { runRetentionMaintenance } from "./retention.js";
 import { runOneBackfillSlice } from "./backfill.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
+import { loadAlertLevels, resolveEffectiveEntries } from "./alert-levels.js";
 
 export interface CollectorWindowCursor<T> {
   startAt: number;
@@ -35,6 +36,7 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
   const holder = crypto.randomUUID();
   if (!await store.acquireLease("minute-monitor", holder, 55_000)) return;
   const automaticQueue = new Map<string, ControlAction[]>();
+  const automaticCloudflareActions: ControlAction[] = [];
   const startedAt = Date.now();
   const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
   const collectionEnd = Math.floor((startedAt - 2 * 60_000) / (5 * 60_000)) * 5 * 60_000;
@@ -51,7 +53,8 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
   if (!activeDue && !options.force) {
     const watched = await env.DB.prepare(
       `SELECT 1 AS present FROM alert_instances i JOIN alert_lines l ON l.id=i.alert_line_id
-       WHERE i.status='open' AND i.historical=0 AND i.period_end_at>?1 AND l.priority>=50 LIMIT 1`,
+       WHERE i.status='open' AND i.historical=0 AND i.period_end_at>?1
+         AND l.level_id IN (SELECT id FROM alert_levels ORDER BY position DESC LIMIT 2) LIMIT 1`,
     ).bind(startedAt).first<{ present: number }>();
     const watermark = await env.DB.prepare(
       `SELECT MIN(high_watermark_at) AS watermark FROM collector_state
@@ -165,6 +168,7 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     for (const action of alertResult.automaticActions) {
       const workerScript = String(action.rollback.workerScript ?? "");
       if (workerScript) automaticQueue.set(workerScript, [...(automaticQueue.get(workerScript) ?? []), action]);
+      else if (action.kind === "pause_consumer") automaticCloudflareActions.push(action);
     }
     await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "active", durableActiveWindow, durableObjects, now, collectionEnd);
     await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "correction", durableCorrectionWindow, durableCorrections, now);
@@ -186,6 +190,11 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
           now, budget: ledgerBudget,
         });
         await dispatchAlertNotifications(env, billingAlerts.notifications, ledgerBudget);
+        for (const action of billingAlerts.automaticActions) {
+          const workerScript = String(action.rollback.workerScript ?? "");
+          if (workerScript) automaticQueue.set(workerScript, [...(automaticQueue.get(workerScript) ?? []), action]);
+          else if (action.kind === "pause_consumer") automaticCloudflareActions.push(action);
+        }
         await store.saveCoverage([{
           family: "billing", metric: "authoritative_usage", finestScope: "account",
           state: billing.coverage[0]?.state ?? "unavailable", checkedAt: now,
@@ -258,6 +267,7 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
       await store.saveSamples(durableObjects.samples.filter(sample => retainedIds.has(sample.asset.id)));
     }
     await coverageIncidents(store, [...inventory.coverage, ...durableObjects.coverage, ...workers.coverage], env, automaticQueue);
+    await flushAutomaticCloudflareControls(store, env, automaticCloudflareActions);
     await flushAutomaticFuses(store, env, automaticQueue);
     while (ledgerBudget.remaining("backfillSlices") > 0 && ledgerBudget.remaining("wallMs") >= 8_000) {
       const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
@@ -388,12 +398,14 @@ async function cleanupControlPlaneHistory(db: D1Database, budget: RunBudget, now
 
 async function handleEvaluation(store: Store, evaluation: Evaluation, dailySummary = false, env?: Env, automaticQueue?: Map<string, ControlAction[]>): Promise<void> {
   const { incident, notify: shouldSend } = await store.recordEvaluation(evaluation);
-  if (!shouldSend) return;
-  const targets = await store.listNotificationTargets();
+  if (!shouldSend || !env) return;
+  const levels = await loadAlertLevels(env.DB);
+  const firingPosition = dailySummary || incident.severity === "emergency" ? levels.length - 1
+    : incident.severity === "critical" ? Math.max(0, levels.length - 2)
+      : 0;
+  const effective = resolveEffectiveEntries(levels, firingPosition);
+  const targets = await store.listNotificationTargets(effective.channels.map(channel => channel.targetId));
   await Promise.allSettled(targets.slice(0, 10).map(async row => {
-    const severityRank = { info: 0, warning: 1, critical: 2, emergency: 3 } as const;
-    const minimum = String(row.minimum_severity ?? "warning") as keyof typeof severityRank;
-    if (!dailySummary && severityRank[incident.severity] < (severityRank[minimum] ?? 1)) return;
     if (!await store.notificationAllowed(String(row.id), String(row.kind))) return;
     const config = env?.BROLLY_CREDENTIAL_KEY
       ? await openJson<Omit<NotificationTarget, "id" | "kind" | "enabled">>(String(row.config_json), env.BROLLY_CREDENTIAL_KEY)
@@ -432,6 +444,39 @@ async function coverageIncidents(store: Store, coverage: CoverageResult[], env: 
     }
   }
   await store.saveCoverage(missing);
+}
+
+async function flushAutomaticCloudflareControls(store: Store, env: Env, queued: ControlAction[]): Promise<void> {
+  const actions = [...new Map(queued.map(action => [action.id, action])).values()].slice(0, 5);
+  for (const action of actions) {
+    if (action.kind !== "pause_consumer" || !await store.claimActionState(action.id, "prepared", "running")) continue;
+    const current = await env.DB.prepare(
+      `SELECT tier,excluded,auto_quarantine_policy FROM resources
+       WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+       ORDER BY last_seen_at DESC LIMIT 1`,
+    ).bind(action.asset.accountId, action.asset.family, action.asset.id)
+      .first<{ tier: string; excluded: number; auto_quarantine_policy: string }>();
+    if (!current || Number(current.excluded) === 1 || current.auto_quarantine_policy === "deny"
+      || ["control_plane", "critical", "unclassified"].includes(current.tier)) {
+      await store.setActionState(action.id, "failed", "The resource protection policy changed before automatic control");
+      await store.audit("brolly-policy", "action.pause.refused", action.id, { family: action.asset.family, assetId: action.asset.id });
+      continue;
+    }
+    await store.audit("brolly-policy", "action.pause.start", action.id, { family: action.asset.family, assetId: action.asset.id });
+    try {
+      const rollback = await prepareCloudflareControl(env, action);
+      action.rollback = rollback;
+      await env.DB.prepare(`UPDATE actions SET rollback_json=?2,updated_at=?3 WHERE id=?1`).bind(action.id, JSON.stringify(rollback), Date.now()).run();
+      await store.audit("brolly-policy", "action.rollback_snapshot", action.id, rollback);
+      await executeCloudflareControl(env, action);
+      await store.setActionState(action.id, "succeeded");
+      await store.audit("brolly-policy", "action.pause.succeeded", action.id, { family: action.asset.family, assetId: action.asset.id });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await store.setActionState(action.id, "failed", message);
+      await store.audit("brolly-policy", "action.pause.failed", action.id, { error: message });
+    }
+  }
 }
 
 async function flushAutomaticFuses(store: Store, env: Env, queue: Map<string, ControlAction[]>): Promise<void> {

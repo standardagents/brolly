@@ -7,7 +7,7 @@ import { compactId, measurement, money, relativeTime } from "../format";
 import type { ConnectionHealth } from "../lib/health";
 import { categoryColor } from "../lib/meta";
 import type { Route } from "../router";
-import type { ConfigurationData, DashboardData, Incident } from "../types";
+import type { AlertLevel, ConfigurationData, DashboardData, Incident, SpendLimits } from "../types";
 
 export function OverviewPage({ data, connection, token, scanError, scanSummary, onNavigate, onOpenIncident, onBudgets }: {
   data: DashboardData;
@@ -117,8 +117,12 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
               <tbody>
                 {data.spend.categories.length ? data.spend.categories.map(category => {
                   const limits = data.policy.familyDailySpend[category.family];
-                  const used = limits ? Math.min(1, category.estimatedUsd / Math.max(limits.emergency, 0.01)) : 0;
-                  const tone = !limits ? "neutral" : category.estimatedUsd >= limits.critical ? "danger" : category.estimatedUsd >= limits.warning ? "warning" : "good";
+                  const levels = limits ? spendLevels(data, limits) : [];
+                  const highest = levels[levels.length - 1];
+                  const highestValue = highest ? limits?.[highest.id] ?? 0 : 0;
+                  const crossed = limits ? levels.reduce((index, level, levelIndex) => category.estimatedUsd >= (limits[level.id] ?? Number.POSITIVE_INFINITY) ? levelIndex : index, -1) : -1;
+                  const used = limits ? Math.min(1, category.estimatedUsd / Math.max(highestValue, 0.01)) : 0;
+                  const tone = !limits ? "neutral" : crossed === levels.length - 1 && crossed >= 0 ? "danger" : crossed >= 0 ? "warning" : "good";
                   return (
                     <tr key={category.family}>
                       <td className="border-t border-line-soft py-2">
@@ -134,7 +138,7 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
                       <td className="min-w-[108px] border-t border-line-soft py-2 text-right whitespace-nowrap tabular-nums">
                         {limits ? (
                           <span className="inline-flex flex-col items-end gap-[3px] text-[12px] text-faint">
-                            <span>{money(limits.emergency)}</span>
+                            <span>{highest ? `${money(highestValue)} ${highest.label}` : "Unset"}</span>
                             <i aria-hidden="true" className="block h-1 w-[84px] overflow-hidden rounded-[3px] bg-line-soft">
                               <b className={`block h-full rounded-[3px] ${METER_FILL[tone]}`} style={{ width: `${Math.max(3, used * 100)}%` }} />
                             </i>
@@ -374,4 +378,10 @@ function buildAttentionQueue(data: DashboardData) {
     incidents: data.incidents.filter(incident => incident.status === "open").slice(0, 6),
     failedActions: data.actions.filter(action => action.state === "failed").slice(0, 3),
   };
+}
+
+function spendLevels(data: DashboardData, limits: SpendLimits): AlertLevel[] {
+  return data.alertLevels?.length
+    ? data.alertLevels
+    : Object.keys(limits).map((id, position) => ({ id, position, label: id, entries: [] }));
 }

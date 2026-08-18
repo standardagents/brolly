@@ -66,7 +66,7 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
   return {
     generatedAt: now,
     account: { id: env.BROLLY_ACCOUNT_ID, timezone: env.BROLLY_TIMEZONE ?? "UTC" },
-    policy: { mode: policy.mode, version: policy.version, accountDailySpend: policy.accountDailySpend, familyDailySpend: policy.familyDailySpend ?? DEFAULT_FAMILY_DAILY_SPEND, assetDailySpend: policy.assetDailySpend ?? {} },
+    policy: { version: policy.version, accountDailySpend: policy.accountDailySpend, familyDailySpend: policy.familyDailySpend ?? DEFAULT_FAMILY_DAILY_SPEND, assetDailySpend: policy.assetDailySpend ?? {} },
     summary: {
       openIncidents: incidents.filter(item => item.status === "open").length,
       acknowledgedIncidents: statusCounts.acknowledged ?? 0,

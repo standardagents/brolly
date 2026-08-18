@@ -34,8 +34,6 @@ const CALLOUT_ORANGE_SMALL = "mt-0.5 text-[#bda996] light:text-[#786657]";
 const NUMBERED_LI = "flex gap-3.5 border-t border-[#23282e] py-[17px] light:border-[#e2e5e8]";
 const NUMBERED_B = "grid size-[27px] flex-none place-items-center rounded-full bg-orange text-white text-[11px] light:bg-orange light:text-white";
 const NUMBERED_P = "text-[13px] leading-[1.6] text-[#8f99a4] light:text-[#626c78]";
-const MODE_ROW = "grid grid-cols-[128px_1fr] items-center gap-[15px] border-b border-[#252a31] bg-[#161a20] px-[15px] py-3.5 text-[13px] text-[#a4aeb9] last:border-b-0 light:border-[#e4e8ec] light:bg-white light:text-[#5f6874] max-[680px]:grid-cols-1 max-[680px]:gap-2";
-const MODE_CHIP = "w-max rounded px-[7px] py-1 text-[10px] uppercase";
 const PANEL_CARD = "rounded-lg border border-[#293038] bg-[#14181d] p-4 light:border-[#dce1e5] light:bg-white";
 const CHECKS_LI = "flex items-start gap-[11px] border-t border-[#242a30] py-[13px] leading-[1.55] text-[#9da7b2] light:border-[#dfe3e7] light:text-[#5f6874]";
 const CHECKS_STRONG = "text-[#edf0f3] light:text-[#181a1d]";
@@ -126,8 +124,8 @@ export function App() {
           <p className="mt-[18px] mb-[42px] max-w-[680px] text-[17px] leading-[1.65] text-muted">Brolly retains daily account, product, namespace, Worker, and individual-resource history in your D1 database. Eligible Workers and Durable Objects support audited reversible quarantine.</p>
           <div className="grid grid-cols-4 gap-3 max-[960px]:grid-cols-2 max-[680px]:grid-cols-1">
             <Card number="01" icon={<Radar className="size-11 text-orange" />} title="Explore stored usage">Drill from account totals into products, namespaces, Workers, exact object IDs, metrics, and daily evidence quality.</Card>
-            <Card number="02" icon={<Alert className="size-11 text-orange" />} title="Set explicit limits">Create Warning, Emergency, and custom threshold lines for account-local days or Cloudflare billing cycles.</Card>
-            <Card number="03" icon={<Shield className="size-11 text-orange" />} title="Quarantine exact runaways">Reviewed actions and explicitly enabled automation can quarantine affected Workers and Durable Objects after eligible breaches.</Card>
+            <Card number="02" icon={<Alert className="size-11 text-orange" />} title="Set explicit limits">Create ordered alert levels with per-level thresholds for account-local days or Cloudflare billing cycles.</Card>
+            <Card number="03" icon={<Shield className="size-11 text-orange" />} title="Contain exact runaways">Prepare or Auto entries can contain eligible Workers, Durable Objects, and Queues after a qualified breach.</Card>
             <Card number="04" icon={<Refresh className="size-11 text-orange" />} title="Restore quarantined objects">Restore quarantined objects after fixes are applied. Brolly preserves the resource, storage, messages, and history with no data loss.</Card>
           </div>
         </section>
@@ -150,9 +148,9 @@ export function App() {
                 <li className={NUMBERED_LI}><b className={NUMBERED_B}>1</b><span><strong className="mb-[3px] block">Deploy to Cloudflare.</strong><p className={NUMBERED_P}>Choose your Cloudflare account and a name for the Brolly Worker, then click Deploy.</p></span></li>
                 <li className={NUMBERED_LI}><b className={NUMBERED_B}>2</b><span><strong className="mb-[3px] block">Open Brolly and sign in.</strong><p className={NUMBERED_P}>Visit the private Brolly URL created for you and authorize the Cloudflare account you want it to protect.</p></span></li>
                 <li className={NUMBERED_LI}><b className={NUMBERED_B}>3</b><span><strong className="mb-[3px] block">Review what Brolly found.</strong><p className={NUMBERED_P}>See your Workers, Durable Object namespaces, individual objects, current usage, and any monitoring gaps.</p></span></li>
-                <li className={NUMBERED_LI}><b className={NUMBERED_B}>4</b><span><strong className="mb-[3px] block">Choose your protection.</strong><p className={NUMBERED_P}>Set resource limits, review automatic-control eligibility, and connect chat, email, SMS, or webhook alerts.</p></span></li>
+                <li className={NUMBERED_LI}><b className={NUMBERED_B}>4</b><span><strong className="mb-[3px] block">Choose your protection.</strong><p className={NUMBERED_P}>Connect labeled channels, arrange alert levels, set per-level limits, and review action eligibility.</p></span></li>
               </ol>
-              <div className={CALLOUT_ORANGE}><span className="flex items-center gap-[11px]"><Check className="text-orange" /><span className="flex flex-col"><strong>You are ready to protect your account</strong><small className={CALLOUT_ORANGE_SMALL}>Start in observe mode, confirm the readings and limits, then enable approval or automatic quarantine when you are comfortable.</small></span></span></div>
+              <div className={CALLOUT_ORANGE}><span className="flex items-center gap-[11px]"><Check className="text-orange" /><span className="flex flex-col"><strong>You are ready to protect your account</strong><small className={CALLOUT_ORANGE_SMALL}>Review your channel delivery, alert-level entries, limits, and runtime evidence before using Auto actions.</small></span></span></div>
               <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>How do updates work?</strong> Save the GitHub repository name in Settings. While you use Brolly, it checks at most hourly and shows a banner for new releases. The button runs a repo-local workflow that opens a pull request for you to review; it never silently deploys. Private repositories work normally, no GitHub token is stored in Brolly, and your D1 binding, variables, and secrets are preserved.</p></div>
               <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>Who can sign in later?</strong> A Cloudflare member who can authorize Brolly's requested scopes for the bound account may sign in. A user who authorizes a different account is rejected. Changing accounts requires deliberately resetting the installation's D1 binding or deploying a new instance; the latest successful authorization supplies the revocable Cloudflare grant Brolly uses for monitoring and controls.</p></div>
               <div className={CALLOUT}><Info className="mt-0.5 text-[#909aa5]" /><p className={CALLOUT_P}><strong className={CALLOUT_STRONG}>What passes through Brolly's login service?</strong> Only the one-time Cloudflare authorization result. The separate stateless relay verifies the requesting installation, returns the short-lived code to that exact deployment, and never receives the access or refresh token stored in your D1 database.</p></div>
@@ -161,11 +159,11 @@ export function App() {
 
             <section className="py-[70px] first:border-t-0 border-t border-line max-[680px]:py-[55px]" id="limits">
               <h2 className={DOCS_H2}>Set period limits throughout the resource hierarchy</h2>
-              <p className={DOCS_P}>Define Warning, Emergency, and custom lines for account, product, Worker, Durable Object namespace, and exact-object targets. Daily limits use the account timezone; cycle limits use reconciled Cloudflare boundaries.</p>
-              <div className="my-[26px] overflow-hidden rounded-[9px] border border-[#2a3037] light:border-[#dce1e5]" role="table" aria-label="Brolly protection modes">
-                <div className={MODE_ROW} role="row"><b role="cell" className={`${MODE_CHIP} bg-[#25303a] text-[#a8c1d7] light:bg-[#e4edf5] light:text-[#365b78]`}>Observe</b><span role="cell">Detect and notify. Never prepare or execute a stop.</span></div>
-                <div className={MODE_ROW} role="row"><b role="cell" className={`${MODE_CHIP} bg-[#3a2c18] text-[#ecc07a] light:bg-[#f7ead2] light:text-[#7c5109]`}>Approval</b><span role="cell">Prepare a reversible action; a person explicitly executes it.</span></div>
-                <div className={MODE_ROW} role="row"><b role="cell" className={`${MODE_CHIP} bg-[#442020] text-[#ff9c96] light:bg-[#f9e0de] light:text-[#9e302b]`}>Automatic</b><span role="cell">Act after the configured confirmation window with complete fresh usage, verified controls, and explicit rule opt-in.</span></div>
+              <p className={DOCS_P}>Define one threshold for each current alert level across account, product, Worker, Durable Object namespace, and exact-object targets. Daily limits use the account timezone; cycle limits use reconciled Cloudflare boundaries.</p>
+              <div className="my-[26px] grid gap-2.5 sm:grid-cols-3">
+                <article className={PANEL_CARD}><Alert className="text-[#9bc8ff]" /><strong className="mt-3 mb-1 block">Additive levels</strong><p className="text-[12.5px] leading-[1.55] text-[#8b96a1] light:text-[#626c78]">A firing level includes channel and action entries from every level before it.</p></article>
+                <article className={PANEL_CARD}><Refresh className="text-[#ecc07a]" /><strong className="mt-3 mb-1 block">Prepared actions</strong><p className="text-[12.5px] leading-[1.55] text-[#8b96a1] light:text-[#626c78]">Prepare entries create an audited action for operator approval.</p></article>
+                <article className={PANEL_CARD}><Shield className="text-[#ff9c96]" /><strong className="mt-3 mb-1 block">Auto actions</strong><p className="text-[12.5px] leading-[1.55] text-[#8b96a1] light:text-[#626c78]">Auto entries require fresh evidence, eligible resources, and verified runtime controls.</p></article>
               </div>
             </section>
 
@@ -187,11 +185,11 @@ export function App() {
 
             <section className="py-[70px] first:border-t-0 border-t border-line max-[680px]:py-[55px]" id="notifications">
               <h2 className={DOCS_H2}>Wake the people who can respond</h2>
-              <p className={DOCS_P}>Configure Discord, Slack, Resend, Postmark, Twilio SMS, or a generic HTTPS webhook with independent minimum severity, pause controls, encryption, and delivery-rate limits.</p>
+              <p className={DOCS_P}>Configure Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, or a generic HTTPS webhook with labeled destinations, reusable provider accounts, encryption, and delivery-rate limits.</p>
               <div className="my-7 grid grid-cols-3 gap-2.5 max-[680px]:grid-cols-1">
                 <Channel image="discord" title="Discord">Structured incident webhooks</Channel>
                 <Channel image="slack" title="Slack">Incoming webhook summaries</Channel>
-                <Channel image="twilio" title="Email, SMS, and webhooks">Resend, Postmark, Twilio, and generic HTTPS delivery</Channel>
+                <Channel image="twilio" title="Email, SMS, and webhooks">Cloudflare Email, Resend, Postmark, Twilio, and generic HTTPS delivery</Channel>
               </div>
             </section>
 

@@ -19,18 +19,18 @@ describe("RunBudget", () => {
 });
 
 describe("policy", () => {
-  it("prepares a reversible stop at the default emergency threshold", () => {
+  it("reports the default emergency threshold for level-driven dispatch", () => {
     const result = evaluateSample(
       { asset, metric: "rows_read", unit: "rows", value: 5_000_000, start: 0, end: 300_000, source: "graphql" },
       DEFAULT_POLICY.thresholds[0]!, [], DEFAULT_POLICY,
     );
-    expect(result).toMatchObject({ severity: "emergency", action: "prepare_stop" });
+    expect(result).toMatchObject({ severity: "emergency", action: "notify" });
   });
 
   it("never auto-stops a control-plane asset", () => {
     const result = evaluateSample(
       { asset: { ...asset, tier: "control_plane" }, metric: "rows_read", unit: "rows", value: 9_000_000, start: 0, end: 300_000, source: "graphql" },
-      DEFAULT_POLICY.thresholds[0]!, [], { ...DEFAULT_POLICY, mode: "automatic" },
+      DEFAULT_POLICY.thresholds[0]!, [], DEFAULT_POLICY,
     );
     expect(result?.action).toBe("notify");
   });
@@ -41,16 +41,16 @@ describe("policy", () => {
       { asset, metric: "projected_daily_cost_usd", unit: "usd", value: 5, start: 0, end: 86_400_000, source: "graphql" },
       threshold, [], DEFAULT_POLICY,
     );
-    expect(result).toMatchObject({ severity: "emergency", action: "prepare_stop", observed: 5 });
+    expect(result).toMatchObject({ severity: "emergency", action: "notify", observed: 5 });
   });
 
-  it("never auto-stops from an estimated dollar projection alone", () => {
+  it("leaves projected dollar actions to the configured level board", () => {
     const threshold = DEFAULT_POLICY.thresholds.find(item => item.metric === "projected_daily_cost_usd")!;
     const result = evaluateSample(
       { asset, metric: "projected_daily_cost_usd", unit: "usd", value: 50, start: 0, end: 86_400_000, source: "graphql" },
-      threshold, [], { ...DEFAULT_POLICY, mode: "automatic" },
+      threshold, [], DEFAULT_POLICY,
     );
-    expect(result).toMatchObject({ severity: "emergency", action: "prepare_stop" });
+    expect(result).toMatchObject({ severity: "emergency", action: "notify" });
   });
 
   it("uses the product-family daily budget for account-level spend", () => {

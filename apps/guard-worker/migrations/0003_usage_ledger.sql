@@ -283,6 +283,7 @@ CREATE INDEX IF NOT EXISTS idx_alert_rules_metric ON alert_rules(account_id,metr
 CREATE TABLE IF NOT EXISTS alert_lines (
   id TEXT PRIMARY KEY,
   alert_rule_id TEXT NOT NULL,
+  level_id TEXT,
   label TEXT NOT NULL COLLATE NOCASE,
   color TEXT NOT NULL,
   priority INTEGER NOT NULL,
@@ -294,7 +295,8 @@ CREATE TABLE IF NOT EXISTS alert_lines (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY(alert_rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE,
-  UNIQUE(alert_rule_id,label)
+  FOREIGN KEY(level_id) REFERENCES alert_levels(id) ON DELETE SET NULL,
+  UNIQUE(alert_rule_id,level_id)
 );
 CREATE INDEX IF NOT EXISTS idx_alert_lines_rule ON alert_lines(alert_rule_id,enabled,priority);
 
@@ -309,13 +311,13 @@ CREATE TABLE IF NOT EXISTS alert_instances (
   threshold_value REAL NOT NULL,
   evidence_json TEXT NOT NULL DEFAULT '{}',
   data_quality TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','silenced','expired','resolved')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','expired','resolved')),
   first_breached_at INTEGER NOT NULL,
   last_breached_at INTEGER NOT NULL,
   next_notification_at INTEGER,
   notification_count INTEGER NOT NULL DEFAULT 0,
-  silenced_at INTEGER,
-  silenced_by TEXT,
+  acknowledged_at INTEGER,
+  acknowledged_by TEXT,
   linked_action_id TEXT,
   historical INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY(alert_rule_id) REFERENCES alert_rules(id),

@@ -14,9 +14,9 @@ import { notify, type NotificationTarget } from "@standardagents/brolly-notifier
 import { openJson } from "./credentials.js";
 import type { Env } from "./env.js";
 import type { AccumulatorChange } from "./ledger-accumulator.js";
+import { loadAlertLevels, resolveEffectiveEntries, type EffectiveLevelConfiguration } from "./alert-levels.js";
 
 const MAX_BATCH = 100;
-const DEFAULT_EMERGENCY_REPEAT_MS = 6 * 60 * 60_000;
 
 interface RuleLineRow {
   rule_id: string;
@@ -64,13 +64,15 @@ interface InstanceRow extends RuleLineRow, ResourceRow {
   observed_value: number;
   instance_threshold: number;
   data_quality: DataQualityState;
-  status: "open" | "silenced" | "expired" | "resolved";
+  status: "open" | "acknowledged" | "expired" | "resolved";
   first_breached_at: number;
   last_breached_at: number;
   next_notification_at: number | null;
   notification_count: number;
   historical: number;
   evidence_json: string;
+  period_start_at: number;
+  period_end_at: number;
 }
 
 export interface AlertNotification {
@@ -83,8 +85,8 @@ export interface AlertNotification {
   threshold: number;
   metricDefinitionId: string;
   resource: Resource;
-  notificationTargetIds: string[];
-  repeatIntervalMs: number | null;
+  severity: "warning" | "critical" | "emergency";
+  targets: Array<{ targetId: string; repeatIntervalMs: number | null }>;
 }
 
 export interface AlertEvaluationResult {
@@ -108,7 +110,7 @@ export async function evaluateUsageAlerts(
 ): Promise<AlertEvaluationResult> {
   if (!changes.length) return { notifications: [], automaticActions: [], breached: 0 };
   const now = context.now ?? Date.now();
-  const controlMode = await loadControlMode(env.DB, context.budget);
+  const alertLevels = await loadAlertLevels(env.DB);
   const metricIds = [...new Set(changes.map(change => change.metricDefinitionId))];
   const ruleLines = await loadRuleLines(env.DB, env.BROLLY_ACCOUNT_ID, metricIds, context.budget);
   if (!ruleLines.length) return { notifications: [], automaticActions: [], breached: 0 };
@@ -164,50 +166,76 @@ export async function evaluateUsageAlerts(
         ));
       } else {
         statements.push(env.DB.prepare(
-          `UPDATE alert_instances SET status='resolved',last_breached_at=?6
+          `UPDATE alert_instances SET status='resolved',last_breached_at=?6,next_notification_at=NULL
            WHERE alert_rule_id=?1 AND alert_line_id=?2 AND target_resource_id=?3
-             AND period_start_at=?4 AND period_end_at=?5 AND status='open'`,
+             AND period_start_at=?4 AND period_end_at=?5 AND status IN ('open','acknowledged')`,
         ).bind(rule.rule_id, rule.line_id, resource.id, bounds.start, bounds.end, now));
       }
     }
   }
   statements.push(env.DB.prepare(
     `UPDATE alert_instances SET status='expired',next_notification_at=NULL
-     WHERE period_end_at<=?1 AND status IN ('open','silenced')`,
+     WHERE period_end_at<=?1 AND status IN ('open','acknowledged')`,
   ).bind(now));
   await runBatches(env.DB, statements, context.budget);
   if (!breachedIds.size) return { notifications: [], automaticActions: [], breached: 0 };
   const instances = (await loadBreachedInstances(env.DB, env.BROLLY_ACCOUNT_ID, now, context.budget))
     .filter(instance => breachedIds.has(instance.instance_id));
-  const notifications = instances.filter(instance => alertInstanceCanNotify(
-    instance.status, instance.historical === 1, instance.next_notification_at, now,
-  )).map(notificationFromRow);
+  const firingInstances = selectHighestFiringInstances(instances);
+  const notifications: AlertNotification[] = [];
   const automaticActions: ControlAction[] = [];
-  for (const instance of instances) {
-    const action = await prepareExactRuleAction(env.DB, instance, now, controlMode, context.budget);
+  for (const instance of firingInstances) {
+    const effective = resolveEffectiveEntries(alertLevels, Math.floor(instance.priority / 10));
+    if (alertInstanceCanNotify(instance.status, instance.historical === 1, instance.next_notification_at, now) && effective.channels.length) {
+      notifications.push(notificationFromRow(instance, effective.channels, alertLevels.length));
+    }
+    const action = await prepareExactRuleAction(env.DB, instance, now, actionMode(instance.product_family, effective), context.budget);
     if (action) automaticActions.push(action);
-    const contributorAction = await prepareAggregateContributorAction(env.DB, instance, changes, resources, now, controlMode, context.budget);
+    const contributorAction = await prepareAggregateContributorAction(env.DB, instance, changes, resources, now, effective, context.budget);
     if (contributorAction) automaticActions.push(contributorAction);
   }
   return { notifications, automaticActions, breached: instances.length };
 }
 
+export function selectHighestFiringInstances<T extends {
+  rule_id: string; target_resource_id: string | null; id: string; period_start_at: number; period_end_at: number; priority: number;
+}>(instances: T[]): T[] {
+  const selected = new Map<string, T>();
+  for (const instance of instances) {
+    const key = [instance.rule_id, instance.target_resource_id ?? instance.id, instance.period_start_at, instance.period_end_at].join("\u0000");
+    const current = selected.get(key);
+    if (!current || instance.priority > current.priority) selected.set(key, instance);
+  }
+  return [...selected.values()];
+}
+
 export async function dispatchAlertNotifications(env: Env, pending: AlertNotification[], budget?: LedgerRunBudget): Promise<void> {
   for (const item of pending.slice(0, 100)) {
-    const targets = await notificationTargets(env.DB, item.notificationTargetIds, budget);
-    let delivered = false;
+    const now = Date.now();
+    const configured = new Map(item.targets.map(target => [target.targetId, target]));
+    const targets = await notificationTargets(env.DB, item.targets.map(target => target.targetId), budget);
+    const nextTimes: number[] = [];
+    let deliveredCount = 0;
     for (const row of targets) {
-      if (!severityAllowed(item.lineLabel, Number(item.priority), String(row.minimum_severity))) continue;
-      if (!await notificationDeliveryAllowed(env.DB, String(row.id), String(row.kind), Date.now(), budget)) continue;
+      const schedule = configured.get(String(row.id));
+      if (!schedule) continue;
+      const previous = await latestAlertDelivery(env.DB, String(row.id), item.instanceId, budget);
+      const dueAt = notificationDueAt(previous, schedule.repeatIntervalMs, now);
+      if (dueAt === null) continue;
+      if (dueAt > now) { nextTimes.push(dueAt); continue; }
+      if (!await notificationDeliveryAllowed(env.DB, String(row.id), String(row.kind), now, budget)) {
+        nextTimes.push(now + 15 * 60_000);
+        continue;
+      }
       const config = env.BROLLY_CREDENTIAL_KEY
         ? await openJson<Omit<NotificationTarget, "id" | "kind" | "enabled">>(String(row.config_json), env.BROLLY_CREDENTIAL_KEY)
         : JSON.parse(String(row.config_json)) as Omit<NotificationTarget, "id" | "kind" | "enabled">;
       const incident = {
         id: item.instanceId, key: item.instanceId, asset: assetFromResource(item.resource),
-        metric: item.metricDefinitionId, severity: alertSeverity(item.lineLabel, item.priority),
+        metric: item.metricDefinitionId, severity: item.severity,
         observed: item.observed, threshold: item.threshold,
         reason: `${item.lineLabel} threshold crossed for ${item.metricDefinitionId}`,
-        action: "notify" as const, status: "open" as const, firstSeen: Date.now(), lastSeen: Date.now(), occurrences: 1,
+        action: "notify" as const, status: "open" as const, firstSeen: now, lastSeen: now, occurrences: 1,
       };
       const result = await notify({
         ...config, id: String(row.id), kind: row.kind as NotificationTarget["kind"], enabled: true,
@@ -218,21 +246,47 @@ export async function dispatchAlertNotifications(env: Env, pending: AlertNotific
          ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?3)`,
       ).bind(
         crypto.randomUUID(), row.id, item.instanceId, row.kind, result.ok ? 1 : 0,
-        result.status ?? null, result.error?.slice(0, 2000) ?? null, Date.now(),
+        result.status ?? null, result.error?.slice(0, 2000) ?? null, now,
       ).run();
       chargeMeta(budget, delivery.meta);
-      delivered ||= result.ok;
+      if (result.ok) deliveredCount += 1;
+      const next = result.ok
+        ? schedule.repeatIntervalMs === null ? null : now + schedule.repeatIntervalMs
+        : now + 15 * 60_000;
+      if (next !== null) nextTimes.push(next);
     }
-    const next = delivered
-      ? item.repeatIntervalMs === null ? null : Date.now() + item.repeatIntervalMs
-      : Date.now() + 15 * 60_000;
+    const next = nextTimes.length ? Math.min(...nextTimes) : null;
     const updated = await env.DB.prepare(
       `UPDATE alert_instances SET
          notification_count=notification_count+?2,next_notification_at=?3
-       WHERE id=?1 AND status='open'`,
-    ).bind(item.instanceId, delivered ? 1 : 0, next).run();
+       WHERE id=?1 AND status='open' AND acknowledged_at IS NULL`,
+    ).bind(item.instanceId, deliveredCount, next).run();
     chargeMeta(budget, updated.meta);
   }
+}
+
+export function notificationDueAt(
+  previous: { ok: boolean; createdAt: number } | null,
+  repeatIntervalMs: number | null,
+  now: number,
+): number | null {
+  if (!previous) return now;
+  if (!previous.ok) return previous.createdAt + 15 * 60_000;
+  return repeatIntervalMs === null ? null : previous.createdAt + repeatIntervalMs;
+}
+
+async function latestAlertDelivery(
+  db: D1Database,
+  targetId: string,
+  instanceId: string,
+  budget?: LedgerRunBudget,
+): Promise<{ ok: boolean; createdAt: number } | null> {
+  const row = await db.prepare(
+    `SELECT ok,created_at FROM notification_deliveries
+     WHERE target_id=?1 AND alert_instance_id=?2 ORDER BY created_at DESC LIMIT 1`,
+  ).bind(targetId, instanceId).first<{ ok: number; created_at: number }>();
+  budget?.charge("d1RowsRead", row ? 1 : 0);
+  return row ? { ok: Number(row.ok) === 1, createdAt: Number(row.created_at) } : null;
 }
 
 export async function notificationDeliveryAllowed(
@@ -252,16 +306,16 @@ export async function notificationDeliveryAllowed(
   return Number(result?.hourly ?? 0) < 20 && (kind !== "twilio" || Number(result?.daily ?? 0) < 5);
 }
 
-export async function silenceAlertInstance(db: D1Database, instanceId: string, actor: string): Promise<boolean> {
+export async function acknowledgeAlertInstance(db: D1Database, instanceId: string, actor: string): Promise<boolean> {
   const now = Date.now();
   const result = await db.prepare(
-    `UPDATE alert_instances SET status='silenced',silenced_at=?2,silenced_by=?3,next_notification_at=NULL
+    `UPDATE alert_instances SET status='acknowledged',acknowledged_at=?2,acknowledged_by=?3,next_notification_at=NULL
      WHERE id=?1 AND status='open'`,
   ).bind(instanceId, now, actor).run();
   if (Number(result.meta.changes ?? 0) !== 1) return false;
   await db.prepare(
     `INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
-     VALUES(?1,?2,'alert_instance.silence',?3,'{}',?4)`,
+     VALUES(?1,?2,'alert_instance.acknowledge',?3,'{}',?4)`,
   ).bind(crypto.randomUUID(), actor, instanceId, now).run();
   return true;
 }
@@ -270,10 +324,10 @@ async function prepareExactRuleAction(
   db: D1Database,
   instance: InstanceRow,
   now: number,
-  controlMode: "observe" | "approval" | "automatic",
+  controlMode: "prepare" | "auto" | null,
   budget?: LedgerRunBudget,
 ): Promise<ControlAction | null> {
-  if (controlMode === "observe" || instance.line_action !== "quarantine" || instance.target_resource_id !== instance.id) return null;
+  if (!controlMode || instance.target_resource_id !== instance.id) return null;
   const resource = resourceFromRow(instance);
   if (!manualActionEligible(resource, instance)) return null;
   const metadata = resource.metadata;
@@ -284,7 +338,7 @@ async function prepareExactRuleAction(
   const parentDenied = await hasDeniedAncestor(db, resource.id, budget);
   if (parentDenied) return null;
   const evidence = parseEvidence(instance.evidence_json);
-  const automatic = controlMode === "automatic" && instance.auto_quarantine === 1;
+  const automatic = controlMode === "auto";
   if (!automatic) {
     if (existing) return null;
     await insertPreparedAction(
@@ -300,10 +354,9 @@ async function prepareExactRuleAction(
      ORDER BY CASE state WHEN 'succeeded' THEN 0 WHEN 'running' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END LIMIT 1`,
   ).bind(resource.accountId, resource.productFamily, resource.cloudflareId).first<Record<string, unknown>>();
   budget?.charge("d1RowsRead", activeAction ? 1 : 0);
-  const eligible = exactAutomaticActionEligible({
-    resource, quality: instance.data_quality, sampleInterval: evidence.sampleInterval,
+  const eligible = automaticActionEligible(resource, {
+    quality: instance.data_quality, sampleInterval: evidence.sampleInterval,
     measurement: instance.measurement, fresh: evidence.watermarkAt !== null && now - evidence.watermarkAt <= 15 * 60_000,
-    ruleOptIn: true, parentDenied: false,
     alreadyQuarantined: blocksAutomaticAction(activeAction, instance.instance_id),
     confirmationSatisfied: now - instance.first_breached_at >= instance.confirmation_window_ms,
   });
@@ -328,13 +381,14 @@ async function insertPreparedAction(
   reason: string,
   budget?: LedgerRunBudget,
 ): Promise<ControlAction | null> {
+  const kind: ControlAction["kind"] = resource.productFamily === "queues" ? "pause_consumer" : "runtime_quarantine";
   const workerScript = resource.productFamily === "workers" ? resource.cloudflareId : resource.metadata.cloudflareWorkerScript;
-  if (!workerScript) return null;
+  if (kind === "runtime_quarantine" && !workerScript) return null;
   const action: ControlAction = {
     id: crypto.randomUUID(), incidentId: instance.instance_id, asset: assetFromResource(resource),
-    kind: "runtime_quarantine", state: "prepared", reason,
+    kind, state: "prepared", reason,
     observed: { [instance.metric_definition_id]: instance.observed_value },
-    rollback: { workerScript, action: "resume" }, actor: "brolly-alert-rule", createdAt: now,
+    rollback: { ...(workerScript ? { workerScript } : {}), action: "resume" }, actor: "brolly-alert-rule", createdAt: now,
   };
   const auditId = crypto.randomUUID();
   const results = await db.batch([
@@ -346,10 +400,10 @@ async function insertPreparedAction(
       `INSERT OR IGNORE INTO actions(
          id,incident_id,idempotency_key,account_id,family,asset_id,kind,state,reason,observed_json,
          rollback_json,actor,created_at,updated_at,alert_instance_id,evidence_quality,automatic
-       ) VALUES(?1,?2,?3,?4,?5,?6,'runtime_quarantine','prepared',?7,?8,?9,?10,?11,?11,?2,?12,?13)`,
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,'prepared',?8,?9,?10,?11,?12,?12,?2,?13,?14)`,
     ).bind(
       action.id, instance.instance_id, `alert:${instance.instance_id}`, resource.accountId,
-      resource.productFamily, resource.cloudflareId, action.reason, JSON.stringify(action.observed),
+      resource.productFamily, resource.cloudflareId, kind, action.reason, JSON.stringify(action.observed),
       JSON.stringify(action.rollback), action.actor, now, instance.data_quality, automatic ? 1 : 0,
     ),
     db.prepare(`UPDATE alert_instances SET linked_action_id=?2 WHERE id=?1`).bind(instance.instance_id, action.id),
@@ -364,10 +418,10 @@ async function prepareAggregateContributorAction(
   changes: AccumulatorChange[],
   resources: Map<string, Resource>,
   now: number,
-  controlMode: "observe" | "approval" | "automatic",
+  effective: EffectiveLevelConfiguration,
   budget?: LedgerRunBudget,
 ): Promise<ControlAction | null> {
-  if (controlMode === "observe" || instance.line_action !== "quarantine" || !instance.target_resource_id) return null;
+  if ((!effective.stopOrPause && !effective.quarantine) || !instance.target_resource_id) return null;
   if (instance.measurement !== "usage" || instance.data_quality !== "complete" || instance.historical === 1) return null;
   const target = resourceFromRow(instance);
   if (!["account", "product"].includes(target.resourceType) && !target.resourceType.endsWith(":namespace")) return null;
@@ -388,7 +442,7 @@ async function prepareAggregateContributorAction(
       && (instance.period === "day" ? item.change.dayValue : item.change.cycleValue) >= ownEmergency.get(item.resource.id)!,
     eligible: periodQuality(item.change, instance.period) === "complete"
       && periodSampleInterval(item.change, instance.period) === 1
-      && item.resource.controlCapability !== "none" && item.resource.runtimeFuseStatus === "verified"
+      && resourceControlReady(item.resource)
       && !item.resource.excluded && item.resource.autoQuarantinePolicy !== "deny"
       && item.resource.tier !== "critical" && item.resource.tier !== "control_plane" && item.resource.tier !== "unclassified",
   }));
@@ -398,11 +452,14 @@ async function prepareAggregateContributorAction(
       .bind(instance.instance_id).run();
     chargeMeta(budget, cleared.meta);
     await auditAmbiguousContributors(db, instance, evidence, now, budget);
-    await prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, budget);
+    if (effective.stopOrPause === "prepare" || effective.quarantine === "prepare") {
+      await prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, effective, budget);
+    }
     return null;
   }
-  if (controlMode !== "automatic" || instance.auto_quarantine_contributors !== 1) {
-    const resource = resources.get(selected.resourceId);
+  const resource = resources.get(selected.resourceId);
+  const selectedMode = resource ? actionMode(resource.productFamily, effective) : null;
+  if (selectedMode !== "auto") {
     if (resource && manualActionEligible(resource, instance) && !await hasDeniedAncestor(db, resource.id, budget)) {
       await insertPreparedAction(
         db, instance, resource, now, false,
@@ -430,7 +487,6 @@ async function prepareAggregateContributorAction(
   ).bind(instance.instance_id, selected.resourceId).first<{ consecutive_wins: number }>();
   budget?.charge("d1RowsRead", streak ? 1 : 0);
   if (Number(streak?.consecutive_wins ?? 0) < 2) return null;
-  const resource = resources.get(selected.resourceId);
   if (!resource || await hasDeniedAncestor(db, resource.id, budget)) return null;
   const change = applicable.find(item => item.resource.id === selected.resourceId)!.change;
   const activeAction = await db.prepare(
@@ -439,13 +495,10 @@ async function prepareAggregateContributorAction(
      ORDER BY CASE state WHEN 'succeeded' THEN 0 WHEN 'running' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END LIMIT 1`,
   ).bind(resource.accountId, resource.productFamily, resource.cloudflareId).first<Record<string, unknown>>();
   budget?.charge("d1RowsRead", activeAction ? 1 : 0);
-  const eligible = exactAutomaticActionEligible({
-    resource, quality: periodQuality(change, instance.period),
-    sampleInterval: periodSampleInterval(change, instance.period), measurement: "usage",
-    fresh: change.watermarkAt !== null && now - change.watermarkAt <= 15 * 60_000,
-    ruleOptIn: true, parentDenied: false,
-    alreadyQuarantined: blocksAutomaticAction(activeAction, instance.instance_id),
-    confirmationSatisfied: true,
+  const eligible = automaticActionEligible(resource, {
+    quality: periodQuality(change, instance.period), sampleInterval: periodSampleInterval(change, instance.period),
+    measurement: "usage", fresh: change.watermarkAt !== null && now - change.watermarkAt <= 15 * 60_000,
+    alreadyQuarantined: blocksAutomaticAction(activeAction, instance.instance_id), confirmationSatisfied: true,
   });
   if (!eligible) return null;
   if (activeAction) return Number(activeAction.automatic) === 1 && activeAction.state === "prepared"
@@ -483,6 +536,7 @@ async function prepareAmbiguousContributorApproval(
   applicable: Array<{ change: AccumulatorChange; resource: Resource }>,
   evidence: ContributorEvidence[],
   now: number,
+  effective: EffectiveLevelConfiguration,
   budget?: LedgerRunBudget,
 ): Promise<void> {
   const byResource = new Map(applicable.map(item => [item.resource.id, item.resource]));
@@ -492,7 +546,7 @@ async function prepareAmbiguousContributorApproval(
     || left.resourceId.localeCompare(right.resourceId));
   for (const candidate of ranked.slice(0, 5)) {
     const resource = byResource.get(candidate.resourceId);
-    if (!resource || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
+    if (!resource || actionMode(resource.productFamily, effective) !== "prepare" || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
     await insertPreparedAction(
       db, instance, resource, now, false,
       `${resource.displayName} is among the leading contributors; attribution requires operator review`, budget,
@@ -514,7 +568,10 @@ async function ownEmergencyThresholds(
      WHERE r.account_id=?1 AND r.metric_definition_id=?2 AND r.period=?3
        AND r.enabled=1 AND r.retired=0 AND l.enabled=1 AND l.retired=0
        AND r.target_resource_id IS NOT NULL
-       AND (lower(l.label)='emergency' OR l.priority>=100)
+       AND NOT EXISTS (
+         SELECT 1 FROM alert_lines higher
+         WHERE higher.alert_rule_id=l.alert_rule_id AND higher.enabled=1 AND higher.retired=0 AND higher.priority>l.priority
+       )
      GROUP BY r.target_resource_id LIMIT 5000`,
   ).bind(instance.account_id, instance.metric_definition_id, instance.period)
     .all<{ target_resource_id: string; threshold_value: number }>();
@@ -525,22 +582,14 @@ async function ownEmergencyThresholds(
 }
 
 function manualActionEligible(resource: Resource, instance: InstanceRow): boolean {
-  if (instance.status !== "open" || instance.historical === 1 || ["missing", "stale"].includes(instance.data_quality)) return false;
-  if (!isExactControllableResource(resource) || resource.excluded || resource.controlCapability !== "runtime_fuse") return false;
+  if (!["open", "acknowledged"].includes(instance.status) || instance.historical === 1 || ["missing", "stale"].includes(instance.data_quality)) return false;
+  if (!isExactControllableResource(resource) || resource.excluded || !resourceControlReady(resource)) return false;
   if (!["standard", "disposable"].includes(resource.tier)) return false;
+  if (resource.autoQuarantinePolicy === "deny") return false;
+  if (resource.productFamily === "queues") return true;
   if (!resource.metadata.brollyFuse || resource.metadata.brollyFuse !== "true") return false;
   if (resource.productFamily === "workers") return /^[A-Za-z0-9_-]+$/.test(resource.cloudflareId);
   return /^[a-f0-9]{64}$/i.test(resource.cloudflareId) && Boolean(resource.metadata.cloudflareWorkerScript);
-}
-
-async function loadControlMode(db: D1Database, budget?: LedgerRunBudget): Promise<"observe" | "approval" | "automatic"> {
-  const row = await db.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>();
-  budget?.charge("d1RowsRead", row ? 1 : 0);
-  if (!row) return "approval";
-  try {
-    const mode = (JSON.parse(row.value) as { mode?: unknown }).mode;
-    return mode === "observe" || mode === "automatic" || mode === "approval" ? mode : "approval";
-  } catch { return "approval"; }
 }
 
 function isDescendant(resource: Resource, targetId: string, resources: Map<string, Resource>): boolean {
@@ -613,7 +662,7 @@ async function loadBreachedInstances(db: D1Database, accountId: string, breached
   while (rows.length < 100_000) {
     const result = await db.prepare(
       `SELECT
-         i.id AS instance_id,i.observed_value,i.threshold_value AS instance_threshold,i.data_quality,
+         i.id AS instance_id,i.period_start_at,i.period_end_at,i.observed_value,i.threshold_value AS instance_threshold,i.data_quality,
          i.status,i.first_breached_at,i.last_breached_at,i.next_notification_at,i.notification_count,
          i.historical,i.evidence_json,
          r.id AS rule_id,r.account_id,r.target_resource_id,r.target_selector_json,r.metric_definition_id,
@@ -636,11 +685,7 @@ async function loadBreachedInstances(db: D1Database, accountId: string, breached
 }
 
 async function notificationTargets(db: D1Database, ids: string[], budget?: LedgerRunBudget): Promise<Array<Record<string, unknown>>> {
-  if (!ids.length) {
-    const result = await db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 LIMIT 50`).all<Record<string, unknown>>();
-    chargeMeta(budget, result.meta);
-    return result.results;
-  }
+  if (!ids.length) return [];
   const page = ids.slice(0, 50);
   const placeholders = page.map((_, index) => `?${index + 1}`).join(",");
   const result = await db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 AND id IN (${placeholders})`).bind(...page).all<Record<string, unknown>>();
@@ -648,18 +693,17 @@ async function notificationTargets(db: D1Database, ids: string[], budget?: Ledge
   return result.results;
 }
 
-function notificationFromRow(row: InstanceRow): AlertNotification {
+function notificationFromRow(
+  row: InstanceRow,
+  targets: Array<{ targetId: string; repeatIntervalMs: number | null }>,
+  levelCount: number,
+): AlertNotification {
   return {
     instanceId: row.instance_id, ruleId: row.rule_id, lineId: row.line_id, lineLabel: row.label,
     priority: row.priority, observed: row.observed_value, threshold: row.instance_threshold,
     metricDefinitionId: row.metric_definition_id, resource: resourceFromRow(row),
-    notificationTargetIds: parseStringArray(row.notification_target_ids_json),
-    repeatIntervalMs: alertRepeatInterval(row.label, row.repeat_interval_ms),
+    severity: alertSeverity(Math.floor(row.priority / 10), levelCount), targets,
   };
-}
-
-export function alertRepeatInterval(label: string, configured: number | null): number | null {
-  return configured ?? (label.toLowerCase() === "emergency" ? DEFAULT_EMERGENCY_REPEAT_MS : null);
 }
 
 export function alertInstanceCanNotify(
@@ -668,7 +712,7 @@ export function alertInstanceCanNotify(
   nextNotificationAt: number | null,
   now: number,
 ): boolean {
-  return status === "open" && !historical && nextNotificationAt !== null && nextNotificationAt <= now;
+  return status === "open" && !historical && (nextNotificationAt === null || nextNotificationAt <= now);
 }
 
 export function alertBillingCycleBounds(
@@ -767,7 +811,37 @@ function blocksAutomaticAction(row: Record<string, unknown> | null, alertInstanc
 
 function isExactControllableResource(resource: Resource): boolean {
   return resource.resourceType.endsWith(":resource") && resource.productFamily === "workers"
-    || resource.resourceType.endsWith(":object") && resource.productFamily === "durable_objects";
+    || resource.resourceType.endsWith(":object") && resource.productFamily === "durable_objects"
+    || resource.resourceType.endsWith(":resource") && resource.productFamily === "queues";
+}
+
+function resourceControlReady(resource: Resource): boolean {
+  return resource.productFamily === "queues"
+    ? resource.controlCapability !== "none"
+    : resource.controlCapability === "runtime_fuse" && resource.runtimeFuseStatus === "verified";
+}
+
+function actionMode(family: string, effective: EffectiveLevelConfiguration): "prepare" | "auto" | null {
+  return family === "durable_objects" ? effective.quarantine
+    : family === "workers" || family === "queues" ? effective.stopOrPause
+      : null;
+}
+
+function automaticActionEligible(resource: Resource, evidence: {
+  quality: DataQualityState;
+  sampleInterval: number | null;
+  measurement: RuleLineRow["measurement"];
+  fresh: boolean;
+  alreadyQuarantined: boolean;
+  confirmationSatisfied: boolean;
+}): boolean {
+  if (resource.productFamily !== "queues") return exactAutomaticActionEligible({
+    resource, ...evidence, ruleOptIn: true, parentDenied: false,
+  });
+  return evidence.quality === "complete" && evidence.sampleInterval === 1 && evidence.measurement === "usage"
+    && evidence.fresh && evidence.confirmationSatisfied && !evidence.alreadyQuarantined
+    && !resource.excluded && !["control_plane", "critical", "unclassified"].includes(resource.tier)
+    && resource.autoQuarantinePolicy !== "deny" && resource.controlCapability !== "none";
 }
 
 function parseEvidence(value: string): { sampleInterval: number | null; watermarkAt: number | null } {
@@ -780,16 +854,10 @@ function parseEvidence(value: string): { sampleInterval: number | null; watermar
   } catch { return { sampleInterval: null, watermarkAt: null }; }
 }
 
-function alertSeverity(label: string, priority: number): "warning" | "critical" | "emergency" {
-  const normalized = label.toLowerCase();
-  if (normalized === "emergency" || priority >= 100) return "emergency";
-  if (normalized === "critical" || priority >= 75) return "critical";
+export function alertSeverity(position: number, levelCount: number): "warning" | "critical" | "emergency" {
+  if (position >= levelCount - 1) return "emergency";
+  if (levelCount >= 3 && position >= levelCount - 2) return "critical";
   return "warning";
-}
-
-function severityAllowed(label: string, priority: number, minimum: string): boolean {
-  const rank = { info: 0, warning: 1, critical: 2, emergency: 3 } as const;
-  return rank[alertSeverity(label, priority)] >= (rank[minimum as keyof typeof rank] ?? 1);
 }
 
 function alertInstanceId(ruleId: string, lineId: string, resourceIdValue: string, start: number, end: number): string {
@@ -806,10 +874,6 @@ async function runBatches(db: D1Database, statements: D1PreparedStatement[], bud
 function chargeMeta(budget: LedgerRunBudget | undefined, meta: { rows_read?: number; rows_written?: number; changes?: number }): void {
   budget?.charge("d1RowsRead", meta.rows_read ?? 0);
   budget?.charge("d1RowsWritten", meta.rows_written ?? meta.changes ?? 0);
-}
-
-function parseStringArray(value: string): string[] {
-  try { return (JSON.parse(value) as unknown[]).filter((item): item is string => typeof item === "string"); } catch { return []; }
 }
 
 function parseStringRecord(value: string): Record<string, string> {

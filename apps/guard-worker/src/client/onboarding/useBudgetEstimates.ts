@@ -1,8 +1,15 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "../api";
-import type { OnboardingBudgetEstimates, Policy } from "../types";
+import type { AlertLevel, OnboardingBudgetEstimates, Policy } from "../types";
+import { mapFixedSpendLimits } from "./model";
 
-export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dispatch<SetStateAction<Policy>>) {
+const DEFAULT_ALERT_LEVELS: AlertLevel[] = [
+  { id: "warning", position: 0, label: "Warning", entries: [] },
+  { id: "critical", position: 1, label: "Critical", entries: [] },
+  { id: "emergency", position: 2, label: "Emergency", entries: [] },
+];
+
+export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dispatch<SetStateAction<Policy>>, levels: AlertLevel[] = DEFAULT_ALERT_LEVELS) {
   const [busy, setBusy] = useState(false);
   const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
   const [suggestionNotice, setSuggestionNotice] = useState("");
@@ -36,7 +43,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     try {
       const result = estimates ?? await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       setEstimates(result);
-      const suggestion = applySuggestions(policy, result);
+      const suggestion = applySuggestions(policy, result, levels);
       setPolicy(suggestion.policy);
       setSuggestionNotice(suggestion.notice);
     } catch (cause) {
@@ -44,7 +51,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     } finally {
       setBusy(false);
     }
-  }, [estimates, policy, setPolicy, token]);
+  }, [estimates, levels, policy, setPolicy, token]);
 
   return {
     acceptBillingAccess,
@@ -59,13 +66,13 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
   };
 }
 
-function applySuggestions(policy: Policy, result: OnboardingBudgetEstimates): { policy: Policy; notice: string } {
+export function applySuggestions(policy: Policy, result: OnboardingBudgetEstimates, levels: AlertLevel[]): { policy: Policy; notice: string } {
   const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
   const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
   const familyDailySpend = { ...policy.familyDailySpend };
   const assetDailySpend = { ...policy.assetDailySpend };
-  for (const [family, suggestion] of familySuggestions) familyDailySpend[family] = suggestion.limits;
-  for (const [key, suggestion] of assetSuggestions) assetDailySpend[key] = suggestion.limits;
+  for (const [family, suggestion] of familySuggestions) familyDailySpend[family] = mapFixedSpendLimits(suggestion.limits, levels);
+  for (const [key, suggestion] of assetSuggestions) assetDailySpend[key] = mapFixedSpendLimits(suggestion.limits, levels);
 
   let notice = "Cloudflare returned no non-zero cost estimate for this window, so no limits were changed.";
   if (familySuggestions.length) {
@@ -80,7 +87,9 @@ function applySuggestions(policy: Policy, result: OnboardingBudgetEstimates): { 
       ...policy,
       familyDailySpend,
       assetDailySpend,
-      accountDailySpend: result.account && !result.account.partial ? result.account.limits : policy.accountDailySpend,
+      accountDailySpend: result.account && !result.account.partial
+        ? mapFixedSpendLimits(result.account.limits, levels)
+        : policy.accountDailySpend,
     },
   };
 }

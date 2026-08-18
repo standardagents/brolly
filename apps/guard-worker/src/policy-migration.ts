@@ -1,4 +1,5 @@
 import { METRIC_CATALOG, resourceId, type Policy, type SpendLimits, type Threshold } from "@standardagents/brolly-core";
+import { loadAlertLevels, type AlertLevel } from "./alert-levels.js";
 
 const MAX_BATCH = 100;
 
@@ -12,6 +13,7 @@ export async function migrateLegacyPolicyRules(
     `SELECT value FROM settings WHERE key='usage_ledger_policy_version' LIMIT 1`,
   ).first<{ value: string }>();
   if (!force && state?.value === policy.version) return 0;
+  const levels = await loadAlertLevels(db);
   const now = Date.now();
   const rootId = resourceId(accountId, "account", "account", accountId);
   const statements: D1PreparedStatement[] = [
@@ -32,6 +34,7 @@ export async function migrateLegacyPolicyRules(
     targetResourceId: rootId,
     metricDefinitionId: "account:estimated_cost_usd",
     limits: policy.accountDailySpend,
+    levels,
     now,
   });
   ruleCount += 1;
@@ -55,6 +58,7 @@ export async function migrateLegacyPolicyRules(
       targetResourceId: productId,
       metricDefinitionId: `${family}:estimated_cost_usd`,
       limits,
+      levels,
       now,
     });
     ruleCount += 1;
@@ -76,6 +80,7 @@ export async function migrateLegacyPolicyRules(
       targetResourceId: row.id,
       metricDefinitionId: `${parsed.family}:estimated_cost_usd`,
       limits,
+      levels,
       now,
     });
     ruleCount += 1;
@@ -83,7 +88,7 @@ export async function migrateLegacyPolicyRules(
 
   for (const threshold of policy.thresholds) {
     for (const product of METRIC_CATALOG.filter(item => item.metrics.includes(threshold.metric))) {
-      addUsageRule(db, statements, accountId, product.family, threshold, now);
+      addUsageRule(db, statements, accountId, product.family, threshold, levels, now);
       ruleCount += 1;
     }
   }
@@ -109,17 +114,14 @@ function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: 
   targetResourceId: string;
   metricDefinitionId: string;
   limits: SpendLimits;
+  levels: AlertLevel[];
   now: number;
 }): void {
   addRule(db, statements, {
     ...input,
     measurement: "estimated_cost",
     period: "day",
-    lines: [
-      { label: "Warning", color: "#f59e0b", priority: 50, value: input.limits.warning, enabled: true },
-      { label: "Critical", color: "#dc6b24", priority: 75, value: input.limits.critical, enabled: false },
-      { label: "Emergency", color: "#ef4444", priority: 100, value: input.limits.emergency, enabled: true },
-    ],
+    lines: materializedSpendLines(input.limits, input.levels),
   });
 }
 
@@ -129,6 +131,7 @@ function addUsageRule(
   accountId: string,
   family: string,
   threshold: Threshold,
+  levels: AlertLevel[],
   now: number,
 ): void {
   const id = legacyId("threshold", `${family}:${threshold.metric}:${threshold.windowMs}`);
@@ -142,11 +145,13 @@ function addUsageRule(
     measurement: "usage",
     period: threshold.windowMs >= 28 * 86_400_000 ? "billing_cycle" : "day",
     now,
-    lines: [
-      ...(threshold.warning === undefined ? [] : [{ label: "Warning", color: "#f59e0b", priority: 50, value: threshold.warning, enabled: true }]),
-      ...(threshold.critical === undefined ? [] : [{ label: "Critical", color: "#dc6b24", priority: 75, value: threshold.critical, enabled: false }]),
-      ...(threshold.emergency === undefined ? [] : [{ label: "Emergency", color: "#ef4444", priority: 100, value: threshold.emergency, enabled: true }]),
-    ],
+    lines: levels.flatMap((level, index) => {
+      const value = thresholdValue(threshold, level);
+      return value === undefined ? [] : [{
+        levelId: level.id, label: level.label, color: levelColor(index, levels.length),
+        priority: level.position * 10, value, enabled: true,
+      }];
+    }),
   });
 }
 
@@ -159,7 +164,7 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
   metricDefinitionId: string;
   measurement: "usage" | "estimated_cost";
   period: "day" | "billing_cycle";
-  lines: Array<{ label: string; color: string; priority: number; value: number; enabled: boolean }>;
+  lines: Array<{ levelId: string; label: string; color: string; priority: number; value: number; enabled: boolean }>;
   now: number;
 }): void {
   statements.push(db.prepare(
@@ -177,21 +182,53 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
     input.id, input.accountId, input.targetResourceId, input.targetSelector ? JSON.stringify(input.targetSelector) : null,
     input.metricDefinitionId, input.measurement, input.period, input.key, input.now,
   ));
+  statements.push(db.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE alert_rule_id=?1`).bind(input.id, input.now));
   for (const line of input.lines) {
     statements.push(db.prepare(
       `INSERT INTO alert_lines(
-         id,alert_rule_id,label,color,priority,threshold_value,action,repeat_interval_ms,
+         id,alert_rule_id,level_id,label,color,priority,threshold_value,action,repeat_interval_ms,
          enabled,created_at,updated_at
-       ) VALUES(?1,?2,?3,?4,?5,?6,'notify',?7,?8,?9,?9)
-       ON CONFLICT(alert_rule_id,label) DO UPDATE SET
-         color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,'notify',NULL,?8,?9,?9)
+       ON CONFLICT(alert_rule_id,level_id) DO UPDATE SET
+         label=excluded.label,color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
          repeat_interval_ms=excluded.repeat_interval_ms,enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`,
     ).bind(
-      `${input.id}:${line.label.toLowerCase()}`, input.id, line.label, line.color,
-      line.priority, line.value, line.label === "Emergency" ? 6 * 60 * 60_000 : null,
-      line.enabled ? 1 : 0, input.now,
+      `${input.id}:${line.levelId}`, input.id, line.levelId, line.label, line.color,
+      line.priority, line.value, line.enabled ? 1 : 0, input.now,
     ));
   }
+}
+
+export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[]): Array<{
+  levelId: string;
+  label: string;
+  color: string;
+  priority: number;
+  value: number;
+  enabled: boolean;
+}> {
+  return levels.flatMap((level, index) => finiteLimit(limits[level.id])
+    ? [{ levelId: level.id, label: level.label, color: levelColor(index, levels.length), priority: level.position * 10, value: limits[level.id]!, enabled: true }]
+    : []);
+}
+
+function finiteLimit(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function thresholdValue(threshold: Threshold, level: AlertLevel): number | undefined {
+  const key = level.id === "warning" || level.id === "critical" || level.id === "emergency"
+    ? level.id
+    : level.label.toLowerCase() === "warning" || level.label.toLowerCase() === "critical" || level.label.toLowerCase() === "emergency"
+      ? level.label.toLowerCase() as "warning" | "critical" | "emergency"
+      : null;
+  return key ? threshold[key] : undefined;
+}
+
+function levelColor(index: number, count: number): string {
+  if (index === count - 1) return "#ef4444";
+  if (index === count - 2) return "#dc6b24";
+  return "#f59e0b";
 }
 
 function legacyId(kind: string, key: string): string {

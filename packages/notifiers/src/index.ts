@@ -1,6 +1,6 @@
 import type { Incident } from "@standardagents/brolly-core";
 
-export type NotificationKind = "discord" | "slack" | "webhook" | "resend" | "postmark" | "twilio";
+export type NotificationKind = "discord" | "slack" | "webhook" | "resend" | "postmark" | "twilio" | "cloudflare_email";
 
 export interface NotificationTarget {
   id: string;
@@ -10,6 +10,7 @@ export interface NotificationTarget {
   from?: string;
   to?: string;
   accountSid?: string;
+  accountId?: string;
   enabled: boolean;
 }
 
@@ -20,9 +21,9 @@ export async function notify(target: NotificationTarget, incident: Incident, fet
   try {
     const request = buildRequest(target, incident);
     const response = await fetcher(request.url, request.init);
-    return response.ok
-      ? { targetId: target.id, ok: true, status: response.status }
-      : { targetId: target.id, ok: false, status: response.status, error: await response.text() };
+    if (!response.ok) return { targetId: target.id, ok: false, status: response.status, error: await response.text() };
+    if (target.kind === "cloudflare_email") return cloudflareEmailResult(target, response);
+    return { targetId: target.id, ok: true, status: response.status };
   } catch (error) {
     return { targetId: target.id, ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -39,12 +40,46 @@ function buildRequest(target: NotificationTarget, incident: Incident): { url: st
     case "webhook": return { url: notificationWebhookUrl("webhook", target.url).toString(), init: json({ type: "brolly.incident", incident }, target.token ? { authorization: `Bearer ${target.token}` } : {}) };
     case "resend": return { url: "https://api.resend.com/emails", init: json({ from: required(target.from, "Resend from"), to: [required(target.to, "Resend to")], subject: summary.slice(0, 150), text: summary }, { authorization: `Bearer ${required(target.token, "Resend token")}` }) };
     case "postmark": return { url: "https://api.postmarkapp.com/email", init: json({ From: required(target.from, "Postmark from"), To: required(target.to, "Postmark to"), Subject: summary.slice(0, 150), TextBody: summary }, { "x-postmark-server-token": required(target.token, "Postmark token") }) };
+    case "cloudflare_email": return {
+      url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(required(target.accountId, "Cloudflare Email account ID"))}/email/sending/send`,
+      init: json({ from: required(target.from, "Cloudflare Email from"), to: [required(target.to, "Cloudflare Email to")], subject: summary.slice(0, 150), text: summary }, { authorization: `Bearer ${required(target.token, "Cloudflare Email token")}` }),
+    };
     case "twilio": {
       const sid = required(target.accountSid, "Twilio account SID");
       const form = new URLSearchParams({ From: required(target.from, "Twilio from"), To: required(target.to, "Twilio to"), Body: summary });
       return { url: `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`, init: { method: "POST", redirect: "error", headers: { authorization: `Basic ${btoa(`${sid}:${required(target.token, "Twilio auth token")}`)}`, "content-type": "application/x-www-form-urlencoded" }, body: form, signal: AbortSignal.timeout(10_000) } };
     }
   }
+}
+
+async function cloudflareEmailResult(target: NotificationTarget, response: Response): Promise<NotificationResult> {
+  const recipient = required(target.to, "Cloudflare Email to").trim().toLowerCase();
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    return { targetId: target.id, ok: false, status: response.status, error: error instanceof Error ? `Cloudflare Email response was not valid JSON: ${error.message}` : "Cloudflare Email response was not valid JSON" };
+  }
+  const result = isRecord(payload) && isRecord(payload.result) ? payload.result : payload;
+  const permanentBounces = stringArray(isRecord(result) ? result.permanent_bounces : undefined);
+  if (permanentBounces.some(address => address.trim().toLowerCase() === recipient)) {
+    return { targetId: target.id, ok: false, status: response.status, error: `Cloudflare Email permanently bounced ${target.to}` };
+  }
+  const delivered = stringArray(isRecord(result) ? result.delivered : undefined);
+  const queued = stringArray(isRecord(result) ? result.queued : undefined);
+  if (delivered.some(address => address.trim().toLowerCase() === recipient)
+    || queued.some(address => address.trim().toLowerCase() === recipient)) {
+    return { targetId: target.id, ok: true, status: response.status };
+  }
+  return { targetId: target.id, ok: false, status: response.status, error: `Cloudflare Email did not deliver or queue ${target.to}` };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 export function notificationWebhookUrl(kind: "discord" | "slack" | "webhook", value: string | undefined): URL {

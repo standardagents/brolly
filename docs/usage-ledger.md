@@ -65,17 +65,50 @@ An unfamiliar Cloudflare product or metric is stored as a billing line, receives
 
 ## Limits and alert instances
 
-An alert rule selects one exact resource or a resource selector, one metric definition, a measurement (usage, estimated_cost, or billed_cost), and a period (day or billing_cycle). A rule owns any number of threshold lines. New rules begin with Warning and Emergency lines. Operators can add, rename, recolor, reorder, disable, or remove lines. Rules and lines with historical instances are retired in place so alert history keeps valid references. Items without history are removed directly.
+An alert rule selects one exact resource or a resource selector, one metric
+definition, a measurement (`usage`, `estimated_cost`, or `billed_cost`), and a
+period (`day` or `billing_cycle`). Policy spend scopes store threshold values in
+maps keyed by alert-level ID. Materialization iterates the ordered board and
+writes one line for each level with a value. A missing value produces no line.
+Each line keeps its level ID and receives priority `position * 10`.
 
-Each threshold crossing has a period-specific alert_instances identity. Warning defaults to one delivery per instance. Emergency defaults to immediate delivery followed by six-hour repeats while open. Silencing one instance leaves its rule, sibling lines, other resources, and future periods active. Active recurring collection evaluates alert rules after it writes observations. Historical ingestion stays outside alert evaluation.
+An alert level has a unique case-insensitive label and ordered entries. Warning,
+Critical, and Emergency are seeded levels. Custom levels use the same behavior.
+The board permits eight levels and retains one level when a column is deleted.
+Level entries are additive from left to right. The effective set for a firing
+line is the union of entries in all levels at or below its position. A repeated
+channel uses the entry from the highest matching position, including that
+entry's interval.
 
-Notification destinations support Discord, Slack, Resend, Postmark, Twilio SMS, and generic HTTPS webhooks. Credentials remain AES-GCM encrypted. A generic webhook refuses redirects and local or private-network destinations.
+Each threshold crossing has a period-specific `alert_instances` identity. A
+channel entry with no interval delivers once for the instance. An interval
+entry schedules delivery at 5 minutes, 15 minutes, 30 minutes, 1 hour, 3 hours,
+6 hours, 12 hours, or 24 hours. Repeats stop when the operator acknowledges the
+instance or when it resolves. Active recurring collection evaluates alert rules
+after it writes observations. Historical ingestion stays outside alert
+evaluation.
 
-Legacy account, family, resource, and metric thresholds migrate to ledger rules. Warning and Emergency remain enabled. A configured Critical line is retained in a disabled custom line so its value remains available for review.
+Notification destinations support Cloudflare Email, Discord, Postmark, Resend,
+Slack, Twilio SMS, and generic HTTPS webhooks. Channel labels are required and
+unique without regard to letter case. Credentials remain AES-GCM encrypted. A
+generic webhook refuses redirects and local or private-network destinations.
 
-## Automatic quarantine
+Provider records hold one reusable account for each Twilio, Cloudflare Email,
+Resend, or Postmark kind. Target rows retain sealed full configurations so the
+notifier receives provider values and destination together. Provider updates
+reseal every target attached to that provider. Removing a channel removes its
+level entries and leaves its provider account for explicit removal.
 
-The default global mode is approval. Estimated and incomplete evidence can prepare an operator-reviewed action when a quarantine line requests one. Exact-resource automation requires global automatic mode, an explicitly opted-in rule, and all of this evidence:
+Cloudflare Email token setup verifies activity with `GET
+/user/tokens/verify`. The from-address form lists zones from the connected
+account. Email Service domain onboarding remains a Cloudflare dashboard task.
+The REST notifier records a permanent bounce for the recipient as a failed
+delivery.
+
+## Action safety
+
+Prepare entries create an operator-reviewed action. Auto entries can run an
+eligible action after all of this evidence exists:
 
 - an exact Worker or Durable Object target;
 - complete, fresh, unsampled usage;
@@ -84,9 +117,22 @@ The default global mode is approval. Estimated and incomplete evidence can prepa
 - a sustained breach through the rule's confirmation window;
 - no active quarantine or action-rate limit.
 
-Aggregate rules require explicit contributor automation. Candidate selection prioritizes a child that crossed its own Emergency line, then requires complete child attribution, at least half of interval usage or aggregate excess, at least four times the rolling 12-scan baseline, and the same deterministic winner in two consecutive scans. Ambiguous evidence records the leading contributors and prepares one exact action for operator review.
+If both action variants occur in the effective set, Auto takes precedence for the
+same family. The supported families are Worker-ingress stop, Durable Object
+quarantine, and queue pause. Other resource families ignore action entries.
 
-Automatic deployment limits allow one changing action per Worker in 15 minutes and three automatic quarantines per account hour. Brolly writes audit and rollback state before control execution. Estimated cost, allocated cost, billing totals, missing data, partial data, sampled data, and stale data cannot authorize an automatic control.
+Aggregate rules select contributors from a child that crossed its highest level,
+then require complete child attribution, at least half of interval usage or
+aggregate excess, at least four times the rolling 12-scan baseline, and the
+same deterministic winner in two consecutive scans. Ambiguous evidence records
+the leading contributors and prepares one exact action for operator review.
+
+Deployment limits allow one changing action per Worker in 15 minutes and three
+automatic quarantines per account hour. Brolly writes audit and rollback state
+before control execution. Estimated cost, allocated cost, billing totals,
+missing data, partial data, sampled data, and stale data cannot authorize an
+automatic control. Control-plane assets, refused tiers, denied policies, and
+unverified runtime integrations remain ineligible.
 
 ## Retention and D1 capacity
 
@@ -115,12 +161,21 @@ All routes require the existing authenticated Brolly session or break-glass cred
 | GET | /api/retention | Capacity pressure and oldest retained dates. |
 | GET, POST | /api/backfill | Inspect or schedule historical jobs within Cloudflare's 90-day source window. |
 | GET, POST | /api/onboarding/ingest | Start the idempotent first-run import and read exact per-collector slice progress. |
+| GET | /api/cloudflare-zones | List zones from the connected Cloudflare account for Cloudflare Email setup. |
+| GET | /api/providers | List saved provider kinds and their from value without credentials. |
+| PATCH, DELETE | /api/providers/:kind | Replace or remove a provider account. Removal requires no attached channels. |
+| GET, POST | /api/targets | List or save labeled notification channels. |
+| PATCH, DELETE | /api/targets/:id | Rename or remove a notification channel. Removal also removes its level entries. |
+| GET, POST | /api/alert-levels | Read or insert ordered alert levels. |
+| PATCH, DELETE | /api/alert-levels/:id | Rename, reorder, or remove an alert level. One level remains. |
+| POST | /api/alert-levels/:id/entries | Add a channel or Prepare/Auto action entry to a level. |
+| PATCH, DELETE | /api/alert-levels/:id/entries/:entryId | Change an interval or order, or remove an entry. |
 | GET, POST | /api/alert-rules | List or create rules. |
 | PUT, DELETE | /api/alert-rules/:id | Update or remove a rule. |
-| POST | /api/alert-rules/:id/lines | Add a threshold line. |
-| PUT, DELETE | /api/alert-lines/:id | Update or remove a line. |
+| PUT | /api/alert-lines/:id | Update a level threshold or its enabled state. |
 | GET | /api/alert-instances | List period-specific crossings. |
-| POST | /api/alert-instances/:id/silence | Silence one current instance. |
+| POST | /api/alerts/:id/acknowledge | Acknowledge one current instance and stop its repeats. |
 | POST | /api/run | Run one bounded collector and return budgets, datasets, watermarks, and accounting. |
 
-Rule, line, instance-silence, protection, backfill, and control changes create audit records.
+Rule, line, channel, provider, level, entry, acknowledgment, protection,
+backfill, and control changes create audit records.

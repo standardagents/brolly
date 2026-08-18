@@ -1,6 +1,8 @@
 import type { AlertLine, AlertRule, LedgerRunLimits } from "@standardagents/brolly-core";
-import { silenceAlertInstance } from "./alert-engine.js";
+import { acknowledgeAlertInstance } from "./alert-engine.js";
+import { loadAlertLevels, type AlertLevel } from "./alert-levels.js";
 import type { Env } from "./env.js";
+import { usageSeriesResponse } from "./usage-series.js";
 import {
   DEFAULT_LEDGER_RUN_LIMITS,
   MAX_LEDGER_RUN_LIMITS,
@@ -14,6 +16,7 @@ const MAX_PAGE = 500;
 export async function ledgerApiRoute(request: Request, env: Env, actor: string): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname === "/api/usage" && request.method === "GET") return usageResponse(env.DB, url);
+  if (url.pathname === "/api/usage-series" && request.method === "GET") return usageSeriesResponse(env.DB, env.BROLLY_ACCOUNT_ID, url);
   if (url.pathname === "/api/metric-definitions" && request.method === "GET") return metricDefinitionsResponse(env.DB, url);
   if (url.pathname === "/api/ledger/resources" && request.method === "GET") return resourcesResponse(env.DB, env.BROLLY_ACCOUNT_ID, url);
   if (url.pathname === "/api/coverage" && request.method === "GET") return coverageResponse(env.DB, env.BROLLY_ACCOUNT_ID);
@@ -30,14 +33,11 @@ export async function ledgerApiRoute(request: Request, env: Env, actor: string):
   const ruleMatch = url.pathname.match(/^\/api\/alert-rules\/([^/]+)$/);
   if (ruleMatch && request.method === "PUT") return updateRule(request, env.DB, decodeURIComponent(ruleMatch[1]!), env.BROLLY_ACCOUNT_ID, actor);
   if (ruleMatch && request.method === "DELETE") return deleteRule(env.DB, decodeURIComponent(ruleMatch[1]!), env.BROLLY_ACCOUNT_ID, actor);
-  const ruleLinesMatch = url.pathname.match(/^\/api\/alert-rules\/([^/]+)\/lines$/);
-  if (ruleLinesMatch && request.method === "POST") return createLine(request, env.DB, decodeURIComponent(ruleLinesMatch[1]!), actor);
   const lineMatch = url.pathname.match(/^\/api\/alert-lines\/([^/]+)$/);
   if (lineMatch && request.method === "PUT") return updateLine(request, env.DB, decodeURIComponent(lineMatch[1]!), actor);
-  if (lineMatch && request.method === "DELETE") return deleteLine(env.DB, decodeURIComponent(lineMatch[1]!), actor);
-  const silenceMatch = url.pathname.match(/^\/api\/alert-instances\/([^/]+)\/silence$/);
-  if (silenceMatch && request.method === "POST") {
-    const ok = await silenceAlertInstance(env.DB, decodeURIComponent(silenceMatch[1]!), actor);
+  const acknowledgeMatch = url.pathname.match(/^\/api\/alerts\/([^/]+)\/acknowledge$/);
+  if (acknowledgeMatch && request.method === "POST") {
+    const ok = await acknowledgeAlertInstance(env.DB, decodeURIComponent(acknowledgeMatch[1]!), actor);
     return ok ? Response.json({ ok: true }) : Response.json({ error: "Open alert instance not found" }, { status: 404 });
   }
   const protectionMatch = url.pathname.match(/^\/api\/ledger\/resources\/([^/]+)\/protection$/);
@@ -306,11 +306,9 @@ async function createRule(request: Request, db: D1Database, accountId: string, a
   if (error) return Response.json({ error }, { status: 400 });
   const id = body.id?.trim() || crypto.randomUUID();
   const now = Date.now();
-  const lines = body.lines?.length ? body.lines : [
-    { label: "Warning", color: "#f59e0b", priority: 50, thresholdValue: 1, action: "notify" as const, repeatIntervalMs: null, enabled: true },
-    { label: "Emergency", color: "#ef4444", priority: 100, thresholdValue: 2, action: "quarantine" as const, repeatIntervalMs: 6 * 60 * 60_000, enabled: true },
-  ];
-  const lineError = validateLines(lines);
+  const levels = await loadAlertLevels(db);
+  const lines = body.lines?.length ? body.lines : levels.map((level, index) => levelLine(level, levels.length, index + 1));
+  const lineError = validateLines(lines, levels, true);
   if (lineError) return Response.json({ error: lineError }, { status: 400 });
   const statements = [ruleInsert(db, id, accountId, body, now)];
   for (const line of lines) statements.push(lineInsert(db, id, line, now));
@@ -341,7 +339,7 @@ async function updateRule(request: Request, db: D1Database, id: string, accountI
 }
 
 async function deleteRule(db: D1Database, id: string, accountId: string, actor: string): Promise<Response> {
-  const open = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 AND status IN ('open','silenced') LIMIT 1`).bind(id).first();
+  const open = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 AND status IN ('open','acknowledged') LIMIT 1`).bind(id).first();
   if (open) return Response.json({ error: "Resolve or expire open alert instances before deleting this rule" }, { status: 409 });
   const history = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 LIMIT 1`).bind(id).first();
   const now = Date.now();
@@ -359,69 +357,15 @@ async function deleteRule(db: D1Database, id: string, accountId: string, actor: 
   return Response.json({ ok: true, retired: Boolean(history) });
 }
 
-async function createLine(request: Request, db: D1Database, ruleId: string, actor: string): Promise<Response> {
-  const line = await request.json<Partial<AlertLine>>();
-  const error = validateLines([line]);
-  if (error) return Response.json({ error }, { status: 400 });
-  const exists = await db.prepare(`SELECT 1 AS present FROM alert_rules WHERE id=?1 AND retired=0 LIMIT 1`).bind(ruleId).first();
-  if (!exists) return Response.json({ error: "Alert rule not found" }, { status: 404 });
-  const matching = await db.prepare(`SELECT id,retired FROM alert_lines WHERE alert_rule_id=?1 AND lower(label)=lower(?2) LIMIT 1`)
-    .bind(ruleId, line.label?.trim()).first<{ id: string; retired: number }>();
-  if (matching?.retired === 0) return Response.json({ error: "A threshold line with this label already exists" }, { status: 409 });
-  const id = matching?.id ?? (line.id?.trim() || undefined) ?? crypto.randomUUID();
-  const now = Date.now();
-  if (matching) {
-    await db.prepare(
-      `UPDATE alert_lines SET label=?2,color=?3,priority=?4,threshold_value=?5,action=?6,
-         repeat_interval_ms=?7,enabled=?8,retired=0,updated_at=?9 WHERE id=?1`,
-    ).bind(
-      id, line.label?.trim(), line.color, line.priority, line.thresholdValue, line.action ?? null,
-      line.repeatIntervalMs ?? null, line.enabled === false ? 0 : 1, now,
-    ).run();
-  } else {
-    await lineInsert(db, ruleId, { ...line, id }, now).run();
-  }
-  await audit(db, actor, "alert_line.create", id, { ruleId });
-  return Response.json({ ok: true, id }, { status: 201 });
-}
-
 async function updateLine(request: Request, db: D1Database, id: string, actor: string): Promise<Response> {
   const line = await request.json<Partial<AlertLine>>();
-  const error = validateLines([line]);
-  if (error) return Response.json({ error }, { status: 400 });
-  const conflict = await db.prepare(
-    `SELECT 1 AS present FROM alert_lines current
-     JOIN alert_lines sibling ON sibling.alert_rule_id=current.alert_rule_id
-     WHERE current.id=?1 AND sibling.id!=current.id AND sibling.retired=0
-       AND lower(sibling.label)=lower(?2) LIMIT 1`,
-  ).bind(id, line.label?.trim()).first();
-  if (conflict) return Response.json({ error: "A threshold line with this label already exists" }, { status: 409 });
+  if (!Number.isFinite(line.thresholdValue) || Number(line.thresholdValue) < 0) return Response.json({ error: "Thresholds must be finite and nonnegative" }, { status: 400 });
   const result = await db.prepare(
-    `UPDATE alert_lines SET label=?2,color=?3,priority=?4,threshold_value=?5,action=?6,
-       repeat_interval_ms=?7,enabled=?8,updated_at=?9 WHERE id=?1 AND retired=0`,
-  ).bind(
-    id, line.label, line.color, line.priority, line.thresholdValue, line.action ?? null,
-    line.repeatIntervalMs ?? null, line.enabled === false ? 0 : 1, Date.now(),
-  ).run();
+    `UPDATE alert_lines SET threshold_value=?2,enabled=?3,updated_at=?4 WHERE id=?1 AND retired=0`,
+  ).bind(id, line.thresholdValue, line.enabled === false ? 0 : 1, Date.now()).run();
   if (Number(result.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert line not found" }, { status: 404 });
   await audit(db, actor, "alert_line.update", id, line);
   return Response.json({ ok: true });
-}
-
-async function deleteLine(db: D1Database, id: string, actor: string): Promise<Response> {
-  const line = await db.prepare(`SELECT alert_rule_id FROM alert_lines WHERE id=?1 AND retired=0 LIMIT 1`).bind(id).first<{ alert_rule_id: string }>();
-  if (!line) return Response.json({ error: "Alert line not found" }, { status: 404 });
-  const count = await db.prepare(`SELECT COUNT(*) AS count FROM alert_lines WHERE alert_rule_id=?1 AND retired=0`).bind(line.alert_rule_id).first<{ count: number }>();
-  if (Number(count?.count ?? 0) <= 1) return Response.json({ error: "A rule must retain at least one threshold line" }, { status: 409 });
-  const open = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_line_id=?1 AND status IN ('open','silenced') LIMIT 1`).bind(id).first();
-  if (open) return Response.json({ error: "Resolve or expire open instances before deleting this line" }, { status: 409 });
-  const history = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_line_id=?1 LIMIT 1`).bind(id).first();
-  const result = history
-    ? await db.prepare(`UPDATE alert_lines SET enabled=0,retired=1,updated_at=?2 WHERE id=?1`).bind(id, Date.now()).run()
-    : await db.prepare(`DELETE FROM alert_lines WHERE id=?1`).bind(id).run();
-  if (Number(result.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert line not found" }, { status: 404 });
-  await audit(db, actor, history ? "alert_line.retire" : "alert_line.delete", id, {});
-  return Response.json({ ok: true, retired: Boolean(history) });
 }
 
 async function instancesResponse(db: D1Database, accountId: string, url: URL): Promise<Response> {
@@ -506,19 +450,19 @@ async function validateRule(db: D1Database, accountId: string, rule: Partial<Ale
   return null;
 }
 
-function validateLines(lines: Array<Partial<AlertLine>>): string | null {
+function validateLines(lines: Array<Partial<AlertLine>>, levels: AlertLevel[], requireEveryLevel = false): string | null {
   if (!lines.length) return "Add at least one threshold line";
-  const labels = new Set<string>();
+  const levelIds = new Set(levels.map(level => level.id));
+  const seen = new Set<string>();
   for (const line of lines) {
-    if (!line.label?.trim() || line.label.length > 80) return "Each line needs a label of at most 80 characters";
-    if (labels.has(line.label.toLowerCase())) return "Line labels must be unique within a rule";
-    labels.add(line.label.toLowerCase());
-    if (!line.color || !/^#[0-9a-f]{6}$/i.test(line.color)) return "Each line needs a six-digit hex color";
-    if (!Number.isFinite(line.priority) || !Number.isInteger(line.priority)) return "Each line needs an integer priority";
+    if (!line.levelId || !levelIds.has(line.levelId)) return "Each threshold must use a current alert level";
+    if (seen.has(line.levelId)) return "Each alert level may appear once per rule";
+    seen.add(line.levelId);
     if (!Number.isFinite(line.thresholdValue) || Number(line.thresholdValue) < 0) return "Thresholds must be finite and nonnegative";
-    if (line.action !== undefined && line.action !== null && !["notify", "quarantine"].includes(line.action)) return "Invalid line action";
-    if (line.repeatIntervalMs !== undefined && line.repeatIntervalMs !== null && (!Number.isFinite(line.repeatIntervalMs) || line.repeatIntervalMs < 60_000)) return "Repeat intervals must be at least one minute";
   }
+  if (requireEveryLevel && seen.size !== levels.length) return "Every current alert level needs a threshold";
+  const ordered = levels.map(level => lines.find(line => line.levelId === level.id)!.thresholdValue as number);
+  if (ordered.some((value, index) => index > 0 && value < ordered[index - 1]!)) return "Thresholds must increase with alert levels";
   return null;
 }
 
@@ -540,17 +484,24 @@ function ruleInsert(db: D1Database, id: string, accountId: string, body: Partial
 function lineInsert(db: D1Database, ruleId: string, line: Partial<AlertLine>, now: number): D1PreparedStatement {
   return db.prepare(
     `INSERT INTO alert_lines(
-       id,alert_rule_id,label,color,priority,threshold_value,action,repeat_interval_ms,enabled,created_at,updated_at
-     ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)
-     ON CONFLICT(alert_rule_id,label) DO UPDATE SET
+       id,alert_rule_id,level_id,label,color,priority,threshold_value,action,repeat_interval_ms,enabled,created_at,updated_at
+     ) VALUES(?1,?2,?3,?4,?5,?6,?7,'notify',NULL,?8,?9,?9)
+     ON CONFLICT(alert_rule_id,level_id) DO UPDATE SET
        color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
-       action=excluded.action,repeat_interval_ms=excluded.repeat_interval_ms,
+       label=excluded.label,action='notify',repeat_interval_ms=NULL,
        enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`,
   ).bind(
-    line.id?.trim() || crypto.randomUUID(), ruleId, line.label?.trim(), line.color,
-    line.priority, line.thresholdValue, line.action ?? null, line.repeatIntervalMs ?? null,
-    line.enabled === false ? 0 : 1, now,
+    line.id?.trim() || crypto.randomUUID(), ruleId, line.levelId, line.label?.trim(), line.color,
+    line.priority, line.thresholdValue, line.enabled === false ? 0 : 1, now,
   );
+}
+
+function levelLine(level: AlertLevel, count: number, thresholdValue: number): Partial<AlertLine> {
+  const index = level.position;
+  return {
+    levelId: level.id, label: level.label, color: index === count - 1 ? "#ef4444" : index === count - 2 ? "#dc6b24" : "#f59e0b",
+    priority: index * 10, thresholdValue, action: "notify", repeatIntervalMs: null, enabled: true,
+  };
 }
 
 async function audit(db: D1Database, actor: string, action: string, target: string, detail: unknown): Promise<void> {
@@ -631,7 +582,7 @@ function mapRule(row: Record<string, unknown>): Record<string, unknown> {
 
 function mapLine(row: Record<string, unknown>): Record<string, unknown> {
   return {
-    id: row.id, alertRuleId: row.alert_rule_id, label: row.label, color: row.color,
+    id: row.id, alertRuleId: row.alert_rule_id, levelId: row.level_id, label: row.label, color: row.color,
     priority: row.priority, thresholdValue: row.threshold_value, action: row.action,
     repeatIntervalMs: row.repeat_interval_ms, enabled: Number(row.enabled) === 1,
   };

@@ -136,7 +136,7 @@ workflow files. New installations receive the canonical workflow from the
 Deploy Button template. A future workflow-infrastructure migration must be an
 explicit owner-authorized repository change rather than a self-update.
 
-On first authenticated login, verify usage access, then complete all four budget
+On first authenticated login, verify usage access, then complete the seven setup
 steps. The access check is required before onboarding can continue. The access
 screen is built into Brolly and requires no local agent or additional service.
 The setup header always includes **Sign out**. Signing out ends only the current
@@ -191,47 +191,69 @@ the authorization request includes `offline_access`, and each installation
 refreshes its encrypted grant five minutes before expiry. An installation that
 was authorized before renewable access was enabled must use **Reconnect
 Cloudflare** once; subsequent access-token rotation is automatic.
-Brolly requires
-ordered account limits, a limit for every product family, a limit for every
-discovered Worker script and Durable Object namespace, and all supported
-per-object Durable Object windows. Product or resource limits marked `Limited
-usage data` are retained, but alerts can evaluate only the billing signals
-Cloudflare currently exposes to the installation. Reopen the
-same wizard with **Budgets** in the dashboard header.
+Brolly requires ordered account limits, a limit for every product family, a
+limit for every discovered Worker script and Durable Object namespace, and all
+supported per-object Durable Object windows. Product or resource limits marked
+`Limited usage data` are retained, while alerts evaluate the billing signals
+Cloudflare exposes to the installation. Reopen the same wizard with **Budgets**
+in the dashboard header.
 
-Before enabling automatic controls:
+The setup sequence is:
+
+1. **Connect Cloudflare.** Verify monitoring access for the bound account.
+2. **Alert channels.** Add labeled destinations. A provider account is saved once for Twilio, Cloudflare Email, Resend, or Postmark. Later channels of that kind reuse the saved account. Discord, Slack, and generic webhooks use one URL per channel.
+3. **Alert levels.** Arrange the Warning, Critical, and Emergency columns. Add, rename, reorder, or delete columns within the eight-level limit. Add channels with per-entry intervals and add Prepare or Auto action entries.
+4. **Account spend.** Set one limit for each current alert level.
+5. **Product spend and usage.** Set one limit for each current alert level.
+6. **Resource spend and usage.** Set one limit for each current alert level.
+7. **Shutdown fuse.** Review the resource-aware coding-agent handoff and install the runtime integration through the normal application release process.
+
+The history import starts when Alert channels opens. The sidebar shows two
+bounded progress rows until the import completes. Channel and level edits remain
+available while ingestion runs.
+
+Cloudflare Email requires a dedicated API token with Email Sending permission.
+Brolly verifies token activity through `GET /user/tokens/verify` without sending
+mail. The from-address form uses zones from the connected account. Domain
+onboarding remains a Compute → Email Service task in Cloudflare. The channel
+records delivery failures, including permanent bounces, after dispatch.
+
+Before adding Auto action entries:
 
 1. Complete OAuth installation and select exactly one account. Confirm that the
    first sign-in binds the intended account before sharing the instance URL.
 2. Configure a manual Billing Read token if invoice reconciliation is required.
-3. Configure at least two notification paths, ideally one webhook and one SMS/email path.
+3. Configure at least two labeled notification paths. Include a webhook and an
+   SMS or email path when the incident response process supports both.
 4. Classify assets and verify the Brolly control-plane allowlist.
-5. Run controls in `observe` mode, then `approval`, before enabling `automatic`.
-6. Test stop and rollback for each actuator.
+5. Review the additive entries on every alert level. Confirm each channel
+   interval and each Prepare or Auto action entry.
+6. Test stop, queue pause, and rollback for each actuator that your levels use.
 
 The guard has two bounded, reversible actuators. Runtime quarantine publishes
 a secret-backed deployment fuse that makes one exact Durable Object or one
 instrumented Worker reject application work without a runtime lookup. Queue
 pause records the queue's current settings before setting `delivery_paused`.
-Legacy route/domain/trigger removal is retired and refused by the API. The
+Route, domain, and trigger removal remains refused by the API. The
 rollback or desired fuse state is committed to D1 and audited before any
 Cloudflare mutation starts. Brolly never deletes a Worker, route, domain,
 queue, Durable Object, or stored data.
 
-Automatic actions require global automatic mode and explicit opt-in on an applicable alert rule. Exact
-Worker and Durable Object targets need complete, fresh, unsampled usage,
-`standard` or `disposable` classification, inherited permission, a verified
+Auto action entries require complete, fresh, unsampled usage, `standard` or
+`disposable` classification, inherited permission, a verified
 `@standardagents/brolly-runtime` fuse, and a sustained confirmation window.
-Aggregate contributor rules prioritize a child that crossed its own Emergency
-line. They require the same deterministic candidate in two consecutive scans,
-at least half of current interval usage or aggregate excess, and at least four
-times the candidate's rolling baseline. Modeled cost,
-allocated cost, billing totals, sampled data, partial data, missing data, and
-stale data can support operator review and cannot authorize an automatic mutation.
+Aggregate contributor rules prioritize a child that crossed its highest level.
+They require the same deterministic candidate in two consecutive scans, at
+least half of current interval usage or aggregate excess, and at least four
+times the candidate's rolling baseline. Modeled cost, allocated cost, billing
+totals, sampled data, partial data, missing data, and stale data can support
+operator review. They cannot authorize an automatic mutation.
 
 Brolly coalesces at most 15 exact-object changes per Worker. Automation allows
 one deployment-changing action per Worker in 15 minutes and three automatic
-quarantines per account hour. Queue controls require explicit operator action.
+quarantines per account hour. Queue controls execute when a matching Auto pause
+entry passes the safety checks. Prepare entries create an operator-approved
+action.
 `control_plane`, `critical`, and `unclassified` assets remain ineligible.
 
 Exact-object quarantine is customer-visible downtime for that object. Worker
@@ -244,7 +266,7 @@ exact-object actuator; disabling its parent Worker has a namespace-wide or
 user-wide blast radius and must be reviewed as a different control.
 
 `brolly status`, `brolly incidents`, `brolly stop`, and `brolly resume` call the
-guard Worker with the optional break-glass token stored mode `0600` in
+guard Worker with the optional break-glass token stored with permissions `0600` in
 `~/.brolly/config.json`; they do not depend on a browser session. Browser login
 uses Cloudflare OAuth and never exposes that token.
 
@@ -270,18 +292,38 @@ without affecting the statuses of already verified Workers; the new rows begin
 as not configured or partial until explicitly declared and refreshed.
 
 Notification targets are capped at 20 deliveries per hour. Twilio targets also
-have a five-message daily cap. Warning lines default to one delivery for each
-period instance. Emergency lines default to immediate delivery followed by
-six-hour repeats while the instance stays open and unsilenced. Provider
+have a five-message daily cap. Channel entries default to one delivery for
+each period instance. A configured interval schedules repeats until the
+operator acknowledges the alert instance or the instance resolves. Provider
 credentials are AES-GCM encrypted with a Worker-secret key.
 
-Discord, Slack, Resend, Postmark, Twilio SMS, and generic HTTPS webhooks are
-configured on **Notifications**. The read API returns target status, minimum
-severity, label, and last-delivery metadata. It never decrypts a destination
-credential. Operators can configure several targets of one kind and identify
-each target with a label. Generic webhooks refuse redirects and local or
-private-network addresses. **Replace credentials** rotates a destination.
-Removing a target deletes its encrypted configuration.
+Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, and generic
+HTTPS webhooks are configured on **Notifications**. The read API returns target
+status, provider linkage, label, and last-delivery metadata. It never decrypts
+a destination credential. Operators can configure several targets of one kind
+and identify each target with a label. Generic webhooks refuse redirects and
+local or private-network addresses.
+
+The **Accounts** block lists one saved account for each provider kind. Changing
+an account reseals every channel that uses it. Removing an account requires
+removing its channels first. Removing a channel deletes its encrypted
+configuration and its alert-level entries.
+
+Cloudflare Email token verification uses one bounded `GET
+/user/tokens/verify` request. The from-address form lists the connected
+account's zones. Email Service domain onboarding stays in Cloudflare's Compute
+→ Email Service dashboard. Permanent bounces are recorded as failed delivery.
+
+The alert level board is the source of notification and control behavior. A
+firing level inherits entries from every level to its left. A later entry for
+the same channel supplies its interval. Auto takes precedence over Prepare for
+the same control family. The board supports Worker-ingress stop, Durable Object
+quarantine, and queue pause entries.
+
+Operators acknowledge an instance through `POST
+/api/alerts/:id/acknowledge`. The request records the actor and timestamp and
+clears pending notification work. Acknowledgment leaves the instance visible
+for review and leaves the configured level board unchanged.
 
 Control actions on the **Actions & quarantine** page (the overview shows the
 five most recent) are operator controls, not a passive log. Open a row to see

@@ -26,9 +26,9 @@ your normal release process, then refresh that Worker on Brolly's
 only the passive post-deployment checks make quarantine eligible.
 
 You can finish first-run setup without doing this. Monitoring, budgets, and
-notifications continue in alerts-only mode for any resource whose runtime is
-not installed and verified, and the same agent prompt remains available when
-you return to the runtime step.
+notifications continue for resources whose runtime is not installed and
+verified. Auto action entries remain ineligible for those resources, and the
+same agent prompt remains available when you return to the runtime step.
 
 ## 1. Install the package
 
@@ -137,11 +137,11 @@ discovered** to:
 2. Enter the owning Worker script for each Durable Object namespace.
 3. Confirm the constructor guard is installed for that namespace's classes.
 
-Unchecked or unmapped resources continue to generate alerts, but Brolly will
-not claim that it can quarantine them. The owning Worker comes only from
+Unchecked or unmapped resources continue to generate alerts. Brolly marks those
+resources ineligible for quarantine. The owning Worker comes only from
 Cloudflare namespace inventory; neither the UI nor CLI can override it. The
 namespace tier and verified integration are inherited by subsequently observed
-object IDs. Do this before enabling automatic mode.
+object IDs. Review this evidence before adding Auto action entries.
 
 ## Verify the installation in Brolly
 
@@ -183,26 +183,26 @@ is operator-confirmed versus remotely observed.
 At an eligible emergency threshold:
 
 1. Brolly creates or reuses an idempotent control action.
-2. Approval mode creates a prepared action for operator review. Automatic mode
-   proceeds only when the rule explicitly opts in and the target is a
-   `standard` or `disposable` fuse-integrated asset.
+2. A Prepare entry creates an action for operator review. An Auto entry
+   proceeds only when the target is a `standard` or `disposable` fuse-integrated
+   asset and every safety check passes.
 3. Brolly adds the exact object ID, or the entire Worker, to its current
    `BROLLY_FUSE` manifest.
 4. Brolly updates the owning Worker's secret through Cloudflare's API, which
    creates and deploys a new Worker version.
 5. The Worker and constructor guards enforce the new generation locally.
 
-If the package-installed confirmation or Worker mapping is absent, automatic
-mode sends the incident notification without mutating Cloudflare. It does not
-guess a script name or deploy an unverified fuse.
+If the package-installed confirmation or Worker mapping is absent, an Auto
+entry sends the incident notification without mutating Cloudflare. Brolly does
+not guess a script name or deploy an unverified fuse.
 
 The manifest is capped below Cloudflare's 5 KB per-binding limit. It contains
 only active emergency quarantines, not Brolly's policy database.
 
-Automatic execution requires a complete, fresh, unsampled raw usage meter, a
-sustained breach through the rule's confirmation window, global automatic mode,
-explicit rule opt-in, and a successful configuration refresh in the last 24
-hours. Projected dollars and delayed billing data can prepare operator evidence.
+An Auto entry requires a complete, fresh, unsampled raw usage meter, a
+sustained breach through the rule's confirmation window, an eligible resource
+tier and policy, and a successful configuration refresh in the last 24 hours.
+Projected dollars and delayed billing data can prepare operator evidence.
 Changes for the same Worker are coalesced and bounded; independent per-pass,
 per-Worker, and per-account circuit breakers stop deployment storms.
 

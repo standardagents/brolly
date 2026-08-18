@@ -32,6 +32,13 @@ function Fact({ label, value, mono = false, note, children }: {
   );
 }
 
+function spendSummary(limits: DashboardData["policy"]["accountDailySpend"], levels: DashboardData["alertLevels"]): string {
+  const ordered = levels?.length
+    ? levels
+    : Object.keys(limits).map((id, position) => ({ id, label: id, position, entries: [] }));
+  return ordered.map(level => `${level.label}: ${money(limits[level.id] ?? 0)}`).join(" · ");
+}
+
 /** Button-styled anchor (auto width) for links that open in a new tab. */
 function ActionLink({ href, variant = "secondary", className = "", children }: {
   href: string;
@@ -98,19 +105,8 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
         <FactGrid>
           <Fact
             label="Account daily limits"
-            value={`${money(data.policy.accountDailySpend.warning)} / ${money(data.policy.accountDailySpend.critical)} / ${money(data.policy.accountDailySpend.emergency)}`}
-            note="Warning / critical / emergency per rolling day"
-          />
-          <Fact
-            label="Control mode"
-            value={data.policy.mode === "observe" ? "Observe" : data.policy.mode === "approval" ? "Approval" : "Automatic"}
-            note={
-              <>
-                {data.policy.mode === "observe" && "Brolly records incidents and alerts, but never prepares or executes a stop."}
-                {data.policy.mode === "approval" && "Stops require explicit operator approval; nothing is stopped automatically."}
-                {data.policy.mode === "automatic" && "Standard/disposable assets with a tested fuse can be quarantined at an emergency threshold. Recovery stays manual."}
-              </>
-            }
+            value={spendSummary(data.policy.accountDailySpend, data.alertLevels)}
+            note="Per-level spend limits per rolling day"
           />
           <Fact
             label="Scoped budgets"

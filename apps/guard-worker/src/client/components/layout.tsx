@@ -139,7 +139,7 @@ export function AppShell({ route, onNavigate, data, connection, scanning, onScan
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <h1 className="m-0 text-[17px] tracking-[-.01em]">{ROUTE_TITLES[route]}</h1>
             <span className="text-[12.5px] whitespace-nowrap text-faint">
-              {connection.kind === "local" ? "Local preview" : `Account ${shortId(data.account.id)}`} · {modeLabel(data.policy.mode)}
+              {connection.kind === "local" ? "Local preview" : `Account ${shortId(data.account.id)}`}
             </span>
           </div>
           <div className="flex items-center gap-1.5 max-md:flex-wrap">
@@ -209,13 +209,4 @@ export function AppShell({ route, onNavigate, data, connection, scanning, onScan
       </div>
     </div>
   );
-}
-
-function modeLabel(mode: DashboardData["policy"]["mode"]): string {
-  const labels = {
-    observe: "Observe mode (alerts only)",
-    approval: "Approval mode (stops need sign-off)",
-    automatic: "Automatic emergency quarantine",
-  } as const;
-  return labels[mode] ?? mode;
 }

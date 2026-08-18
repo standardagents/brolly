@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Brand, Button, Eyebrow, Icon, Notice } from "../components/ui";
 import type { OnboardingData } from "../types";
 import {
@@ -9,9 +9,8 @@ import {
   RuntimeStep,
   StepActions,
 } from "./BudgetSteps";
-import { ActionsStep } from "./actions";
 import { AlertsStep } from "./alerts";
-import { AlertLevelsStep, DEFAULT_ALERT_LEVELS, type LevelAssignments } from "./levels";
+import { AlertLevelsStep, useAlertLevels } from "./levels";
 import { GrantBillingAccessButton } from "./access";
 import { ImportProgress } from "./ingest";
 import { useNotificationTargets } from "../components/notifications";
@@ -21,14 +20,14 @@ import { useOnboardingSave } from "./useOnboardingSave";
 import { useWizardNavigation } from "./useWizardNavigation";
 
 /**
- * Setup order. Steps 1 and 2 are the baseline; steps 3 to 5 add fidelity and
- * their limits must descend (resource <= product <= account).
+ * Setup order. The first three steps establish access, alert channels, and
+ * alert-level behavior. The spend and usage steps add threshold fidelity.
+ * Their limits must descend (resource <= product <= account).
  */
 const STEPS = [
   { key: "access", label: "Connect Cloudflare", preview: "Confirm the usage and billing APIs Brolly can read." },
   { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
-  { key: "levels", label: "Alert levels", preview: "Warning, Critical, and Emergency by default; add your own. Each level inherits the channels of the levels before it." },
-  { key: "actions", label: "Actions per level", preview: "What Brolly does at each alert level: notify, prepare a stop action, or quarantine." },
+  { key: "levels", label: "Alert levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
   { key: "account", label: "Account spend", preview: "One dollar limit for the whole account." },
   { key: "product", label: "Product spend & usage", preview: "Spend and usage limits for each Cloudflare product." },
   { key: "resource", label: "Resource spend & usage", preview: "Limits for any single Worker or Durable Object." },
@@ -66,15 +65,18 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
-  const [levels, setLevels] = useState(DEFAULT_ALERT_LEVELS);
-  const [levelAssignments, setLevelAssignments] = useState<LevelAssignments>({});
+  const board = useAlertLevels(token);
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
   const navigation = useWizardNavigation(STEPS.length, initialStep, editing);
-  const estimates = useBudgetEstimates(token, policy, setPolicy);
+  const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels);
   const save = useOnboardingSave(token, data, policy, integrations, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
   const billingConnected = estimates.estimates?.access.billing.state === "connected";
+
+  useEffect(() => {
+    if (board.levels.length) setPolicy(current => preparePolicy(current, data.families.map(item => item.family), data.scopedAssets, board.levels));
+  }, [board.levels, data.families, data.scopedAssets]);
 
   const bodies: ReactNode[] = [
     <AccessStep
@@ -91,19 +93,19 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       onVerified={estimates.acceptBillingAccess}
     />,
     <AlertsStep token={token} targets={targets} />,
-    <AlertLevelsStep token={token} targets={targets} levels={levels} setLevels={setLevels} assignments={levelAssignments} setAssignments={setLevelAssignments} />,
-    <ActionsStep levels={levels} policy={policy} setPolicy={setPolicy} />,
+    <AlertLevelsStep token={token} targets={targets} board={board} />,
     <AccountBudgetStep
       data={data}
       estimates={estimates.estimates}
       policy={policy}
+      levels={board.levels}
       setPolicy={setPolicy}
       busy={estimates.busy}
       notice={estimates.suggestionNotice}
       onSuggest={() => void estimates.suggestLimits()}
     />,
-    <ProductBudgetStep data={data} estimates={estimates.estimates} policy={policy} setPolicy={setPolicy} />,
-    <ResourceBudgetStep data={data} estimates={estimates.estimates} policy={policy} setPolicy={setPolicy} />,
+    <ProductBudgetStep data={data} estimates={estimates.estimates} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <ResourceBudgetStep data={data} estimates={estimates.estimates} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
   ];
 
@@ -146,7 +148,6 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                 {index === STEPS.length - 1 && (
                   <FinishFooter
                     assetCount={data.scopedAssets.length}
-                    automatic={policy.mode === "automatic"}
                     busy={save.busy}
                     editing={editing}
                     error={save.error}
@@ -243,20 +244,19 @@ function ContinueFooter({ billingConnected, blocked = "", busy, firstStep, onCon
   );
 }
 
-function FinishFooter({ assetCount, automatic, busy, editing, error, installedCount, onSave }: {
+function FinishFooter({ assetCount, busy, editing, error, installedCount, onSave }: {
   assetCount: number;
-  automatic: boolean;
   busy: boolean;
   editing: boolean;
   error: string;
   installedCount: number;
   onSave: () => void;
 }) {
-  const buttonLabel = busy ? "Saving…" : editing ? "Save runtime status" : installedCount ? "Finish and verify installs" : "Finish setup — alerts only";
+  const buttonLabel = busy ? "Saving…" : editing ? "Save runtime status" : installedCount ? "Finish and verify installs" : "Finish alerts-only setup";
   return <>
     {error && <Notice tone="error">{error}</Notice>}
     <StepActions>
-      <span className={`mx-auto max-w-[42ch] px-3.5 text-center text-[11.5px] leading-[1.45] max-md:order-first max-md:basis-full ${automatic && installedCount === 0 ? "text-warn" : "text-muted"}`}>
+      <span className="mx-auto max-w-[42ch] px-3.5 text-center text-[11.5px] leading-[1.45] text-muted max-md:order-first max-md:basis-full">
         {assetCount
           ? <><strong className="text-ink">{installedCount} of {assetCount} resources reported installed.</strong> {installedCount ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
           : <><strong className="text-ink">No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}

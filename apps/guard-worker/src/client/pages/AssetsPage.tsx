@@ -4,7 +4,7 @@ import { Button, DetailBlock, Drawer, EmptyState, ExternalAction, Icon, InfoTip,
 import { compactId, dateTime, money, relativeTime } from "../format";
 import { tierDescription, tierLabel } from "../lib/meta";
 import type { Route } from "../router";
-import type { Asset, AssetTier, DashboardData } from "../types";
+import type { AlertLevel, Asset, AssetTier, DashboardData, SpendLimits } from "../types";
 
 const TIER_OPTIONS: AssetTier[] = ["unclassified", "control_plane", "critical", "standard", "disposable"];
 
@@ -27,6 +27,21 @@ function TierBadge({ tier }: { tier: AssetTier }) {
 
 function assetBudgetKey(asset: Pick<Asset, "family" | "scope" | "id">): string {
   return `${asset.family}:${asset.scope}:${asset.id}`;
+}
+
+function spendLevels(data: DashboardData, limits: SpendLimits): AlertLevel[] {
+  return data.alertLevels?.length
+    ? data.alertLevels
+    : Object.keys(limits).map((id, position) => ({ id, position, label: id, entries: [] }));
+}
+
+function spendSummary(limits: SpendLimits, levels: AlertLevel[]): string {
+  return levels.map(level => `${level.label} ${money(limits[level.id] ?? 0)}`).join(" · ");
+}
+
+function highestSpendLabel(limits: SpendLimits, levels: AlertLevel[]): string {
+  const level = levels[levels.length - 1];
+  return level ? `${money(limits[level.id] ?? 0)} ${level.label.toLowerCase()}` : "No limit";
 }
 
 export function AssetsPage({ data, token, onNavigate, onBudgets }: {
@@ -153,6 +168,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
               <tbody>
                 {assets.map(asset => {
                   const budget = data.policy.assetDailySpend[assetBudgetKey(asset)];
+                  const levels = spendLevels(data, budget ?? data.policy.familyDailySpend[asset.family] ?? {});
                   return (
                     <Tr key={`${asset.family}:${asset.id}`} clickable onClick={() => setSelected(asset)}>
                       <Td>
@@ -165,7 +181,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
                         </span>
                       </Td>
                       <Td><TierBadge tier={asset.tier} /></Td>
-                      <Td numeric>{budget ? `${money(budget.emergency)} emergency` : "Product default"}</Td>
+                      <Td numeric>{budget ? highestSpendLabel(budget, levels) : "Product default"}</Td>
                       <Td numeric>
                         {asset.incidentCount
                           ? <span className="inline-block min-w-[22px] rounded-full bg-danger-bg px-[7px] py-0.5 text-center font-[750] text-danger">{asset.incidentCount}</span>
@@ -195,6 +211,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
           asset={selected}
           budget={data.policy.assetDailySpend[assetBudgetKey(selected)] ?? null}
           familyBudget={data.policy.familyDailySpend[selected.family] ?? null}
+          levels={spendLevels(data, data.policy.assetDailySpend[assetBudgetKey(selected)] ?? data.policy.familyDailySpend[selected.family] ?? {})}
           cloudflareUrl={data.assets.families.find(item => item.family === selected.family)?.cloudflareUrl}
           token={token}
           onClose={() => setSelected(null)}
@@ -215,10 +232,11 @@ function scopeLabel(asset: Asset): string {
   return `${asset.scope === "zone" ? "Zone" : "Resource"} · ${asset.family.replaceAll("_", " ")}`;
 }
 
-function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClose, onBudgets, onNavigate, onChanged }: {
+function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token, onClose, onBudgets, onNavigate, onChanged }: {
   asset: Asset;
-  budget: { warning: number; critical: number; emergency: number } | null;
-  familyBudget: { warning: number; critical: number; emergency: number } | null;
+  budget: SpendLimits | null;
+  familyBudget: SpendLimits | null;
+  levels: AlertLevel[];
   cloudflareUrl?: string;
   token: string;
   onClose: () => void;
@@ -289,7 +307,7 @@ function AssetDrawer({ asset, budget, familyBudget, cloudflareUrl, token, onClos
         {effectiveBudget ? (
           <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted">
             {budget ? "This resource has its own budget: " : "Inherits the product-family budget: "}
-            warns at {money(effectiveBudget.warning)}, critical at {money(effectiveBudget.critical)}, emergency at {money(effectiveBudget.emergency)} per rolling day.
+            {spendSummary(effectiveBudget, levels)} per rolling day.
           </p>
         ) : (
           <p className="mt-0 mb-2.5 text-[13px] leading-[1.55] text-muted">No budget is set for this resource or its product family yet; only account-level limits apply.</p>

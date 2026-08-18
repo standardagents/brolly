@@ -27,7 +27,8 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import type { InitialIngestionResponse } from "./src/client/types.ts";
+import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget } from "./src/client/types.ts";
+import type { UsageSeriesResponse } from "./src/usage-series.ts";
 
 const now = Date.now();
 const HOUR = 3_600_000;
@@ -58,7 +59,6 @@ const billingAccess = {
 
 const policy = {
   version: "4",
-  mode: "approval",
   accountDailySpend: spendLimits(40, 80, 150),
   familyDailySpend: {
     workers: spendLimits(15, 30, 60),
@@ -100,7 +100,6 @@ const defaultFamilyDailySpend = Object.fromEntries([
 
 const defaultPolicy = {
   version: "2026-08-09.1",
-  mode: "approval",
   accountDailySpend: spendLimits(5, 12.5, 25),
   familyDailySpend: defaultFamilyDailySpend,
   assetDailySpend: {},
@@ -364,7 +363,6 @@ const dashboard = {
   generatedAt: now,
   account: { id: "placeholder-demo-account", timezone: "America/New_York" },
   policy: {
-    mode: policy.mode,
     version: policy.version,
     accountDailySpend: policy.accountDailySpend,
     familyDailySpend: policy.familyDailySpend,
@@ -482,19 +480,26 @@ const configuration = {
   ],
 };
 
-const targets = [
+const targets: NotificationTarget[] = [
   {
     id: "target-1",
     kind: "discord",
     label: "Ops server",
     enabled: true,
-    minimumSeverity: "warning",
+    providerId: null,
     createdAt: now - 6 * 24 * HOUR,
     updatedAt: now - 6 * 24 * HOUR,
     lastDeliveryAt: now - 2 * HOUR,
     lastDeliveryOk: true,
     lastDeliveryError: null,
   },
+];
+
+const providers: NotificationProvider[] = [];
+const alertLevels: AlertLevel[] = [
+  { id: "warning", position: 0, label: "Warning", entries: [{ id: "entry-discord", levelId: "warning", kind: "channel", targetId: "target-1", repeatIntervalMs: null, position: 0 }] },
+  { id: "critical", position: 1, label: "Critical", entries: [] },
+  { id: "emergency", position: 2, label: "Emergency", entries: [] },
 ];
 
 const assets = [
@@ -549,6 +554,40 @@ const metricDefinitions = [
   { id: "durable_objects:rows_read", productFamily: "durable_objects", metricKey: "rows_read", displayName: "Rows read", unit: "rows", aggregationKind: "sum", billingMapping: "rows_read", collectorKey: "graphql:durable-objects", finestScope: "object", active: true },
 ];
 
+/**
+ * 90 days of per-scope daily cost and usage for the limits chart, with one
+ * billing anomaly so the symlog axis is reviewable. Deterministic per scope.
+ */
+function demoUsageSeries(scope: string): UsageSeriesResponse {
+  const seed = [...scope].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 7);
+  const random = (index: number) => ((Math.sin(seed + index * 12.9898) * 43758.5453) % 1 + 1) % 1;
+  const base = scope === "account" ? 42 : scope.startsWith("family:") ? 9 : 1.4;
+  const today = new Date(now).toISOString().slice(0, 10);
+  const series = Array.from({ length: 90 }, (_, index) => {
+    const at = now - (89 - index) * 24 * HOUR;
+    const weekday = new Date(at).getUTCDay();
+    const weekend = weekday === 0 || weekday === 6 ? 0.55 : 1;
+    const spike = index === 61 ? 26 : index === 62 ? 9 : 1;
+    const costUsd = Number((base * weekend * (0.7 + random(index) * 0.6) * spike).toFixed(4));
+    return {
+      day: new Date(at).toISOString().slice(0, 10), costUsd, sealed: index < 89,
+      metrics: { "workers.requests": Math.round(costUsd * 3_300_000), "workers.cpu_ms": Math.round(costUsd * 41_000) },
+    };
+  });
+  const cycles = [-2, -1, 0, 1].map(offset => {
+    const date = new Date(now);
+    return { startsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1), endsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset + 1, 1), approximate: false };
+  });
+  return {
+    scope, resourceId: `demo:${scope}`, found: true, today,
+    metrics: {
+      "workers.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
+      "workers.cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "ms", billable: true },
+    },
+    series, cycles,
+  };
+}
+
 const demoUsagePoints = Array.from({ length: 20 }, (_, index) => {
   const at = now - (19 - index) * 24 * HOUR;
   return {
@@ -573,8 +612,8 @@ const demoRules = [{
   notificationTargetIds: ["target-1"], autoQuarantine: false, autoQuarantineContributors: false,
   confirmationWindowMs: 300_000, enabled: true, createdAt: now - 10 * 24 * HOUR, updatedAt: now - HOUR,
   lines: [
-    { id: "demo-warning", alertRuleId: "demo-account-cost", label: "Warning", color: "#f59e0b", priority: 50, thresholdValue: 15, action: "notify", repeatIntervalMs: null, enabled: true },
-    { id: "demo-emergency", alertRuleId: "demo-account-cost", label: "Emergency", color: "#ef4444", priority: 100, thresholdValue: 25, action: "notify", repeatIntervalMs: 6 * HOUR, enabled: true },
+    { id: "demo-warning", alertRuleId: "demo-account-cost", levelId: "warning", label: "Warning", color: "#f59e0b", priority: 0, thresholdValue: 15, action: "notify", repeatIntervalMs: null, enabled: true },
+    { id: "demo-emergency", alertRuleId: "demo-account-cost", levelId: "emergency", label: "Emergency", color: "#ef4444", priority: 20, thresholdValue: 25, action: "notify", repeatIntervalMs: null, enabled: true },
   ],
 }];
 
@@ -583,7 +622,7 @@ const demoAlertInstances = [{
   targetResourceId: ledgerResources[0]!.id, periodStartAt: now - HOUR * 16, periodEndAt: now + HOUR * 8,
   observedValue: 18.42, thresholdValue: 15, evidence: { measurement: "estimated_cost" },
   dataQuality: "complete", status: "open", firstBreachedAt: now - 2 * HOUR, lastBreachedAt: now - 6 * 60_000,
-  nextNotificationAt: null, notificationCount: 1, silencedAt: null, silencedBy: null,
+  nextNotificationAt: null, notificationCount: 1, acknowledgedAt: null, acknowledgedBy: null,
   linkedActionId: null, historical: 0, metricDefinitionId: "account:estimated_cost_usd",
   label: "Warning", color: "#f59e0b", priority: 50, displayName: "Demo Cloudflare account",
   productFamily: "account", cloudflareId: "placeholder-demo-account",
@@ -593,7 +632,7 @@ function demoApi(): Plugin {
   return {
     name: "brolly-demo-api",
     configureServer(server) {
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (!url.pathname.startsWith("/api/")) return next();
         const send = (body: unknown, status = 200) => {
@@ -612,6 +651,9 @@ function demoApi(): Plugin {
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
         if (url.pathname === "/api/targets" && get) return send({ targets, credentialStorageReady: true });
+        if (url.pathname === "/api/providers" && get) return send({ providers });
+        if (url.pathname === "/api/alert-levels" && get) return send({ levels: alertLevels });
+        if (url.pathname === "/api/cloudflare-zones" && get) return send({ accountId: session.account.id, zones: [{ id: "zone-1", name: "example.com" }, { id: "zone-2", name: "example.net" }] });
         if (url.pathname === "/api/assets" && get) return send({ assets });
         if (url.pathname === "/api/ledger/resources" && get) {
           const query = url.searchParams.get("q")?.toLowerCase();
@@ -622,6 +664,7 @@ function demoApi(): Plugin {
           return send({ resources, families: [...new Set(ledgerResources.map(item => item.productFamily).filter(item => item !== "account"))].sort(), nextCursor: null, generatedAt: Date.now() });
         }
         if (url.pathname === "/api/metric-definitions" && get) return send({ metricDefinitions });
+        if (url.pathname === "/api/usage-series" && get) return send(demoUsageSeries(url.searchParams.get("scope") ?? "account"));
         if (url.pathname === "/api/usage" && get) {
           const resource = ledgerResources.find(item => item.id === url.searchParams.get("resourceId")) ?? ledgerResources[0];
           return send({ resource, metricDefinitions, metricId: url.searchParams.get("metricId"), period: "day", points: demoUsagePoints, oldestRetainedAt: "2026-07-24", freshnessAt: now - 6 * 60_000 });
@@ -667,12 +710,113 @@ function demoApi(): Plugin {
           estimateAccess.billing = { state: "not_configured", detail: "No Billing Read token is configured, so exact account totals are unavailable." };
           return send({ ok: true });
         }
+        if (url.pathname === "/api/targets" && req.method === "POST") {
+          const body = await readJson(req);
+          const id = crypto.randomUUID();
+          const providerKind = ["cloudflare_email", "postmark", "resend", "twilio"].includes(String(body.kind));
+          if (providerKind && body.provider) {
+            const config = record(body.provider).config;
+            const from = String(record(config).from ?? "");
+            const existing = providers.findIndex(item => item.kind === body.kind);
+            const provider = { kind: body.kind, from, updatedAt: Date.now() } as NotificationProvider;
+            if (existing === -1) providers.push(provider); else providers[existing] = provider;
+          }
+          targets.push({ id, kind: body.kind as NotificationTarget["kind"], label: String(body.label), providerId: providerKind ? `provider:${body.kind}` : null, enabled: true, createdAt: Date.now(), updatedAt: Date.now(), lastDeliveryAt: null, lastDeliveryOk: null, lastDeliveryError: null });
+          return send({ ok: true, id });
+        }
+        const targetRoute = url.pathname.match(/^\/api\/targets\/([^/]+)$/);
+        if (targetRoute && req.method === "PATCH") {
+          const body = await readJson(req);
+          const target = targets.find(item => item.id === targetRoute[1]);
+          if (target && typeof body.label === "string") target.label = body.label;
+          return send({ ok: true, id: targetRoute[1] });
+        }
+        if (targetRoute && req.method === "DELETE") {
+          const index = targets.findIndex(item => item.id === targetRoute[1]);
+          if (index >= 0) targets.splice(index, 1);
+          for (const level of alertLevels) level.entries = level.entries.filter(entry => entry.targetId !== targetRoute[1]);
+          return send({ ok: true, id: targetRoute[1] });
+        }
+        const providerRoute = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+        if (providerRoute && req.method === "PATCH") {
+          const body = await readJson(req);
+          const kind = providerRoute[1] as NotificationProvider["kind"];
+          const from = String(record(record(body).config).from ?? "");
+          const index = providers.findIndex(item => item.kind === kind);
+          const provider = { kind, from, updatedAt: Date.now() };
+          if (index === -1) providers.push(provider); else providers[index] = provider;
+          return send({ ok: true, kind });
+        }
+        if (providerRoute && req.method === "DELETE") {
+          const index = providers.findIndex(item => item.kind === providerRoute[1]);
+          if (index >= 0) providers.splice(index, 1);
+          return send({ ok: true, kind: providerRoute[1] });
+        }
+        if (url.pathname === "/api/alert-levels" && req.method === "POST") {
+          const body = await readJson(req);
+          const id = crypto.randomUUID();
+          const after = body.afterLevelId == null ? -1 : alertLevels.findIndex(level => level.id === body.afterLevelId);
+          alertLevels.splice(after + 1, 0, { id, position: after + 1, label: String(body.label), entries: [] });
+          normalizeLevelPositions();
+          return send({ ok: true, level: alertLevels.find(level => level.id === id) }, 201);
+        }
+        const levelRoute = url.pathname.match(/^\/api\/alert-levels\/([^/]+)$/);
+        if (levelRoute && req.method === "PATCH") {
+          const body = await readJson(req);
+          const level = alertLevels.find(item => item.id === levelRoute[1]);
+          if (level && typeof body.label === "string") level.label = body.label;
+          if (level && typeof body.position === "number") {
+            alertLevels.splice(alertLevels.indexOf(level), 1);
+            alertLevels.splice(body.position, 0, level);
+            normalizeLevelPositions();
+          }
+          return send({ ok: true, level });
+        }
+        if (levelRoute && req.method === "DELETE") {
+          const index = alertLevels.findIndex(item => item.id === levelRoute[1]);
+          if (index >= 0 && alertLevels.length > 1) alertLevels.splice(index, 1);
+          normalizeLevelPositions();
+          return send({ ok: true, id: levelRoute[1] });
+        }
+        const entryRoute = url.pathname.match(/^\/api\/alert-levels\/([^/]+)\/entries(?:\/([^/]+))?$/);
+        if (entryRoute && !entryRoute[2] && req.method === "POST") {
+          const body = await readJson(req);
+          const level = alertLevels.find(item => item.id === entryRoute[1]);
+          const entry = { id: crypto.randomUUID(), levelId: entryRoute[1]!, kind: body.kind, targetId: body.targetId ?? null, repeatIntervalMs: body.repeatIntervalMs ?? null, position: level?.entries.length ?? 0 } as AlertLevel["entries"][number];
+          level?.entries.push(entry);
+          return send({ ok: true, entry }, 201);
+        }
+        if (entryRoute?.[2] && req.method === "PATCH") {
+          const body = await readJson(req);
+          const entry = alertLevels.find(item => item.id === entryRoute[1])?.entries.find(item => item.id === entryRoute[2]);
+          if (entry && "repeatIntervalMs" in body) entry.repeatIntervalMs = body.repeatIntervalMs as number | null;
+          return send({ ok: true, entry });
+        }
+        if (entryRoute?.[2] && req.method === "DELETE") {
+          const level = alertLevels.find(item => item.id === entryRoute[1]);
+          if (level) level.entries = level.entries.filter(item => item.id !== entryRoute[2]);
+          return send({ ok: true, id: entryRoute[2] });
+        }
         // Every other mutation (wizard saves, scans, acks, action approve/execute,
         // tier edits, notification tests) acknowledges without side effects.
         return send({ ok: true });
       });
     },
   };
+}
+
+async function readJson(req: import("node:http").IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown> : {};
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function normalizeLevelPositions(): void {
+  alertLevels.forEach((level, position) => { level.position = position; });
 }
 
 export default defineConfig({

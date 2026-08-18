@@ -1,7 +1,6 @@
 export type Severity = "info" | "warning" | "critical" | "emergency";
 export type CoverageState = "healthy" | "delayed" | "unavailable" | "permission_denied";
 export type AssetTier = "control_plane" | "critical" | "standard" | "disposable" | "unclassified";
-export type ControlMode = "observe" | "approval" | "automatic";
 
 export interface AssetRef {
   accountId: string;
@@ -45,15 +44,10 @@ export interface Threshold {
   anomalyMultiplier?: number;
 }
 
-export interface SpendLimits {
-  warning: number;
-  critical: number;
-  emergency: number;
-}
+export type SpendLimits = Record<string, number>;
 
 export interface Policy {
   version: string;
-  mode: ControlMode;
   accountDailySpend: SpendLimits;
   familyDailySpend?: Record<string, SpendLimits>;
   assetDailySpend?: Record<string, SpendLimits>;

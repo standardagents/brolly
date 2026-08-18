@@ -1,8 +1,7 @@
 import type { Env } from "./env.js";
 import { runMonitor } from "./monitor.js";
 import { executeCloudflareControl, executeDeploymentFuseControl, prepareCloudflareControl, rollbackCloudflareControl } from "./control.js";
-import { DEFAULT_POLICY, METRIC_CATALOG, assetBudgetKey, type AssetRef, type ControlAction, type Policy } from "@standardagents/brolly-core";
-import { sealJson } from "./credentials.js";
+import { DEFAULT_POLICY, METRIC_CATALOG, RunBudget, assetBudgetKey, type AssetRef, type ControlAction, type Policy } from "@standardagents/brolly-core";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
@@ -12,8 +11,10 @@ import { ledgerApiRoute } from "./ledger-api.js";
 import { LedgerStore } from "./ledger-store.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
 import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, runInitialIngestion } from "./initial-ingestion.js";
-import { notificationWebhookUrl } from "@standardagents/brolly-notifiers";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
+import { notificationApiRoute } from "./notification-api.js";
+import { alertLevelsApiRoute, loadAlertLevels } from "./alert-levels.js";
+import { CloudflareClient } from "./cloudflare.js";
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -33,6 +34,12 @@ export default {
     const activeEnv = await configuredEnv(env, actor);
     if (!activeEnv) return Response.json({ error: "Choose one Cloudflare account during sign-in before using Brolly" }, { status: 409 });
     env = activeEnv;
+
+    const notificationResponse = await notificationApiRoute(request, env, actor.actor);
+    if (notificationResponse) return notificationResponse;
+
+    const alertLevelsResponse = await alertLevelsApiRoute(request, env, actor.actor);
+    if (alertLevelsResponse) return alertLevelsResponse;
 
     const ledgerResponse = await ledgerApiRoute(request, env, actor.actor);
     if (ledgerResponse) return ledgerResponse;
@@ -58,6 +65,11 @@ export default {
 
     if (url.pathname === "/api/assets" && request.method === "GET") {
       return Response.json(await assetList(request, env));
+    }
+
+    if (url.pathname === "/api/cloudflare-zones" && request.method === "GET") {
+      const budget = new RunBudget({ apiCalls: 10, databaseRows: 0, samples: 500, wallMs: 10_000 });
+      return Response.json({ accountId: env.BROLLY_ACCOUNT_ID, zones: await new CloudflareClient(env, budget).zones() }, { headers: { "cache-control": "no-store" } });
     }
 
     if (url.pathname === "/api/configuration" && request.method === "GET") {
@@ -134,7 +146,8 @@ export default {
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {
       const body = await request.json<{ policy: Policy; integrations?: Array<{ family: "workers" | "durable_objects"; id: string; workerScript?: string; installed: boolean }> }>();
-      if (!validPolicy(body.policy, true)) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered warning ≤ critical ≤ emergency" }, { status: 400 });
+      const alertLevels = await loadAlertLevels(env.DB);
+      if (!validPolicy(body.policy, true, alertLevels.map(level => level.id))) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered by alert level" }, { status: 400 });
       const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<{ family: string; asset_id: string; scope: AssetRef["scope"]; metadata_json: string }>();
       const missingScopedBudgets = scopedAssets.results.filter(asset => !body.policy.assetDailySpend?.[assetBudgetKey({ family: asset.family, scope: asset.scope, id: asset.asset_id })]);
       if (missingScopedBudgets.length) return Response.json({ error: `Set limits for every discovered Worker and Durable Object namespace (${missingScopedBudgets.length} missing)` }, { status: 400 });
@@ -174,7 +187,7 @@ export default {
         if (ctx) ctx.waitUntil(work);
         else void work;
       }
-      await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { mode: body.policy.mode, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, runtimeIntegrations: body.integrations?.filter(item => item.installed).length ?? 0, thresholds: body.policy.thresholds.length });
+      await audit(env.DB, "admin", "onboarding.complete", body.policy.version, { levels: alertLevels.length, families: Object.keys(body.policy.familyDailySpend ?? {}).length, scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length, runtimeIntegrations: body.integrations?.filter(item => item.installed).length ?? 0, thresholds: body.policy.thresholds.length });
       return Response.json({ ok: true, policy: body.policy, initialIngestion });
     }
 
@@ -238,13 +251,14 @@ export default {
 
     if (url.pathname === "/api/policy" && request.method === "PUT") {
       const policy = await request.json<Policy>();
-      if (!validPolicy(policy)) {
+      const alertLevels = await loadAlertLevels(env.DB);
+      if (!validPolicy(policy, false, alertLevels.map(level => level.id))) {
         return Response.json({ error: "Invalid policy" }, { status: 400 });
       }
       await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(policy), Date.now()).run();
       await new LedgerStore(env.DB).syncMetricCatalog();
       await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, policy, true);
-      await audit(env.DB, "admin", "policy.update", policy.version, { mode: policy.mode, thresholds: policy.thresholds.length });
+      await audit(env.DB, "admin", "policy.update", policy.version, { levels: alertLevels.length, thresholds: policy.thresholds.length });
       return Response.json({ ok: true, policy });
     }
 
@@ -304,70 +318,6 @@ export default {
       if (row.kind === "runtime_quarantine" && !workerScript) return Response.json({ error: "An authoritative owning Worker and deployment fuse are required; legacy callback controls are retired" }, { status: 409 });
       if (rollback.workerScript && workerScript !== rollback.workerScript) return Response.json({ error: "The authoritative Worker mapping changed after this action was prepared; prepare a new action" }, { status: 409 });
       return runAction(env, action, { workerScript }, actionMatch[2] === "resume" ? "resume" : "quarantine");
-    }
-
-    if (url.pathname === "/api/targets" && request.method === "GET") {
-      const result = await env.DB.prepare(
-        `SELECT t.id,t.kind,t.label,t.enabled,t.minimum_severity,t.created_at,t.updated_at,
-          (SELECT d.created_at FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_at,
-          (SELECT d.ok FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_ok,
-          (SELECT d.error FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_error
-         FROM notification_targets t ORDER BY t.created_at ASC LIMIT 50`,
-      ).all<Record<string, unknown>>();
-      return Response.json({
-        targets: result.results.map(row => ({
-          id: String(row.id), kind: String(row.kind), label: row.label == null ? null : String(row.label), enabled: Number(row.enabled) === 1,
-          minimumSeverity: String(row.minimum_severity), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
-          lastDeliveryAt: row.last_delivery_at == null ? null : Number(row.last_delivery_at),
-          lastDeliveryOk: row.last_delivery_ok == null ? null : Number(row.last_delivery_ok) === 1,
-          lastDeliveryError: row.last_delivery_error == null ? null : String(row.last_delivery_error),
-        })),
-        credentialStorageReady: Boolean(env.BROLLY_CREDENTIAL_KEY),
-      });
-    }
-
-    if (url.pathname === "/api/targets" && request.method === "POST") {
-      const body = await request.json<{ id?: string; kind: string; label?: string | null; config: Record<string, unknown>; enabled?: boolean; minimumSeverity?: string }>();
-      if (!["discord", "slack", "webhook", "resend", "postmark", "twilio"].includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
-      const label = normalizeTargetLabel(body.label);
-      if (label === false) return Response.json({ error: "Label must be 80 characters or fewer" }, { status: 400 });
-      if (!["info", "warning", "critical", "emergency"].includes(body.minimumSeverity ?? "warning")) return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
-      const configError = validateNotificationConfig(body.kind, body.config);
-      if (configError) return Response.json({ error: configError }, { status: 400 });
-      if (!env.BROLLY_CREDENTIAL_KEY) return Response.json({ error: "BROLLY_CREDENTIAL_KEY is required; target credentials will never be stored in plaintext" }, { status: 503 });
-      const id = body.id ?? crypto.randomUUID();
-      const now = Date.now();
-      await env.DB.prepare(
-        `INSERT INTO notification_targets(id,kind,label,config_json,enabled,minimum_severity,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7)
-         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,label=excluded.label,config_json=excluded.config_json,enabled=excluded.enabled,minimum_severity=excluded.minimum_severity,updated_at=excluded.updated_at`,
-      ).bind(id, body.kind, label, await sealJson(body.config, env.BROLLY_CREDENTIAL_KEY), body.enabled === false ? 0 : 1, body.minimumSeverity ?? "warning", now).run();
-      await audit(env.DB, "admin", "notification_target.upsert", id, { kind: body.kind, label });
-      return Response.json({ ok: true, id });
-    }
-
-    const targetMatch = url.pathname.match(/^\/api\/targets\/([^/]+)$/);
-    if (targetMatch && request.method === "PATCH") {
-      const body = await request.json<{ enabled?: boolean; minimumSeverity?: string; label?: string | null }>();
-      if (body.minimumSeverity !== undefined && !["info", "warning", "critical", "emergency"].includes(body.minimumSeverity)) {
-        return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
-      }
-      const label = body.label === undefined ? undefined : normalizeTargetLabel(body.label);
-      if (label === false) return Response.json({ error: "Label must be 80 characters or fewer" }, { status: 400 });
-      if (body.enabled === undefined && body.minimumSeverity === undefined && label === undefined) return Response.json({ error: "No target change supplied" }, { status: 400 });
-      const id = decodeURIComponent(targetMatch[1]!);
-      const result = await env.DB.prepare(
-        `UPDATE notification_targets SET enabled=COALESCE(?2,enabled),minimum_severity=COALESCE(?3,minimum_severity),label=CASE WHEN ?5=1 THEN ?4 ELSE label END,updated_at=?6 WHERE id=?1`,
-      ).bind(id, body.enabled === undefined ? null : body.enabled ? 1 : 0, body.minimumSeverity ?? null, label ?? null, label === undefined ? 0 : 1, Date.now()).run();
-      if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
-      await audit(env.DB, "admin", "notification_target.update", id, body);
-      return Response.json({ ok: true, id });
-    }
-    if (targetMatch && request.method === "DELETE") {
-      const id = decodeURIComponent(targetMatch[1]!);
-      const result = await env.DB.prepare(`DELETE FROM notification_targets WHERE id=?1`).bind(id).run();
-      if ((result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
-      await audit(env.DB, "admin", "notification_target.delete", id, {});
-      return Response.json({ ok: true, id });
     }
 
     const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/([^/]+)$/);
@@ -481,7 +431,7 @@ export function executableIncidentError(incident: Record<string, unknown> | null
 
 export function executableAlertInstanceError(instance: Record<string, unknown> | null, now = Date.now()): string | null {
   if (!instance) return "The source alert instance no longer exists; no control was applied";
-  if (String(instance.status) !== "open" || Number(instance.historical) === 1 || Number(instance.period_end_at) <= now) {
+  if (!["open", "acknowledged"].includes(String(instance.status)) || Number(instance.historical) === 1 || Number(instance.period_end_at) <= now) {
     return "The source alert instance is inactive; no control was applied";
   }
   if (["missing", "stale"].includes(String(instance.data_quality))) {
@@ -561,37 +511,21 @@ function isBrollyWorker(env: Env, family: string, id: string): boolean {
   return id === (env.BROLLY_SELF_WORKER_NAME ?? "brolly-guard") || id === "brolly-guard" || id.startsWith("brolly-guard-");
 }
 
-export function validateNotificationConfig(kind: string, config: Record<string, unknown> | null | undefined): string | null {
-  if (!config || typeof config !== "object") return "Notification configuration is required";
-  const present = (key: string) => typeof config[key] === "string" && String(config[key]).trim().length > 0;
-  if ((kind === "discord" || kind === "slack" || kind === "webhook") && !present("url")) return `${kind} webhook URL is required`;
-  if (kind === "discord" || kind === "slack" || kind === "webhook") {
-    try { notificationWebhookUrl(kind, String(config.url)); } catch (error) {
-      return error instanceof Error ? error.message : `${kind} webhook URL is invalid`;
-    }
-  }
-  if (kind === "twilio" && !["accountSid", "token", "from", "to"].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
-  if (kind === "resend" && !["token", "from", "to"].every(present)) return "Resend API key, from address, and destination address are required";
-  if (kind === "postmark" && !["token", "from", "to"].every(present)) return "Postmark token, from address, and destination address are required";
-  return null;
-}
-
 async function audit(db: D1Database, actor: string, action: string, target: string, detail: unknown): Promise<void> {
   await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
 }
 
-function validPolicy(policy: Policy, requireEveryFamily = false): boolean {
+function validPolicy(policy: Policy, requireEveryFamily = false, levelIds: string[] = ["warning", "critical", "emergency"]): boolean {
   const finiteNonnegative = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
-  if (!["observe", "approval", "automatic"].includes(policy?.mode) || typeof policy?.version !== "string" || !policy.version || !Array.isArray(policy.thresholds)) return false;
-  const spend = policy.accountDailySpend;
-  if (!spend || !finiteNonnegative(spend.warning) || !finiteNonnegative(spend.critical) || !finiteNonnegative(spend.emergency)
-    || spend.warning > spend.critical || spend.critical > spend.emergency) return false;
+  const validSpend = (spend: Record<string, number> | undefined) => Boolean(spend)
+    && levelIds.every(levelId => finiteNonnegative(spend?.[levelId]))
+    && levelIds.every((levelId, index) => index === 0 || spend![levelIds[index - 1]!]! <= spend![levelId]!);
+  if (typeof policy?.version !== "string" || !policy.version || !Array.isArray(policy.thresholds) || !levelIds.length) return false;
+  if (!validSpend(policy.accountDailySpend)) return false;
   const familySpend = policy.familyDailySpend ?? {};
   if (requireEveryFamily && METRIC_CATALOG.some(definition => !familySpend[definition.family])) return false;
-  if (Object.values(familySpend).some(limit => !finiteNonnegative(limit?.warning) || !finiteNonnegative(limit?.critical) || !finiteNonnegative(limit?.emergency)
-    || limit.warning > limit.critical || limit.critical > limit.emergency)) return false;
-  if (Object.values(policy.assetDailySpend ?? {}).some(limit => !finiteNonnegative(limit?.warning) || !finiteNonnegative(limit?.critical) || !finiteNonnegative(limit?.emergency)
-    || limit.warning > limit.critical || limit.critical > limit.emergency)) return false;
+  if (Object.values(familySpend).some(limit => !validSpend(limit))) return false;
+  if (Object.values(policy.assetDailySpend ?? {}).some(limit => !validSpend(limit))) return false;
   return policy.thresholds.every(threshold => typeof threshold.metric === "string" && !!threshold.metric
     && finiteNonnegative(threshold.windowMs) && threshold.windowMs > 0
     && [threshold.warning, threshold.critical, threshold.emergency, threshold.minimumBaselineSamples, threshold.anomalyMultiplier]
@@ -601,10 +535,4 @@ function validPolicy(policy: Policy, requireEveryFamily = false): boolean {
     && (threshold.warning === undefined || threshold.emergency === undefined || threshold.warning <= threshold.emergency));
 }
 
-/** Trim a target label; null clears it, false means it is too long. */
-function normalizeTargetLabel(label: string | null | undefined): string | null | false {
-  if (label == null) return null;
-  const trimmed = String(label).trim();
-  if (trimmed.length > 80) return false;
-  return trimmed || null;
-}
+export { validateNotificationConfig, validateProviderConfig } from "./notification-api.js";

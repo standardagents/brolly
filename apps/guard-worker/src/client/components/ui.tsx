@@ -83,7 +83,7 @@ export function ProductIcon({ family, tone = "neutral" }: { family: string; tone
 
 /** Official notification-channel brand mark served from local assets (see docs/notification-brand-icons.md). */
 export function ChannelLogo({ kind }: { kind: NotificationKind }) {
-  if (!["discord", "slack", "twilio"].includes(kind)) {
+  if (!["cloudflare_email", "discord", "slack", "twilio"].includes(kind)) {
     const label = kind === "webhook" ? "{}" : kind === "resend" ? "R" : "P";
     return (
       <span className="grid size-[38px] flex-none place-items-center rounded-lg border border-line-soft bg-white text-[13px] font-extrabold text-[#566070]" aria-hidden="true">

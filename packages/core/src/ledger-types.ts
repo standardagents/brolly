@@ -84,6 +84,7 @@ export interface AlertRule {
 export interface AlertLine {
   id: string;
   alertRuleId: string;
+  levelId: string;
   label: string;
   color: string;
   priority: number;
@@ -103,13 +104,13 @@ export interface AlertInstance {
   observedValue: number;
   thresholdValue: number;
   quality: DataQualityState;
-  status: "open" | "silenced" | "expired" | "resolved";
+  status: "open" | "acknowledged" | "expired" | "resolved";
   firstBreachedAt: number;
   lastBreachedAt: number;
   nextNotificationAt: number | null;
   notificationCount: number;
-  silencedAt: number | null;
-  silencedBy: string | null;
+  acknowledgedAt: number | null;
+  acknowledgedBy: string | null;
   linkedAction: ControlAction | null;
 }
 

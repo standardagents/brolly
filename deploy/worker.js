@@ -50,7 +50,7 @@ var RunBudget = class {
 };
 //#endregion
 //#region ../../packages/core/dist/catalog.js
-var METRIC_CATALOG_VERSION = "2026-08-13";
+var METRIC_CATALOG_VERSION = "2026-08-17";
 var METRIC_CATALOG = [
 	{
 		family: "workers",
@@ -139,7 +139,7 @@ var METRIC_CATALOG = [
 		family: "pages",
 		metrics: ["requests", "builds"],
 		preferredScope: "resource",
-		fastSource: "rest",
+		fastSource: "graphql",
 		billingSource: true
 	},
 	{
@@ -164,7 +164,7 @@ var METRIC_CATALOG = [
 		family: "vectorize",
 		metrics: ["queried_dimensions", "stored_dimensions"],
 		preferredScope: "resource",
-		fastSource: "rest",
+		fastSource: "graphql",
 		billingSource: true
 	},
 	{
@@ -219,8 +219,8 @@ var METRIC_CATALOG = [
 	{
 		family: "worker_builds",
 		metrics: ["build_minutes"],
-		preferredScope: "resource",
-		fastSource: "rest",
+		preferredScope: "account",
+		fastSource: "graphql",
 		billingSource: true
 	},
 	{
@@ -238,17 +238,24 @@ var METRIC_CATALOG = [
 	{
 		family: "log_explorer",
 		metrics: [
-			"data_points",
+			"ingested_bytes",
 			"queries",
 			"storage_bytes"
 		],
-		preferredScope: "account",
+		preferredScope: "resource",
 		fastSource: "graphql",
 		billingSource: true
 	},
 	{
 		family: "zones",
 		metrics: ["requests", "bandwidth_bytes"],
+		preferredScope: "zone",
+		fastSource: "graphql",
+		billingSource: true
+	},
+	{
+		family: "email",
+		metrics: ["sent", "routed"],
 		preferredScope: "zone",
 		fastSource: "graphql",
 		billingSource: true
@@ -342,6 +349,7 @@ var COST_METRIC_DEFINITIONS = [
 var METRIC_DEFINITIONS = [...USAGE_METRIC_DEFINITIONS, ...COST_METRIC_DEFINITIONS];
 function metricUnit(metric) {
 	if (metric.includes("cost")) return "usd";
+	if (metric.includes("gb_seconds")) return "gb_seconds";
 	if (metric.includes("byte") || metric.includes("storage") || metric.includes("egress")) return "bytes";
 	if (metric.includes("row")) return "rows";
 	if (metric.includes("request")) return "requests";
@@ -372,6 +380,7 @@ var DEFAULT_FAMILY_DAILY_SPEND = Object.fromEntries([
 	"analytics_engine",
 	"log_explorer",
 	"zones",
+	"email",
 	"unknown"
 ].map((family) => [family, {
 	warning: 1,
@@ -380,7 +389,6 @@ var DEFAULT_FAMILY_DAILY_SPEND = Object.fromEntries([
 }]));
 var DEFAULT_POLICY = {
 	version: "2026-08-09.1",
-	mode: "approval",
 	accountDailySpend: {
 		warning: 5,
 		critical: 12.5,
@@ -684,15 +692,17 @@ async function notify(target, incident, fetcher = fetch) {
 	try {
 		const request = buildRequest(target, incident);
 		const response = await fetcher(request.url, request.init);
-		return response.ok ? {
-			targetId: target.id,
-			ok: true,
-			status: response.status
-		} : {
+		if (!response.ok) return {
 			targetId: target.id,
 			ok: false,
 			status: response.status,
 			error: await response.text()
+		};
+		if (target.kind === "cloudflare_email") return cloudflareEmailResult(target, response);
+		return {
+			targetId: target.id,
+			ok: true,
+			status: response.status
 		};
 	} catch (error) {
 		return {
@@ -748,6 +758,15 @@ function buildRequest(target, incident) {
 				TextBody: summary
 			}, { "x-postmark-server-token": required(target.token, "Postmark token") })
 		};
+		case "cloudflare_email": return {
+			url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(required(target.accountId, "Cloudflare Email account ID"))}/email/sending/send`,
+			init: json({
+				from: required(target.from, "Cloudflare Email from"),
+				to: [required(target.to, "Cloudflare Email to")],
+				subject: summary.slice(0, 150),
+				text: summary
+			}, { authorization: `Bearer ${required(target.token, "Cloudflare Email token")}` })
+		};
 		case "twilio": {
 			const sid = required(target.accountSid, "Twilio account SID");
 			const form = new URLSearchParams({
@@ -770,6 +789,46 @@ function buildRequest(target, incident) {
 			};
 		}
 	}
+}
+async function cloudflareEmailResult(target, response) {
+	const recipient = required(target.to, "Cloudflare Email to").trim().toLowerCase();
+	let payload;
+	try {
+		payload = await response.json();
+	} catch (error) {
+		return {
+			targetId: target.id,
+			ok: false,
+			status: response.status,
+			error: error instanceof Error ? `Cloudflare Email response was not valid JSON: ${error.message}` : "Cloudflare Email response was not valid JSON"
+		};
+	}
+	const result = isRecord(payload) && isRecord(payload.result) ? payload.result : payload;
+	if (stringArray(isRecord(result) ? result.permanent_bounces : void 0).some((address) => address.trim().toLowerCase() === recipient)) return {
+		targetId: target.id,
+		ok: false,
+		status: response.status,
+		error: `Cloudflare Email permanently bounced ${target.to}`
+	};
+	const delivered = stringArray(isRecord(result) ? result.delivered : void 0);
+	const queued = stringArray(isRecord(result) ? result.queued : void 0);
+	if (delivered.some((address) => address.trim().toLowerCase() === recipient) || queued.some((address) => address.trim().toLowerCase() === recipient)) return {
+		targetId: target.id,
+		ok: true,
+		status: response.status
+	};
+	return {
+		targetId: target.id,
+		ok: false,
+		status: response.status,
+		error: `Cloudflare Email did not deliver or queue ${target.to}`
+	};
+}
+function isRecord(value) {
+	return typeof value === "object" && value !== null;
+}
+function stringArray(value) {
+	return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
 }
 function notificationWebhookUrl(kind, value) {
 	let url;
@@ -902,18 +961,280 @@ function encode(value) {
 	return btoa(binary).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 //#endregion
+//#region src/product-usage.ts
+var metric$1 = (name, unit, aggregate, fields = [], extras = {}) => ({
+	metric: name,
+	unit,
+	aggregate,
+	fields,
+	...extras
+});
+var dataset = (name, timeKind, timeField, metrics, options = {}) => ({
+	dataset: name,
+	alias: name.replace(/[^A-Za-z0-9_]/g, "_"),
+	timeKind,
+	timeField,
+	metrics,
+	...options
+});
+var R2_CLASS_A_ACTIONS = [
+	"PutObject",
+	"CopyObject",
+	"ListBuckets",
+	"ListObjects",
+	"CreateMultipartUpload",
+	"UploadPart",
+	"CompleteMultipartUpload",
+	"AbortMultipartUpload",
+	"DeleteObject"
+];
+/**
+* Explicit billable-usage adapters for Cloudflare product datasets. Settings
+* discovery decides whether each dataset is enabled for the connected account.
+*/
+var PRODUCT_USAGE_DEFINITIONS = [
+	definition("workers_ai", "Workers AI", 32, "resource", [dataset("aiInferenceAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "count"), metric$1("neurons", "count", "sum", ["totalNeurons"])], {
+		dimensions: ["modelId"],
+		resourceDimension: "modelId"
+	})]),
+	definition("queues", "Queues", 90, "resource", [dataset("queueMessageOperationsAdaptiveGroups", "time", "datetime", [
+		metric$1("operations", "count", "sum", ["billableOperations"]),
+		metric$1("messages", "count", "count"),
+		metric$1("bytes", "bytes", "sum", ["bytes"])
+	], {
+		dimensions: ["queueId"],
+		resourceDimension: "queueId"
+	})]),
+	definition("d1", "D1", 90, "resource", [dataset("d1AnalyticsAdaptiveGroups", "date", "date", [metric$1("rows_read", "rows", "sum", ["rowsRead"]), metric$1("rows_written", "rows", "sum", ["rowsWritten"])], {
+		dimensions: ["databaseId"],
+		resourceDimension: "databaseId"
+	}), dataset("d1StorageAdaptiveGroups", "date", "date", [metric$1("storage_bytes", "bytes", "max", ["databaseSizeBytes"])], {
+		dimensions: ["databaseId"],
+		resourceDimension: "databaseId"
+	})]),
+	definition("r2", "R2", 90, "resource", [dataset("r2OperationsAdaptiveGroups", "time", "datetime", [
+		metric$1("class_a", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
+		metric$1("class_b", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
+		metric$1("egress_bytes", "bytes", "sum", ["responseBytes"])
+	], {
+		dimensions: ["bucketName", "actionType"],
+		resourceDimension: "bucketName"
+	}), dataset("r2StorageAdaptiveGroups", "time", "datetime", [metric$1("storage_bytes", "bytes", "max", ["payloadSize", "metadataSize"])], {
+		dimensions: ["bucketName"],
+		resourceDimension: "bucketName"
+	})]),
+	definition("kv", "Workers KV", 90, "namespace", [dataset("kvOperationsAdaptiveGroups", "date", "date", [
+		metric$1("reads", "count", "sum", ["requests"], { actions: ["read"] }),
+		metric$1("writes", "count", "sum", ["requests"], { actions: ["write"] }),
+		metric$1("deletes", "count", "sum", ["requests"], { actions: ["delete"] }),
+		metric$1("lists", "count", "sum", ["requests"], { actions: ["list"] })
+	], {
+		dimensions: ["namespaceId", "actionType"],
+		resourceDimension: "namespaceId"
+	}), dataset("kvStorageAdaptiveGroups", "date", "date", [metric$1("storage_bytes", "bytes", "max", ["byteCount"])], {
+		dimensions: ["namespaceId"],
+		resourceDimension: "namespaceId"
+	})]),
+	definition("pages", "Pages Functions", 90, "resource", [dataset("pagesFunctionsInvocationsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "sum", ["requests"])], {
+		dimensions: ["scriptName"],
+		resourceDimension: "scriptName"
+	})], ["builds"]),
+	definition("images", "Images", 31, "account", [dataset("imagesRequestsAdaptiveGroups", "date", "date", [metric$1("delivery", "requests", "sum", ["requests"])]), dataset("imagesTransformationsAdaptiveGroups", "date", "date", [metric$1("transformations", "count", "sum", ["billableEventCount"])])], ["stored_images"]),
+	definition("stream", "Stream", 90, "resource", [dataset("streamMinutesViewedAdaptiveGroups", "date", "date", [metric$1("minutes_delivered", "milliseconds", "sum", ["minutesViewed"], { factor: 6e4 })], {
+		dimensions: ["uid"],
+		resourceDimension: "uid"
+	})], ["minutes_stored"]),
+	definition("vectorize", "Vectorize", 32, "resource", [dataset("vectorizeV2QueriesAdaptiveGroups", "time", "datetime", [metric$1("queried_dimensions", "count", "sum", ["queriedVectorDimensions"])], {
+		dimensions: ["indexName"],
+		resourceDimension: "indexName"
+	}), dataset("vectorizeV2StorageAdaptiveGroups", "time", "datetime", [metric$1("stored_dimensions", "count", "max", ["storedVectorDimensions"])], {
+		dimensions: ["indexName"],
+		resourceDimension: "indexName"
+	})]),
+	definition("hyperdrive", "Hyperdrive", 32, "resource", [dataset("hyperdriveQueriesAdaptiveGroups", "time", "datetime", [metric$1("database_queries", "count", "count")], {
+		dimensions: ["configId"],
+		resourceDimension: "configId"
+	})]),
+	definition("ai_gateway", "AI Gateway", 62, "resource", [dataset("aiGatewayRequestsAdaptiveGroups", "time", "datetimeHour", [
+		metric$1("requests", "requests", "count"),
+		metric$1("tokens", "count", "sum", [
+			"cachedTokensIn",
+			"cachedTokensOut",
+			"uncachedTokensIn",
+			"uncachedTokensOut"
+		]),
+		metric$1("cost_usd", "usd", "sum", ["cost"])
+	], {
+		dimensions: ["gateway"],
+		resourceDimension: "gateway"
+	})]),
+	definition("containers", "Containers", 32, "resource", [dataset("containersUsageAdaptiveGroups", "date", "date", [
+		metric$1("vcpu_seconds", "milliseconds", "sum", ["cpuTimeSec"], { factor: 1e3 }),
+		metric$1("memory_gb_seconds", "gb_seconds", "sum", ["allocatedMemory"], { factor: 1 / 1e9 }),
+		metric$1("disk_gb_seconds", "gb_seconds", "sum", ["allocatedDisk"], { factor: 1 / 1e9 }),
+		metric$1("egress_bytes", "bytes", "sum", ["txBytes"])
+	], {
+		dimensions: ["instanceId", "applicationId"],
+		resourceDimension: "instanceId",
+		parentDimension: "applicationId"
+	})]),
+	definition("browser_rendering", "Browser Rendering", 32, "account", [dataset("browserRenderingBrowserTimeUsageAdaptiveGroups", "time", "datetime", [metric$1("sessions", "count", "count"), metric$1("session_minutes", "milliseconds", "sum", ["totalSessionDurationMs"])])]),
+	definition("workflows", "Workflows", 32, "resource", [dataset("workflowsAdaptiveGroups", "time", "datetimeHour", [metric$1("requests", "requests", "count")], {
+		dimensions: ["workflowName"],
+		resourceDimension: "workflowName"
+	})], [
+		"cpu_ms",
+		"steps",
+		"storage_bytes"
+	]),
+	definition("worker_builds", "Worker Builds", 32, "account", [dataset("workersBuildsBuildMinutesAdaptiveGroups", "date", "date", [metric$1("build_minutes", "milliseconds", "sum", ["buildMinutes"], { factor: 6e4 })])]),
+	definition("analytics_engine", "Analytics Engine", 31, "resource", [dataset("workersAnalyticsEngineAdaptiveGroups", "time", "datetime", [metric$1("data_points_written", "count", "count")], {
+		dimensions: ["dataset"],
+		resourceDimension: "dataset"
+	})], [
+		"data_points_read",
+		"queries",
+		"storage_bytes"
+	]),
+	definition("log_explorer", "Log Explorer", 32, "resource", [dataset("logExplorerIngestionAdaptiveGroups", "time", "datetime", [metric$1("ingested_bytes", "bytes", "sum", ["billableBytes"])], {
+		dimensions: ["dataset", "zoneTag"],
+		resourceDimension: "dataset",
+		parentDimension: "zoneTag"
+	})], ["queries", "storage_bytes"]),
+	definition("zones", "Zones", 30, "zone", [dataset("httpRequestsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "count"), metric$1("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"])], { root: "zone" })]),
+	definition("email", "Email", 30, "zone", [dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric$1("sent", "count", "count")], { root: "zone" }), dataset("emailRoutingAdaptiveGroups", "time", "datetime", [metric$1("routed", "count", "count")], { root: "zone" })])
+];
+var BY_COLLECTOR = new Map(PRODUCT_USAGE_DEFINITIONS.map((item) => [item.collector, item]));
+new Map(PRODUCT_USAGE_DEFINITIONS.flatMap((item) => item.datasets.map((value) => [value.dataset, item])));
+function productUsageDefinition(collector) {
+	return BY_COLLECTOR.get(collector);
+}
+function buildProductDatasetQuery(definition, source) {
+	const variableType = source.timeKind === "date" ? "Date" : "Time";
+	const filter = source.timeKind === "date" ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end` : `${source.timeField}_geq: $start, ${source.timeField}_lt: $end`;
+	const aggregates = [...new Set(source.metrics.map((item) => item.aggregate))];
+	const body = [
+		source.dimensions?.length ? `dimensions { ${source.dimensions.join(" ")} }` : "",
+		aggregates.includes("count") ? "count" : "",
+		...["sum", "max"].map((aggregate) => {
+			const fields = [...new Set(source.metrics.filter((item) => item.aggregate === aggregate).flatMap((item) => item.fields ?? []))];
+			return fields.length ? `${aggregate} { ${fields.join(" ")} }` : "";
+		})
+	].filter(Boolean).join("\n");
+	const selection = `${source.alias}: ${source.dataset}(limit: 10000, filter: { ${filter} }) { ${body} }`;
+	if ((source.root ?? "account") === "zone") return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
+	return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
+}
+function productDatasetVariables(source, accountId, startsAt, endsAt, zoneIds = []) {
+	const scope = (source.root ?? "account") === "zone" ? { zones: zoneIds } : { account: accountId };
+	if (source.timeKind === "date") {
+		const day = new Date(startsAt).toISOString().slice(0, 10);
+		return {
+			...scope,
+			start: day,
+			end: day
+		};
+	}
+	return {
+		...scope,
+		start: new Date(startsAt).toISOString(),
+		end: new Date(endsAt).toISOString()
+	};
+}
+function normalizeProductDataset(definition, source, roots, accountId, startsAt, endsAt) {
+	const samples = /* @__PURE__ */ new Map();
+	for (const root of roots) {
+		const zoneTag = stringValue$1(root.zoneTag);
+		const rows = Array.isArray(root[source.alias]) ? root[source.alias] : [];
+		for (const row of rows) {
+			const dimensions = recordValue(row.dimensions);
+			const action = stringValue$1(dimensions.actionType)?.toLowerCase();
+			const resource = source.resourceDimension ? stringValue$1(dimensions[source.resourceDimension]) : void 0;
+			const parent = source.parentDimension ? stringValue$1(dimensions[source.parentDimension]) : void 0;
+			const scope = zoneTag ? "zone" : resource ? definition.scope : "account";
+			const id = zoneTag ?? resource ?? definition.family;
+			const asset = {
+				accountId,
+				family: definition.family,
+				id,
+				name: id,
+				scope,
+				...parent ? { parentId: parent } : {},
+				tier: "unclassified"
+			};
+			for (const item of source.metrics) {
+				if (item.actions?.length) {
+					const actions = item.actions.map((value) => value.toLowerCase());
+					const matches = action ? actions.includes(action) : false;
+					if (item.metric === "class_b" ? matches : !matches) continue;
+				}
+				const aggregate = item.aggregate === "count" ? row : recordValue(row[item.aggregate]);
+				const value = (item.aggregate === "count" ? numberValue(row.count) : (item.fields ?? []).reduce((sum, field) => sum + numberValue(aggregate[field]), 0)) * (item.factor ?? 1);
+				if (!Number.isFinite(value)) continue;
+				const key = `${asset.scope}:${asset.id}:${item.metric}`;
+				const existing = samples.get(key);
+				if (existing) existing.value = item.aggregate === "max" ? Math.max(existing.value, value) : existing.value + value;
+				else samples.set(key, {
+					asset,
+					metric: item.metric,
+					unit: item.unit,
+					value,
+					start: startsAt,
+					end: endsAt,
+					source: "graphql",
+					sampled: false
+				});
+			}
+		}
+	}
+	return [...samples.values()];
+}
+function definition(family, label, retentionDays, scope, datasets, billingOnlyMetrics = []) {
+	return {
+		collector: `graphql:${family}`,
+		family,
+		label,
+		retentionDays,
+		scope,
+		datasets,
+		billingOnlyMetrics
+	};
+}
+function recordValue(value) {
+	return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function stringValue$1(value) {
+	return typeof value === "string" && value.length ? value : void 0;
+}
+function numberValue(value) {
+	const parsed = Number(value ?? 0);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+//#endregion
 //#region src/cloudflare.ts
 var API$2 = "https://api.cloudflare.com/client/v4";
 var REQUEST_TIMEOUT_MS = 8e3;
+var BILLING_USAGE_MAX_RANGE_MS = 26784e5;
 var CloudflareClient = class {
 	env;
 	budget;
 	ledgerBudget;
 	tokenPromise = null;
+	zoneIdsPromise = null;
 	constructor(env, budget, ledgerBudget) {
 		this.env = env;
 		this.budget = budget;
 		this.ledgerBudget = ledgerBudget;
+	}
+	async zones() {
+		return (await this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`)).rows.flatMap((row) => {
+			const id = stringValue(row.id);
+			const name = stringValue(row.name);
+			return id && name ? [{
+				id,
+				name
+			}] : [];
+		});
 	}
 	async inventory() {
 		const endpoints = [
@@ -1023,73 +1344,117 @@ var CloudflareClient = class {
 	}
 	async analyticsCapabilities() {
 		const datasets = [
-			["durableObjectsInvocationsAdaptiveGroups", "object"],
-			["durableObjectsPeriodicGroups", "object"],
-			["durableObjectsSqlStorageGroups", "namespace"],
-			["durableObjectsStorageGroups", "account"],
-			["workersInvocationsAdaptive", "resource"]
+			{
+				dataset: "durableObjectsInvocationsAdaptiveGroups",
+				collectorKey: "graphql:durable-objects",
+				family: "durable_objects",
+				scope: "object",
+				root: "account"
+			},
+			{
+				dataset: "durableObjectsPeriodicGroups",
+				collectorKey: "graphql:durable-objects",
+				family: "durable_objects",
+				scope: "object",
+				root: "account"
+			},
+			{
+				dataset: "durableObjectsSqlStorageGroups",
+				collectorKey: "graphql:durable-objects",
+				family: "durable_objects",
+				scope: "namespace",
+				root: "account"
+			},
+			{
+				dataset: "durableObjectsStorageGroups",
+				collectorKey: "graphql:durable-objects",
+				family: "durable_objects",
+				scope: "account",
+				root: "account"
+			},
+			{
+				dataset: "workersInvocationsAdaptive",
+				collectorKey: "graphql:workers",
+				family: "workers",
+				scope: "resource",
+				root: "account"
+			},
+			...PRODUCT_USAGE_DEFINITIONS.flatMap((definition) => definition.datasets.map((source) => ({
+				dataset: source.dataset,
+				collectorKey: definition.collector,
+				family: definition.family,
+				scope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+				root: source.root ?? "account"
+			})))
 		];
-		const query = `query BrollyAnalyticsCapabilities($account: String!) {
+		const fields = "enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan";
+		const accountDatasets = datasets.filter((item) => item.root === "account");
+		const zoneDatasets = datasets.filter((item) => item.root === "zone");
+		const query = `query BrollyAnalyticsCapabilities($account: String!, $zones: [string!]!) {
       viewer { accounts(filter: { accountTag: $account }) { settings {
-        durableObjectsInvocationsAdaptiveGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsPeriodicGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsSqlStorageGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        durableObjectsStorageGroups { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
-        workersInvocationsAdaptive { enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan }
+        ${accountDatasets.map((item) => `${item.dataset} { ${fields} }`).join("\n")}
+      } } zones(filter: { zoneTag_in: $zones }) { settings {
+        ${zoneDatasets.map((item) => `${item.dataset} { ${fields} }`).join("\n")}
       } } }
     }`;
 		const checkedAt = Date.now();
 		try {
 			this.budget.charge("apiCalls");
 			this.ledgerBudget?.charge("graphqlQueries", datasets.length);
+			const zoneIds = await this.zoneIds();
 			const response = await fetch(`${API$2}/graphql`, {
 				method: "POST",
 				headers: authHeaders(await this.token()),
 				body: JSON.stringify({
 					query,
-					variables: { account: this.env.BROLLY_ACCOUNT_ID }
+					variables: {
+						account: this.env.BROLLY_ACCOUNT_ID,
+						zones: zoneIds
+					}
 				}),
 				signal: this.budget.signal
 			});
 			if (!response.ok) throw await cloudflareApiError(response);
 			const payload = await response.json();
 			if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
-			const settings = payload.data?.viewer?.accounts?.[0]?.settings ?? {};
-			return [...datasets.map(([dataset, scope]) => {
-				const setting = settings[dataset];
+			const accountSettings = payload.data?.viewer?.accounts?.[0]?.settings ?? {};
+			const zoneSettings = payload.data?.viewer?.zones?.map((zone) => zone.settings ?? {}) ?? [];
+			return [...datasets.map((item) => {
+				const candidates = item.root === "account" ? [accountSettings[item.dataset]] : zoneSettings.map((setting) => setting[item.dataset]);
+				const setting = candidates.find((value) => value?.enabled === true) ?? candidates.find(Boolean);
 				const available = setting?.enabled === true;
 				return {
 					accountId: this.env.BROLLY_ACCOUNT_ID,
-					collectorKey: `graphql:${dataset}`,
-					dataset,
+					collectorKey: item.collectorKey,
+					dataset: item.dataset,
 					available,
 					retentionDays: setting?.notOlderThan ? Math.floor(setting.notOlderThan / 86400) : null,
 					samplingBehavior: setting?.availableFields?.some((field) => field.toLowerCase().includes("sampleinterval")) ? "Adaptive sampling; sampleInterval is recorded per result" : "Dataset sampling follows Cloudflare Analytics settings",
-					finestScope: scope,
+					finestScope: item.scope,
 					lastVerifiedAt: checkedAt,
 					errorCode: available ? null : "dataset_disabled",
 					humanExplanation: available ? `Available with page size ${setting?.maxPageSize ?? "unknown"} and duration limit ${setting?.maxDuration ?? "unknown"} seconds` : "Cloudflare reports this Analytics dataset as unavailable for the current token or plan",
 					state: available ? "healthy" : "unavailable",
 					watermarkAt: null
 				};
-			}), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt)];
+			}), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map((item) => item.family)))];
 		} catch (error) {
 			const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
 			const detail = error instanceof Error ? error.message : String(error);
-			return [...datasets.map(([dataset, scope]) => ({
+			return [...datasets.map((item) => ({
 				accountId: this.env.BROLLY_ACCOUNT_ID,
-				collectorKey: `graphql:${dataset}`,
-				dataset,
+				collectorKey: item.collectorKey,
+				dataset: item.dataset,
 				available: false,
 				retentionDays: null,
 				samplingBehavior: null,
-				finestScope: scope,
+				finestScope: item.scope,
 				lastVerifiedAt: checkedAt,
 				errorCode: state,
 				humanExplanation: detail,
 				state,
 				watermarkAt: null
-			})), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt)];
+			})), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map((item) => item.family)))];
 		}
 	}
 	async durableObjectUsage(since, until) {
@@ -1661,6 +2026,83 @@ var CloudflareClient = class {
 			};
 		}
 	}
+	/** Collect one bounded product window from every dataset in its registry entry. */
+	async productUsage(definition, since, until) {
+		const samples = [];
+		const coverage = [];
+		let complete = true;
+		let pages = 0;
+		for (const source of definition.datasets) try {
+			const zoneIds = source.root === "zone" ? await this.zoneIds() : [];
+			if (source.root === "zone" && zoneIds.length === 0) {
+				coverage.push(...source.metrics.map((item) => ({
+					family: definition.family,
+					metric: item.metric,
+					finestScope: "zone",
+					state: "healthy",
+					checkedAt: Date.now(),
+					detail: "The connected account has no zones."
+				})));
+				continue;
+			}
+			this.budget.charge("apiCalls");
+			this.ledgerBudget?.charge("pagesPerDataset");
+			this.ledgerBudget?.charge("graphqlQueries");
+			const response = await fetch(`${API$2}/graphql`, {
+				method: "POST",
+				headers: authHeaders(await this.token()),
+				body: JSON.stringify({
+					query: buildProductDatasetQuery(definition, source),
+					variables: productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, since, until, zoneIds)
+				}),
+				signal: this.budget.signal
+			});
+			if (!response.ok) throw await cloudflareApiError(response);
+			const payload = await response.json();
+			if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
+			const roots = (source.root ?? "account") === "zone" ? payload.data?.viewer?.zones ?? [] : payload.data?.viewer?.accounts ?? [];
+			samples.push(...normalizeProductDataset(definition, source, roots, this.env.BROLLY_ACCOUNT_ID, since, until));
+			const truncated = roots.some((root) => Array.isArray(root[source.alias]) && root[source.alias].length >= 1e4);
+			coverage.push(...source.metrics.map((item) => ({
+				family: definition.family,
+				metric: item.metric,
+				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+				state: truncated ? "delayed" : "healthy",
+				checkedAt: Date.now(),
+				detail: truncated ? `${source.dataset} reached its bounded 10,000-row daily limit; retained rows are marked partial` : void 0
+			})));
+			pages += 1;
+		} catch (error) {
+			if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
+			complete = false;
+			const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
+			coverage.push(...source.metrics.map((item) => ({
+				family: definition.family,
+				metric: item.metric,
+				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+				state,
+				checkedAt: Date.now(),
+				detail: `${source.dataset}: ${error instanceof Error ? error.message : String(error)}`
+			})));
+		}
+		coverage.push(...definition.billingOnlyMetrics.map((item) => ({
+			family: definition.family,
+			metric: item,
+			finestScope: definition.scope,
+			state: "unavailable",
+			checkedAt: Date.now(),
+			detail: "This metric is retained through authoritative billing because Cloudflare does not expose a supported usage field."
+		})));
+		this.budget.charge("samples", samples.length);
+		return {
+			samples,
+			coverage,
+			continuation: null,
+			complete,
+			pages,
+			watermarkAt: until
+		};
+	}
 	async billingUsage(since, until) {
 		const token = await configuredBillingToken(this.env);
 		if (!token) return null;
@@ -1727,6 +2169,10 @@ var CloudflareClient = class {
 		if (!envelope.success) throw new Error(envelope.errors?.map((error) => error.message).join("; ") || "Cloudflare API error");
 		return envelope;
 	}
+	zoneIds() {
+		this.zoneIdsPromise ??= this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`).then((result) => result.rows.map((row) => stringValue(row.id)).filter((value) => Boolean(value)));
+		return this.zoneIdsPromise;
+	}
 	token() {
 		this.tokenPromise ??= operationalToken(this.env);
 		return this.tokenPromise;
@@ -1763,17 +2209,8 @@ function billingCycleStart(records) {
 function billingAlignedStart(records, since, until) {
 	const cycleStart = billingCycleStart(records);
 	if (cycleStart === null) return null;
-	const previous = previousCycleStart(cycleStart);
-	const aligned = previous !== null && until - previous <= 7776e6 ? previous : cycleStart;
+	const aligned = until - cycleStart <= BILLING_USAGE_MAX_RANGE_MS ? cycleStart : startOfUtcDay(since);
 	return aligned === startOfUtcDay(since) ? null : aligned;
-}
-function previousCycleStart(timestamp) {
-	const date = new Date(timestamp);
-	const year = date.getUTCFullYear();
-	const month = date.getUTCMonth();
-	const day = date.getUTCDate();
-	const previous = new Date(Date.UTC(year, month - 1, day));
-	return previous.getUTCDate() === day ? previous.getTime() : null;
 }
 function retryAfterMilliseconds(value) {
 	if (!value) return null;
@@ -1795,8 +2232,8 @@ async function delayWithSignal(milliseconds, signal) {
 		else signal.addEventListener("abort", abort, { once: true });
 	});
 }
-function catalogCapabilityGaps(accountId, checkedAt) {
-	return METRIC_CATALOG.filter((product) => product.family !== "workers" && product.family !== "durable_objects").map((product) => ({
+function catalogCapabilityGaps(accountId, checkedAt, coveredFamilies = /* @__PURE__ */ new Set(["workers", "durable_objects"])) {
+	return METRIC_CATALOG.filter((product) => !coveredFamilies.has(product.family)).map((product) => ({
 		accountId,
 		collectorKey: product.fastSource ? `${product.fastSource}:${product.family}` : "billing:catchall",
 		dataset: product.family,
@@ -2000,11 +2437,7 @@ var Store = class {
 		if (!row) return DEFAULT_POLICY;
 		try {
 			const policy = JSON.parse(row.value);
-			return policy && [
-				"observe",
-				"approval",
-				"automatic"
-			].includes(policy.mode) && Array.isArray(policy.thresholds) ? policy : DEFAULT_POLICY;
+			return policy && typeof policy.version === "string" && policy.accountDailySpend && Array.isArray(policy.thresholds) ? policy : DEFAULT_POLICY;
 		} catch {
 			return DEFAULT_POLICY;
 		}
@@ -2130,8 +2563,11 @@ var Store = class {
 		const result = await this.db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
 		this.chargeMeta(result.meta);
 	}
-	async listNotificationTargets() {
-		const result = await this.db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 LIMIT 20`).all();
+	async listNotificationTargets(ids = []) {
+		if (!ids.length) return [];
+		const page = ids.slice(0, 20);
+		const placeholders = page.map((_, index) => `?${index + 1}`).join(",");
+		const result = await this.db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 AND id IN (${placeholders}) LIMIT 20`).bind(...page).all();
 		this.chargeMeta(result.meta);
 		return result.results;
 	}
@@ -3042,7 +3478,7 @@ var LedgerStore = class {
 		}
 		const seeds = /* @__PURE__ */ new Map();
 		for (const result of await this.readBatches(statements)) for (const row of result.results) {
-			const metrics = parseNumberMap(row.metrics_json);
+			const metrics = parseNumberMap$1(row.metrics_json);
 			const sampling = parseNullableNumberMap(row.sampling_json);
 			const estimated = Number(row.estimated_cost_usd ?? 0);
 			const total = Object.values(metrics).reduce((sum, value) => sum + Math.abs(value), 0) || 1;
@@ -3368,7 +3804,7 @@ function splitOversizedShard(group, payload) {
 		}
 	}));
 }
-function parseNumberMap(value) {
+function parseNumberMap$1(value) {
 	try {
 		const parsed = JSON.parse(value);
 		return Object.fromEntries(Object.entries(parsed).filter((entry) => typeof entry[1] === "number"));
@@ -3842,14 +4278,15 @@ async function ingestWindow(options) {
 			watermarkAt: options.endsAt
 		};
 	}
+	const definition = productUsageDefinition(options.collector);
 	const result = options.collector === "graphql:durable-objects" ? await options.client.durableObjectUsagePaged(options.startsAt, options.endsAt, {
 		cursor: options.cursor,
 		maxPages: options.maxPages
-	}) : await options.client.workerUsage(options.startsAt, options.endsAt, {
+	}) : options.collector === "graphql:workers" ? await options.client.workerUsage(options.startsAt, options.endsAt, {
 		cursor: options.cursor,
 		maxPages: options.maxPages
-	});
-	const observations = expandUsageObservations(result.samples, options.collector, options.collector === "graphql:durable-objects" ? "durable-object-usage" : "workersInvocationsAdaptive", result.complete ? "complete" : "partial", {
+	}) : definition ? await options.client.productUsage(definition, options.startsAt, options.endsAt) : unreachableCollector(options.collector);
+	const observations = expandUsageObservations(result.samples, options.collector, options.collector === "graphql:durable-objects" ? "durable-object-usage" : options.collector === "graphql:workers" ? "workersInvocationsAdaptive" : definition.datasets.map((item) => item.dataset).join("+"), result.complete ? "complete" : "partial", {
 		watermarkAt: result.watermarkAt,
 		historical: options.historical ?? false
 	});
@@ -3865,10 +4302,250 @@ async function ingestWindow(options) {
 		normalizedObservations: observations
 	};
 }
+function unreachableCollector(collector) {
+	throw new Error(`Unsupported usage collector: ${String(collector)}`);
+}
+//#endregion
+//#region src/alert-levels.ts
+var REPEAT_INTERVALS = [
+	null,
+	3e5,
+	9e5,
+	18e5,
+	36e5,
+	108e5,
+	216e5,
+	432e5,
+	864e5
+];
+var ALERT_ENTRY_KINDS = [
+	"channel",
+	"prepare_stop",
+	"prepare_quarantine",
+	"auto_pause",
+	"auto_quarantine"
+];
+async function alertLevelsApiRoute(request, env, actor) {
+	const url = new URL(request.url);
+	if (url.pathname === "/api/alert-levels" && request.method === "GET") return Response.json({ levels: await loadAlertLevels(env.DB) }, { headers: { "cache-control": "no-store" } });
+	if (url.pathname === "/api/alert-levels" && request.method === "POST") {
+		const body = await request.json();
+		const label = normalizedLabel(body.label);
+		if (!label) return Response.json({ error: "Level name must contain 1 to 40 characters" }, { status: 400 });
+		const levels = await loadAlertLevels(env.DB);
+		if (levels.length >= 8) return Response.json({ error: "Brolly supports up to eight alert levels" }, { status: 400 });
+		if (levels.some((level) => sameLabel(level.label, label))) return Response.json({ error: "Alert level names must be unique" }, { status: 400 });
+		let insertAt = 0;
+		if (body.afterLevelId != null) {
+			const after = levels.findIndex((level) => level.id === body.afterLevelId);
+			if (after === -1) return Response.json({ error: "Previous alert level not found" }, { status: 400 });
+			insertAt = after + 1;
+		}
+		const id = crypto.randomUUID();
+		const now = Date.now();
+		await env.DB.prepare(`INSERT INTO alert_levels(id,position,label,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)`).bind(id, 1e4 + levels.length, label, now).run();
+		const ordered = [...levels];
+		ordered.splice(insertAt, 0, {
+			id,
+			position: insertAt,
+			label,
+			entries: []
+		});
+		await writeLevelPositions(env.DB, ordered.map((level) => level.id), now);
+		await audit$3(env.DB, actor, "alert_level.create", id, {
+			label,
+			position: insertAt
+		});
+		return Response.json({
+			ok: true,
+			level: (await loadAlertLevels(env.DB)).find((level) => level.id === id)
+		}, { status: 201 });
+	}
+	const levelMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)$/);
+	if (levelMatch && request.method === "PATCH") {
+		const id = decodeURIComponent(levelMatch[1]);
+		const body = await request.json();
+		if (body.label === void 0 && body.position === void 0) return Response.json({ error: "No level change supplied" }, { status: 400 });
+		const levels = await loadAlertLevels(env.DB);
+		const currentIndex = levels.findIndex((level) => level.id === id);
+		if (currentIndex === -1) return Response.json({ error: "Alert level not found" }, { status: 404 });
+		const now = Date.now();
+		if (body.label !== void 0) {
+			const label = normalizedLabel(body.label);
+			if (!label) return Response.json({ error: "Level name must contain 1 to 40 characters" }, { status: 400 });
+			if (levels.some((level) => level.id !== id && sameLabel(level.label, label))) return Response.json({ error: "Alert level names must be unique" }, { status: 400 });
+			await env.DB.batch([env.DB.prepare(`UPDATE alert_levels SET label=?2,updated_at=?3 WHERE id=?1`).bind(id, label, now), env.DB.prepare(`UPDATE alert_lines SET label=?2,updated_at=?3 WHERE level_id=?1`).bind(id, label, now)]);
+		}
+		if (body.position !== void 0) {
+			if (!Number.isInteger(body.position) || body.position < 0 || body.position >= levels.length) return Response.json({ error: "Level position is outside the board" }, { status: 400 });
+			const [moved] = levels.splice(currentIndex, 1);
+			levels.splice(body.position, 0, moved);
+			await writeLevelPositions(env.DB, levels.map((level) => level.id), now);
+			await synchronizeLinePriorities(env.DB, levels, now);
+		}
+		await audit$3(env.DB, actor, "alert_level.update", id, body);
+		return Response.json({
+			ok: true,
+			level: (await loadAlertLevels(env.DB)).find((level) => level.id === id)
+		});
+	}
+	if (levelMatch && request.method === "DELETE") {
+		const id = decodeURIComponent(levelMatch[1]);
+		const levels = await loadAlertLevels(env.DB);
+		if (!levels.some((level) => level.id === id)) return Response.json({ error: "Alert level not found" }, { status: 404 });
+		if (levels.length === 1) return Response.json({ error: "At least one alert level must remain" }, { status: 409 });
+		const now = Date.now();
+		await env.DB.batch([env.DB.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE level_id=?1`).bind(id, now), env.DB.prepare(`DELETE FROM alert_levels WHERE id=?1`).bind(id)]);
+		const remaining = levels.filter((level) => level.id !== id);
+		await writeLevelPositions(env.DB, remaining.map((level) => level.id), now);
+		await synchronizeLinePriorities(env.DB, remaining, now);
+		await audit$3(env.DB, actor, "alert_level.delete", id, {});
+		return Response.json({
+			ok: true,
+			id
+		});
+	}
+	const entriesMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)\/entries(?:\/([^/]+))?$/);
+	if (!entriesMatch) return null;
+	const levelId = decodeURIComponent(entriesMatch[1]);
+	const entryId = entriesMatch[2] ? decodeURIComponent(entriesMatch[2]) : null;
+	if (!await env.DB.prepare(`SELECT 1 AS present FROM alert_levels WHERE id=?1 LIMIT 1`).bind(levelId).first()) return Response.json({ error: "Alert level not found" }, { status: 404 });
+	if (!entryId && request.method === "POST") {
+		const body = await request.json();
+		if (!ALERT_ENTRY_KINDS.includes(body.kind)) return Response.json({ error: "Invalid alert level entry" }, { status: 400 });
+		const kind = body.kind;
+		const repeatIntervalMs = body.repeatIntervalMs ?? null;
+		if (kind === "channel") {
+			if (!body.targetId) return Response.json({ error: "Channel entry requires a target" }, { status: 400 });
+			if (!isRepeatInterval(repeatIntervalMs)) return Response.json({ error: "Invalid repeat interval" }, { status: 400 });
+			if (!await env.DB.prepare(`SELECT 1 AS present FROM notification_targets WHERE id=?1 LIMIT 1`).bind(body.targetId).first()) return Response.json({ error: "Notification target not found" }, { status: 400 });
+		} else if (body.targetId != null || body.repeatIntervalMs != null) return Response.json({ error: "Action entries do not use a channel or interval" }, { status: 400 });
+		if (await env.DB.prepare(`SELECT 1 AS present FROM alert_level_entries WHERE level_id=?1 AND kind=?2 AND COALESCE(target_id,'')=COALESCE(?3,'') LIMIT 1`).bind(levelId, kind, kind === "channel" ? body.targetId : null).first()) return Response.json({ error: "This entry is already in the level" }, { status: 409 });
+		const position = Number((await env.DB.prepare(`SELECT COALESCE(MAX(position),-1)+1 AS position FROM alert_level_entries WHERE level_id=?1`).bind(levelId).first())?.position ?? 0);
+		const id = crypto.randomUUID();
+		const now = Date.now();
+		await env.DB.prepare(`INSERT INTO alert_level_entries(id,level_id,kind,target_id,repeat_interval_ms,position,created_at,updated_at)
+       VALUES(?1,?2,?3,?4,?5,?6,?7,?7)`).bind(id, levelId, kind, kind === "channel" ? body.targetId : null, kind === "channel" ? repeatIntervalMs : null, position, now).run();
+		await audit$3(env.DB, actor, "alert_level_entry.create", id, {
+			levelId,
+			kind,
+			targetId: body.targetId ?? null,
+			repeatIntervalMs
+		});
+		return Response.json({
+			ok: true,
+			entry: (await loadAlertLevels(env.DB)).find((level) => level.id === levelId)?.entries.find((entry) => entry.id === id)
+		}, { status: 201 });
+	}
+	if (entryId && request.method === "PATCH") {
+		const body = await request.json();
+		if (body.repeatIntervalMs === void 0 && body.position === void 0) return Response.json({ error: "No entry change supplied" }, { status: 400 });
+		const current = await env.DB.prepare(`SELECT kind FROM alert_level_entries WHERE id=?1 AND level_id=?2 LIMIT 1`).bind(entryId, levelId).first();
+		if (!current) return Response.json({ error: "Alert level entry not found" }, { status: 404 });
+		if (body.repeatIntervalMs !== void 0 && (current.kind !== "channel" || !isRepeatInterval(body.repeatIntervalMs))) return Response.json({ error: "Invalid repeat interval" }, { status: 400 });
+		const entries = (await loadAlertLevels(env.DB)).find((level) => level.id === levelId).entries;
+		const currentIndex = entries.findIndex((entry) => entry.id === entryId);
+		if (body.position !== void 0 && (!Number.isInteger(body.position) || body.position < 0 || body.position >= entries.length)) return Response.json({ error: "Entry position is outside the level" }, { status: 400 });
+		const now = Date.now();
+		if (body.repeatIntervalMs !== void 0) await env.DB.prepare(`UPDATE alert_level_entries SET repeat_interval_ms=?3,updated_at=?4 WHERE id=?1 AND level_id=?2`).bind(entryId, levelId, body.repeatIntervalMs, now).run();
+		if (body.position !== void 0) {
+			const [moved] = entries.splice(currentIndex, 1);
+			entries.splice(body.position, 0, moved);
+			await writeEntryPositions(env.DB, entries.map((entry) => entry.id), now);
+		}
+		await audit$3(env.DB, actor, "alert_level_entry.update", entryId, {
+			levelId,
+			...body
+		});
+		return Response.json({
+			ok: true,
+			entry: (await loadAlertLevels(env.DB)).find((level) => level.id === levelId)?.entries.find((entry) => entry.id === entryId)
+		});
+	}
+	if (entryId && request.method === "DELETE") {
+		const result = await env.DB.prepare(`DELETE FROM alert_level_entries WHERE id=?1 AND level_id=?2`).bind(entryId, levelId).run();
+		if (Number(result.meta.changes ?? 0) === 0) return Response.json({ error: "Alert level entry not found" }, { status: 404 });
+		await audit$3(env.DB, actor, "alert_level_entry.delete", entryId, { levelId });
+		return Response.json({
+			ok: true,
+			id: entryId
+		});
+	}
+	return null;
+}
+async function loadAlertLevels(db) {
+	const [levels, entries] = await Promise.all([db.prepare(`SELECT id,position,label FROM alert_levels ORDER BY position,id`).all(), db.prepare(`SELECT id,level_id,kind,target_id,repeat_interval_ms,position FROM alert_level_entries ORDER BY level_id,position,id`).all()]);
+	const byLevel = /* @__PURE__ */ new Map();
+	for (const row of entries.results) {
+		const collection = byLevel.get(row.level_id) ?? [];
+		collection.push({
+			id: row.id,
+			levelId: row.level_id,
+			kind: row.kind,
+			targetId: row.target_id,
+			repeatIntervalMs: row.repeat_interval_ms == null ? null : Number(row.repeat_interval_ms),
+			position: Number(row.position)
+		});
+		byLevel.set(row.level_id, collection);
+	}
+	return levels.results.map((row) => ({
+		id: row.id,
+		position: Number(row.position),
+		label: row.label,
+		entries: byLevel.get(row.id) ?? []
+	}));
+}
+function resolveEffectiveEntries(levels, firingPosition) {
+	const channels = /* @__PURE__ */ new Map();
+	let prepareStop = false;
+	let autoPause = false;
+	let prepareQuarantine = false;
+	let autoQuarantine = false;
+	for (const level of [...levels].sort((left, right) => left.position - right.position)) {
+		if (level.position > firingPosition) break;
+		for (const entry of [...level.entries].sort((left, right) => left.position - right.position)) if (entry.kind === "channel" && entry.targetId) channels.set(entry.targetId, {
+			targetId: entry.targetId,
+			repeatIntervalMs: entry.repeatIntervalMs
+		});
+		else if (entry.kind === "prepare_stop") prepareStop = true;
+		else if (entry.kind === "auto_pause") autoPause = true;
+		else if (entry.kind === "prepare_quarantine") prepareQuarantine = true;
+		else if (entry.kind === "auto_quarantine") autoQuarantine = true;
+	}
+	return {
+		channels: [...channels.values()],
+		stopOrPause: autoPause ? "auto" : prepareStop ? "prepare" : null,
+		quarantine: autoQuarantine ? "auto" : prepareQuarantine ? "prepare" : null
+	};
+}
+function normalizedLabel(value) {
+	if (typeof value !== "string") return null;
+	const label = value.trim();
+	return label && label.length <= 40 ? label : null;
+}
+function sameLabel(left, right) {
+	return left.localeCompare(right, void 0, { sensitivity: "accent" }) === 0;
+}
+function isRepeatInterval(value) {
+	return REPEAT_INTERVALS.includes(value);
+}
+async function writeLevelPositions(db, ids, now) {
+	await db.batch(ids.map((id, position) => db.prepare(`UPDATE alert_levels SET position=?2,updated_at=?3 WHERE id=?1`).bind(id, 1e4 + position, now)));
+	await db.batch(ids.map((id, position) => db.prepare(`UPDATE alert_levels SET position=?2,updated_at=?3 WHERE id=?1`).bind(id, position, now)));
+}
+async function writeEntryPositions(db, ids, now) {
+	await db.batch(ids.map((id, position) => db.prepare(`UPDATE alert_level_entries SET position=?2,updated_at=?3 WHERE id=?1`).bind(id, position, now)));
+}
+async function synchronizeLinePriorities(db, levels, now) {
+	if (!levels.length) return;
+	await db.batch(levels.map((level, position) => db.prepare(`UPDATE alert_lines SET priority=?2,updated_at=?3 WHERE level_id=?1`).bind(level.id, position * 10, now)));
+}
+async function audit$3(db, actor, action, target, detail) {
+	await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
+}
 //#endregion
 //#region src/alert-engine.ts
 var MAX_BATCH$1 = 100;
-var DEFAULT_EMERGENCY_REPEAT_MS = 216e5;
 async function evaluateUsageAlerts(env, changes, context) {
 	if (!changes.length) return {
 		notifications: [],
@@ -3876,7 +4553,7 @@ async function evaluateUsageAlerts(env, changes, context) {
 		breached: 0
 	};
 	const now = context.now ?? Date.now();
-	const controlMode = await loadControlMode(env.DB, context.budget);
+	const alertLevels = await loadAlertLevels(env.DB);
 	const metricIds = [...new Set(changes.map((change) => change.metricDefinitionId))];
 	const ruleLines = await loadRuleLines(env.DB, env.BROLLY_ACCOUNT_ID, metricIds, context.budget);
 	if (!ruleLines.length) return {
@@ -3927,12 +4604,12 @@ async function evaluateUsageAlerts(env, changes, context) {
              evidence_json=excluded.evidence_json,data_quality=excluded.data_quality,
              status=CASE WHEN alert_instances.status IN ('expired','resolved') AND excluded.historical=0 THEN 'open' ELSE alert_instances.status END,
              last_breached_at=excluded.last_breached_at,historical=excluded.historical`).bind(id, rule.rule_id, rule.line_id, resource.id, bounds.start, bounds.end, observed, rule.threshold_value, JSON.stringify(evidence), evidenceQuality, historical ? "expired" : "open", now, historical ? null : now, historical ? 1 : 0));
-		} else statements.push(env.DB.prepare(`UPDATE alert_instances SET status='resolved',last_breached_at=?6
+		} else statements.push(env.DB.prepare(`UPDATE alert_instances SET status='resolved',last_breached_at=?6,next_notification_at=NULL
            WHERE alert_rule_id=?1 AND alert_line_id=?2 AND target_resource_id=?3
-             AND period_start_at=?4 AND period_end_at=?5 AND status='open'`).bind(rule.rule_id, rule.line_id, resource.id, bounds.start, bounds.end, now));
+             AND period_start_at=?4 AND period_end_at=?5 AND status IN ('open','acknowledged')`).bind(rule.rule_id, rule.line_id, resource.id, bounds.start, bounds.end, now));
 	}
 	statements.push(env.DB.prepare(`UPDATE alert_instances SET status='expired',next_notification_at=NULL
-     WHERE period_end_at<=?1 AND status IN ('open','silenced')`).bind(now));
+     WHERE period_end_at<=?1 AND status IN ('open','acknowledged')`).bind(now));
 	await runBatches$2(env.DB, statements, context.budget);
 	if (!breachedIds.size) return {
 		notifications: [],
@@ -3940,12 +4617,15 @@ async function evaluateUsageAlerts(env, changes, context) {
 		breached: 0
 	};
 	const instances = (await loadBreachedInstances(env.DB, env.BROLLY_ACCOUNT_ID, now, context.budget)).filter((instance) => breachedIds.has(instance.instance_id));
-	const notifications = instances.filter((instance) => alertInstanceCanNotify(instance.status, instance.historical === 1, instance.next_notification_at, now)).map(notificationFromRow);
+	const firingInstances = selectHighestFiringInstances(instances);
+	const notifications = [];
 	const automaticActions = [];
-	for (const instance of instances) {
-		const action = await prepareExactRuleAction(env.DB, instance, now, controlMode, context.budget);
+	for (const instance of firingInstances) {
+		const effective = resolveEffectiveEntries(alertLevels, Math.floor(instance.priority / 10));
+		if (alertInstanceCanNotify(instance.status, instance.historical === 1, instance.next_notification_at, now) && effective.channels.length) notifications.push(notificationFromRow(instance, effective.channels, alertLevels.length));
+		const action = await prepareExactRuleAction(env.DB, instance, now, actionMode(instance.product_family, effective), context.budget);
 		if (action) automaticActions.push(action);
-		const contributorAction = await prepareAggregateContributorAction(env.DB, instance, changes, resources, now, controlMode, context.budget);
+		const contributorAction = await prepareAggregateContributorAction(env.DB, instance, changes, resources, now, effective, context.budget);
 		if (contributorAction) automaticActions.push(contributorAction);
 	}
 	return {
@@ -3954,27 +4634,54 @@ async function evaluateUsageAlerts(env, changes, context) {
 		breached: instances.length
 	};
 }
+function selectHighestFiringInstances(instances) {
+	const selected = /* @__PURE__ */ new Map();
+	for (const instance of instances) {
+		const key = [
+			instance.rule_id,
+			instance.target_resource_id ?? instance.id,
+			instance.period_start_at,
+			instance.period_end_at
+		].join("\0");
+		const current = selected.get(key);
+		if (!current || instance.priority > current.priority) selected.set(key, instance);
+	}
+	return [...selected.values()];
+}
 async function dispatchAlertNotifications(env, pending, budget) {
 	for (const item of pending.slice(0, 100)) {
-		const targets = await notificationTargets(env.DB, item.notificationTargetIds, budget);
-		let delivered = false;
+		const now = Date.now();
+		const configured = new Map(item.targets.map((target) => [target.targetId, target]));
+		const targets = await notificationTargets(env.DB, item.targets.map((target) => target.targetId), budget);
+		const nextTimes = [];
+		let deliveredCount = 0;
 		for (const row of targets) {
-			if (!severityAllowed(item.lineLabel, Number(item.priority), String(row.minimum_severity))) continue;
-			if (!await notificationDeliveryAllowed(env.DB, String(row.id), String(row.kind), Date.now(), budget)) continue;
+			const schedule = configured.get(String(row.id));
+			if (!schedule) continue;
+			const dueAt = notificationDueAt(await latestAlertDelivery(env.DB, String(row.id), item.instanceId, budget), schedule.repeatIntervalMs, now);
+			if (dueAt === null) continue;
+			if (dueAt > now) {
+				nextTimes.push(dueAt);
+				continue;
+			}
+			if (!await notificationDeliveryAllowed(env.DB, String(row.id), String(row.kind), now, budget)) {
+				nextTimes.push(now + 9e5);
+				continue;
+			}
 			const config = env.BROLLY_CREDENTIAL_KEY ? await openJson(String(row.config_json), env.BROLLY_CREDENTIAL_KEY) : JSON.parse(String(row.config_json));
 			const incident = {
 				id: item.instanceId,
 				key: item.instanceId,
 				asset: assetFromResource(item.resource),
 				metric: item.metricDefinitionId,
-				severity: alertSeverity(item.lineLabel, item.priority),
+				severity: item.severity,
 				observed: item.observed,
 				threshold: item.threshold,
 				reason: `${item.lineLabel} threshold crossed for ${item.metricDefinitionId}`,
 				action: "notify",
 				status: "open",
-				firstSeen: Date.now(),
-				lastSeen: Date.now(),
+				firstSeen: now,
+				lastSeen: now,
 				occurrences: 1
 			};
 			const result = await notify({
@@ -3985,14 +4692,30 @@ async function dispatchAlertNotifications(env, pending, budget) {
 			}, incident);
 			chargeMeta$1(budget, (await env.DB.prepare(`INSERT INTO notification_deliveries(
            id,target_id,incident_id,kind,ok,status_code,error,created_at,alert_instance_id
-         ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?3)`).bind(crypto.randomUUID(), row.id, item.instanceId, row.kind, result.ok ? 1 : 0, result.status ?? null, result.error?.slice(0, 2e3) ?? null, Date.now()).run()).meta);
-			delivered ||= result.ok;
+         ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?3)`).bind(crypto.randomUUID(), row.id, item.instanceId, row.kind, result.ok ? 1 : 0, result.status ?? null, result.error?.slice(0, 2e3) ?? null, now).run()).meta);
+			if (result.ok) deliveredCount += 1;
+			const next = result.ok ? schedule.repeatIntervalMs === null ? null : now + schedule.repeatIntervalMs : now + 9e5;
+			if (next !== null) nextTimes.push(next);
 		}
-		const next = delivered ? item.repeatIntervalMs === null ? null : Date.now() + item.repeatIntervalMs : Date.now() + 9e5;
+		const next = nextTimes.length ? Math.min(...nextTimes) : null;
 		chargeMeta$1(budget, (await env.DB.prepare(`UPDATE alert_instances SET
          notification_count=notification_count+?2,next_notification_at=?3
-       WHERE id=?1 AND status='open'`).bind(item.instanceId, delivered ? 1 : 0, next).run()).meta);
+       WHERE id=?1 AND status='open' AND acknowledged_at IS NULL`).bind(item.instanceId, deliveredCount, next).run()).meta);
 	}
+}
+function notificationDueAt(previous, repeatIntervalMs, now) {
+	if (!previous) return now;
+	if (!previous.ok) return previous.createdAt + 9e5;
+	return repeatIntervalMs === null ? null : previous.createdAt + repeatIntervalMs;
+}
+async function latestAlertDelivery(db, targetId, instanceId, budget) {
+	const row = await db.prepare(`SELECT ok,created_at FROM notification_deliveries
+     WHERE target_id=?1 AND alert_instance_id=?2 ORDER BY created_at DESC LIMIT 1`).bind(targetId, instanceId).first();
+	budget?.charge("d1RowsRead", row ? 1 : 0);
+	return row ? {
+		ok: Number(row.ok) === 1,
+		createdAt: Number(row.created_at)
+	} : null;
 }
 async function notificationDeliveryAllowed(db, targetId, kind, now = Date.now(), budget) {
 	const result = await db.prepare(`SELECT
@@ -4002,17 +4725,17 @@ async function notificationDeliveryAllowed(db, targetId, kind, now = Date.now(),
 	budget?.charge("d1RowsRead", 1);
 	return Number(result?.hourly ?? 0) < 20 && (kind !== "twilio" || Number(result?.daily ?? 0) < 5);
 }
-async function silenceAlertInstance(db, instanceId, actor) {
+async function acknowledgeAlertInstance(db, instanceId, actor) {
 	const now = Date.now();
-	const result = await db.prepare(`UPDATE alert_instances SET status='silenced',silenced_at=?2,silenced_by=?3,next_notification_at=NULL
+	const result = await db.prepare(`UPDATE alert_instances SET status='acknowledged',acknowledged_at=?2,acknowledged_by=?3,next_notification_at=NULL
      WHERE id=?1 AND status='open'`).bind(instanceId, now, actor).run();
 	if (Number(result.meta.changes ?? 0) !== 1) return false;
 	await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
-     VALUES(?1,?2,'alert_instance.silence',?3,'{}',?4)`).bind(crypto.randomUUID(), actor, instanceId, now).run();
+     VALUES(?1,?2,'alert_instance.acknowledge',?3,'{}',?4)`).bind(crypto.randomUUID(), actor, instanceId, now).run();
 	return true;
 }
 async function prepareExactRuleAction(db, instance, now, controlMode, budget) {
-	if (controlMode === "observe" || instance.line_action !== "quarantine" || instance.target_resource_id !== instance.id) return null;
+	if (!controlMode || instance.target_resource_id !== instance.id) return null;
 	const resource = resourceFromRow(instance);
 	if (!manualActionEligible(resource, instance)) return null;
 	const metadata = resource.metadata;
@@ -4020,7 +4743,7 @@ async function prepareExactRuleAction(db, instance, now, controlMode, budget) {
 	budget?.charge("d1RowsRead", existing ? 1 : 0);
 	if (await hasDeniedAncestor(db, resource.id, budget)) return null;
 	const evidence = parseEvidence(instance.evidence_json);
-	if (!(controlMode === "automatic" && instance.auto_quarantine === 1)) {
+	if (!(controlMode === "auto")) {
 		if (existing) return null;
 		await insertPreparedAction(db, instance, resource, now, false, `${instance.label} threshold crossed; operator approval is required`, budget);
 		return null;
@@ -4029,14 +4752,11 @@ async function prepareExactRuleAction(db, instance, now, controlMode, budget) {
      AND state IN ('prepared','approved','running','succeeded')
      ORDER BY CASE state WHEN 'succeeded' THEN 0 WHEN 'running' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END LIMIT 1`).bind(resource.accountId, resource.productFamily, resource.cloudflareId).first();
 	budget?.charge("d1RowsRead", activeAction ? 1 : 0);
-	if (!exactAutomaticActionEligible({
-		resource,
+	if (!automaticActionEligible(resource, {
 		quality: instance.data_quality,
 		sampleInterval: evidence.sampleInterval,
 		measurement: instance.measurement,
 		fresh: evidence.watermarkAt !== null && now - evidence.watermarkAt <= 9e5,
-		ruleOptIn: true,
-		parentDenied: false,
 		alreadyQuarantined: blocksAutomaticAction(activeAction, instance.instance_id),
 		confirmationSatisfied: now - instance.first_breached_at >= instance.confirmation_window_ms
 	})) return null;
@@ -4045,18 +4765,19 @@ async function prepareExactRuleAction(db, instance, now, controlMode, budget) {
 	return insertPreparedAction(db, instance, resource, now, true, `${instance.label} threshold remained breached for ${instance.confirmation_window_ms} ms`, budget);
 }
 async function insertPreparedAction(db, instance, resource, now, automatic, reason, budget) {
+	const kind = resource.productFamily === "queues" ? "pause_consumer" : "runtime_quarantine";
 	const workerScript = resource.productFamily === "workers" ? resource.cloudflareId : resource.metadata.cloudflareWorkerScript;
-	if (!workerScript) return null;
+	if (kind === "runtime_quarantine" && !workerScript) return null;
 	const action = {
 		id: crypto.randomUUID(),
 		incidentId: instance.instance_id,
 		asset: assetFromResource(resource),
-		kind: "runtime_quarantine",
+		kind,
 		state: "prepared",
 		reason,
 		observed: { [instance.metric_definition_id]: instance.observed_value },
 		rollback: {
-			workerScript,
+			...workerScript ? { workerScript } : {},
 			action: "resume"
 		},
 		actor: "brolly-alert-rule",
@@ -4072,14 +4793,14 @@ async function insertPreparedAction(db, instance, resource, now, automatic, reas
 		db.prepare(`INSERT OR IGNORE INTO actions(
          id,incident_id,idempotency_key,account_id,family,asset_id,kind,state,reason,observed_json,
          rollback_json,actor,created_at,updated_at,alert_instance_id,evidence_quality,automatic
-       ) VALUES(?1,?2,?3,?4,?5,?6,'runtime_quarantine','prepared',?7,?8,?9,?10,?11,?11,?2,?12,?13)`).bind(action.id, instance.instance_id, `alert:${instance.instance_id}`, resource.accountId, resource.productFamily, resource.cloudflareId, action.reason, JSON.stringify(action.observed), JSON.stringify(action.rollback), action.actor, now, instance.data_quality, automatic ? 1 : 0),
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,'prepared',?8,?9,?10,?11,?12,?12,?2,?13,?14)`).bind(action.id, instance.instance_id, `alert:${instance.instance_id}`, resource.accountId, resource.productFamily, resource.cloudflareId, kind, action.reason, JSON.stringify(action.observed), JSON.stringify(action.rollback), action.actor, now, instance.data_quality, automatic ? 1 : 0),
 		db.prepare(`UPDATE alert_instances SET linked_action_id=?2 WHERE id=?1`).bind(instance.instance_id, action.id)
 	]);
 	for (const result of results) chargeMeta$1(budget, result.meta);
 	return Number(results[1]?.meta.changes ?? 0) === 1 ? action : null;
 }
-async function prepareAggregateContributorAction(db, instance, changes, resources, now, controlMode, budget) {
-	if (controlMode === "observe" || instance.line_action !== "quarantine" || !instance.target_resource_id) return null;
+async function prepareAggregateContributorAction(db, instance, changes, resources, now, effective, budget) {
+	if (!effective.stopOrPause && !effective.quarantine || !instance.target_resource_id) return null;
 	if (instance.measurement !== "usage" || instance.data_quality !== "complete" || instance.historical === 1) return null;
 	const target = resourceFromRow(instance);
 	if (!["account", "product"].includes(target.resourceType) && !target.resourceType.endsWith(":namespace")) return null;
@@ -4097,17 +4818,17 @@ async function prepareAggregateContributorAction(db, instance, changes, resource
 		aggregateExcess,
 		rollingBaseline: item.change.rollingBaseline,
 		crossedOwnEmergency: ownEmergency.has(item.resource.id) && (instance.period === "day" ? item.change.dayValue : item.change.cycleValue) >= ownEmergency.get(item.resource.id),
-		eligible: periodQuality(item.change, instance.period) === "complete" && periodSampleInterval(item.change, instance.period) === 1 && item.resource.controlCapability !== "none" && item.resource.runtimeFuseStatus === "verified" && !item.resource.excluded && item.resource.autoQuarantinePolicy !== "deny" && item.resource.tier !== "critical" && item.resource.tier !== "control_plane" && item.resource.tier !== "unclassified"
+		eligible: periodQuality(item.change, instance.period) === "complete" && periodSampleInterval(item.change, instance.period) === 1 && resourceControlReady(item.resource) && !item.resource.excluded && item.resource.autoQuarantinePolicy !== "deny" && item.resource.tier !== "critical" && item.resource.tier !== "control_plane" && item.resource.tier !== "unclassified"
 	}));
 	const selected = selectAggregateContributor(evidence);
 	if (!selected) {
 		chargeMeta$1(budget, (await db.prepare(`DELETE FROM contributor_candidates WHERE alert_instance_id=?1`).bind(instance.instance_id).run()).meta);
 		await auditAmbiguousContributors(db, instance, evidence, now, budget);
-		await prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, budget);
+		if (effective.stopOrPause === "prepare" || effective.quarantine === "prepare") await prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, effective, budget);
 		return null;
 	}
-	if (controlMode !== "automatic" || instance.auto_quarantine_contributors !== 1) {
-		const resource = resources.get(selected.resourceId);
+	const resource = resources.get(selected.resourceId);
+	if ((resource ? actionMode(resource.productFamily, effective) : null) !== "auto") {
 		if (resource && manualActionEligible(resource, instance) && !await hasDeniedAncestor(db, resource.id, budget)) await insertPreparedAction(db, instance, resource, now, false, `${resource.displayName} is the leading contributor; operator approval is required`, budget);
 		return null;
 	}
@@ -4123,21 +4844,17 @@ async function prepareAggregateContributorAction(db, instance, changes, resource
 	const streak = await db.prepare(`SELECT consecutive_wins FROM contributor_candidates WHERE alert_instance_id=?1 AND resource_id=?2 LIMIT 1`).bind(instance.instance_id, selected.resourceId).first();
 	budget?.charge("d1RowsRead", streak ? 1 : 0);
 	if (Number(streak?.consecutive_wins ?? 0) < 2) return null;
-	const resource = resources.get(selected.resourceId);
 	if (!resource || await hasDeniedAncestor(db, resource.id, budget)) return null;
 	const change = applicable.find((item) => item.resource.id === selected.resourceId).change;
 	const activeAction = await db.prepare(`SELECT * FROM actions WHERE account_id=?1 AND family=?2 AND asset_id=?3
      AND state IN ('prepared','approved','running','succeeded')
      ORDER BY CASE state WHEN 'succeeded' THEN 0 WHEN 'running' THEN 1 WHEN 'approved' THEN 2 ELSE 3 END LIMIT 1`).bind(resource.accountId, resource.productFamily, resource.cloudflareId).first();
 	budget?.charge("d1RowsRead", activeAction ? 1 : 0);
-	if (!exactAutomaticActionEligible({
-		resource,
+	if (!automaticActionEligible(resource, {
 		quality: periodQuality(change, instance.period),
 		sampleInterval: periodSampleInterval(change, instance.period),
 		measurement: "usage",
 		fresh: change.watermarkAt !== null && now - change.watermarkAt <= 9e5,
-		ruleOptIn: true,
-		parentDenied: false,
 		alreadyQuarantined: blocksAutomaticAction(activeAction, instance.instance_id),
 		confirmationSatisfied: true
 	})) return null;
@@ -4157,12 +4874,12 @@ async function auditAmbiguousContributors(db, instance, evidence, now, budget) {
 		top
 	}), now).run()).meta);
 }
-async function prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, budget) {
+async function prepareAmbiguousContributorApproval(db, instance, applicable, evidence, now, effective, budget) {
 	const byResource = new Map(applicable.map((item) => [item.resource.id, item.resource]));
 	const ranked = [...evidence].sort((left, right) => right.latestIntervalValue - left.latestIntervalValue || right.periodValue - left.periodValue || left.resourceId.localeCompare(right.resourceId));
 	for (const candidate of ranked.slice(0, 5)) {
 		const resource = byResource.get(candidate.resourceId);
-		if (!resource || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
+		if (!resource || actionMode(resource.productFamily, effective) !== "prepare" || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
 		await insertPreparedAction(db, instance, resource, now, false, `${resource.displayName} is among the leading contributors; attribution requires operator review`, budget);
 		return;
 	}
@@ -4174,29 +4891,23 @@ async function ownEmergencyThresholds(db, instance, resourceIds, budget) {
      WHERE r.account_id=?1 AND r.metric_definition_id=?2 AND r.period=?3
        AND r.enabled=1 AND r.retired=0 AND l.enabled=1 AND l.retired=0
        AND r.target_resource_id IS NOT NULL
-       AND (lower(l.label)='emergency' OR l.priority>=100)
+       AND NOT EXISTS (
+         SELECT 1 FROM alert_lines higher
+         WHERE higher.alert_rule_id=l.alert_rule_id AND higher.enabled=1 AND higher.retired=0 AND higher.priority>l.priority
+       )
      GROUP BY r.target_resource_id LIMIT 5000`).bind(instance.account_id, instance.metric_definition_id, instance.period).all();
 	chargeMeta$1(budget, result.meta);
 	return new Map(result.results.filter((row) => wanted.has(row.target_resource_id)).map((row) => [row.target_resource_id, Number(row.threshold_value)]));
 }
 function manualActionEligible(resource, instance) {
-	if (instance.status !== "open" || instance.historical === 1 || ["missing", "stale"].includes(instance.data_quality)) return false;
-	if (!isExactControllableResource(resource) || resource.excluded || resource.controlCapability !== "runtime_fuse") return false;
+	if (!["open", "acknowledged"].includes(instance.status) || instance.historical === 1 || ["missing", "stale"].includes(instance.data_quality)) return false;
+	if (!isExactControllableResource(resource) || resource.excluded || !resourceControlReady(resource)) return false;
 	if (!["standard", "disposable"].includes(resource.tier)) return false;
+	if (resource.autoQuarantinePolicy === "deny") return false;
+	if (resource.productFamily === "queues") return true;
 	if (!resource.metadata.brollyFuse || resource.metadata.brollyFuse !== "true") return false;
 	if (resource.productFamily === "workers") return /^[A-Za-z0-9_-]+$/.test(resource.cloudflareId);
 	return /^[a-f0-9]{64}$/i.test(resource.cloudflareId) && Boolean(resource.metadata.cloudflareWorkerScript);
-}
-async function loadControlMode(db, budget) {
-	const row = await db.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first();
-	budget?.charge("d1RowsRead", row ? 1 : 0);
-	if (!row) return "approval";
-	try {
-		const mode = JSON.parse(row.value).mode;
-		return mode === "observe" || mode === "automatic" || mode === "approval" ? mode : "approval";
-	} catch {
-		return "approval";
-	}
 }
 function isDescendant(resource, targetId, resources) {
 	let current = resource;
@@ -4257,7 +4968,7 @@ async function loadBreachedInstances(db, accountId, breachedAt, budget) {
 	let after = "";
 	while (rows.length < 1e5) {
 		const result = await db.prepare(`SELECT
-         i.id AS instance_id,i.observed_value,i.threshold_value AS instance_threshold,i.data_quality,
+         i.id AS instance_id,i.period_start_at,i.period_end_at,i.observed_value,i.threshold_value AS instance_threshold,i.data_quality,
          i.status,i.first_breached_at,i.last_breached_at,i.next_notification_at,i.notification_count,
          i.historical,i.evidence_json,
          r.id AS rule_id,r.account_id,r.target_resource_id,r.target_selector_json,r.metric_definition_id,
@@ -4278,18 +4989,14 @@ async function loadBreachedInstances(db, accountId, breachedAt, budget) {
 	return rows;
 }
 async function notificationTargets(db, ids, budget) {
-	if (!ids.length) {
-		const result = await db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 LIMIT 50`).all();
-		chargeMeta$1(budget, result.meta);
-		return result.results;
-	}
+	if (!ids.length) return [];
 	const page = ids.slice(0, 50);
 	const placeholders = page.map((_, index) => `?${index + 1}`).join(",");
 	const result = await db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 AND id IN (${placeholders})`).bind(...page).all();
 	chargeMeta$1(budget, result.meta);
 	return result.results;
 }
-function notificationFromRow(row) {
+function notificationFromRow(row, targets, levelCount) {
 	return {
 		instanceId: row.instance_id,
 		ruleId: row.rule_id,
@@ -4300,15 +5007,12 @@ function notificationFromRow(row) {
 		threshold: row.instance_threshold,
 		metricDefinitionId: row.metric_definition_id,
 		resource: resourceFromRow(row),
-		notificationTargetIds: parseStringArray(row.notification_target_ids_json),
-		repeatIntervalMs: alertRepeatInterval(row.label, row.repeat_interval_ms)
+		severity: alertSeverity(Math.floor(row.priority / 10), levelCount),
+		targets
 	};
 }
-function alertRepeatInterval(label, configured) {
-	return configured ?? (label.toLowerCase() === "emergency" ? DEFAULT_EMERGENCY_REPEAT_MS : null);
-}
 function alertInstanceCanNotify(status, historical, nextNotificationAt, now) {
-	return status === "open" && !historical && nextNotificationAt !== null && nextNotificationAt <= now;
+	return status === "open" && !historical && (nextNotificationAt === null || nextNotificationAt <= now);
 }
 function alertBillingCycleBounds(cycles, timestamp, fallback) {
 	return cycles.find((cycle) => cycle.startsAt <= timestamp && cycle.endsAt > timestamp) ?? fallback;
@@ -4400,7 +5104,26 @@ function blocksAutomaticAction(row, alertInstanceId) {
 	return Boolean(row) && (row?.state !== "prepared" || row.alert_instance_id !== alertInstanceId);
 }
 function isExactControllableResource(resource) {
-	return resource.resourceType.endsWith(":resource") && resource.productFamily === "workers" || resource.resourceType.endsWith(":object") && resource.productFamily === "durable_objects";
+	return resource.resourceType.endsWith(":resource") && resource.productFamily === "workers" || resource.resourceType.endsWith(":object") && resource.productFamily === "durable_objects" || resource.resourceType.endsWith(":resource") && resource.productFamily === "queues";
+}
+function resourceControlReady(resource) {
+	return resource.productFamily === "queues" ? resource.controlCapability !== "none" : resource.controlCapability === "runtime_fuse" && resource.runtimeFuseStatus === "verified";
+}
+function actionMode(family, effective) {
+	return family === "durable_objects" ? effective.quarantine : family === "workers" || family === "queues" ? effective.stopOrPause : null;
+}
+function automaticActionEligible(resource, evidence) {
+	if (resource.productFamily !== "queues") return exactAutomaticActionEligible({
+		resource,
+		...evidence,
+		ruleOptIn: true,
+		parentDenied: false
+	});
+	return evidence.quality === "complete" && evidence.sampleInterval === 1 && evidence.measurement === "usage" && evidence.fresh && evidence.confirmationSatisfied && !evidence.alreadyQuarantined && !resource.excluded && ![
+		"control_plane",
+		"critical",
+		"unclassified"
+	].includes(resource.tier) && resource.autoQuarantinePolicy !== "deny" && resource.controlCapability !== "none";
 }
 function parseEvidence(value) {
 	try {
@@ -4416,20 +5139,10 @@ function parseEvidence(value) {
 		};
 	}
 }
-function alertSeverity(label, priority) {
-	const normalized = label.toLowerCase();
-	if (normalized === "emergency" || priority >= 100) return "emergency";
-	if (normalized === "critical" || priority >= 75) return "critical";
+function alertSeverity(position, levelCount) {
+	if (position >= levelCount - 1) return "emergency";
+	if (levelCount >= 3 && position >= levelCount - 2) return "critical";
 	return "warning";
-}
-function severityAllowed(label, priority, minimum) {
-	const rank = {
-		info: 0,
-		warning: 1,
-		critical: 2,
-		emergency: 3
-	};
-	return rank[alertSeverity(label, priority)] >= (rank[minimum] ?? 1);
 }
 function alertInstanceId(ruleId, lineId, resourceIdValue, start, end) {
 	return [
@@ -4449,13 +5162,6 @@ async function runBatches$2(db, statements, budget) {
 function chargeMeta$1(budget, meta) {
 	budget?.charge("d1RowsRead", meta.rows_read ?? 0);
 	budget?.charge("d1RowsWritten", meta.rows_written ?? meta.changes ?? 0);
-}
-function parseStringArray(value) {
-	try {
-		return JSON.parse(value).filter((item) => typeof item === "string");
-	} catch {
-		return [];
-	}
 }
 function parseStringRecord$1(value) {
 	try {
@@ -4592,7 +5298,8 @@ async function runOneBackfillSlice(env, client, ledger, budget, timeZone, option
 		samples: 0
 	};
 	const collector = toUsageCollector(slice.collector_key);
-	if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < 16) return {
+	const requiredQueries = (collector ? productUsageDefinition(collector) : void 0)?.datasets.length ?? (collector === "graphql:durable-objects" || collector === "graphql:workers" ? 16 : 1);
+	if (collector === "billing" ? budget.remaining("restRequests") < 1 : budget.remaining("graphqlQueries") < requiredQueries) return {
 		worked: false,
 		complete: false,
 		samples: 0
@@ -4622,16 +5329,16 @@ async function runOneBackfillSlice(env, client, ledger, budget, timeZone, option
 			collector,
 			startsAt: slice.starts_at,
 			endsAt: slice.ends_at,
-			cursor: collector === "graphql:durable-objects" ? parseCursor(slice.cursor_json) : parseWorkerCursor(slice.cursor_json),
+			cursor: collector === "graphql:durable-objects" ? parseCursor(slice.cursor_json) : collector === "graphql:workers" ? parseWorkerCursor(slice.cursor_json) : void 0,
 			budget,
 			timeZone,
 			historical: true,
 			maxPages: 2
 		});
-		const unavailable = result.coverage.find((item) => (item.state === "permission_denied" || item.state === "unavailable") && !(collector === "graphql:workers" && item.metric === "cache_requests"));
+		const unavailable = result.coverage.find((item) => (item.state === "permission_denied" || item.state === "unavailable") && !(collector === "graphql:workers" && item.metric === "cache_requests") && !item.detail?.startsWith("This metric is retained through authoritative billing"));
 		if (unavailable) throw new Error(unavailable.detail ?? `${collector} telemetry is ${unavailable.state}`);
 		const terminal = collector === "billing" || result.complete;
-		const coverage = collector === "billing" ? result.coverage.some((item) => item.metric === "initial_import_gaps" && item.state !== "healthy") ? "partial" : "complete" : result.complete ? "complete" : "partial";
+		const coverage = collector === "billing" ? result.coverage.some((item) => item.metric === "initial_import_gaps" && item.state !== "healthy") ? "partial" : "complete" : result.complete && !result.coverage.some((item) => item.state === "delayed") ? "complete" : "partial";
 		await finishSlice(env.DB, budget, slice, terminal ? "complete" : "pending", result.continuation, terminal ? null : "Continuation saved after the bounded page budget", coverage);
 		await updateJobStatus(env.DB, budget, slice.backfill_job_id);
 		return {
@@ -4674,7 +5381,8 @@ async function updateJobStatus(db, budget, jobId) {
 function toUsageCollector(value) {
 	if (value === "billing" || value.includes("billing")) return "billing";
 	if (value.includes("durable")) return "graphql:durable-objects";
-	if (value.includes("workers")) return "graphql:workers";
+	if (value === "graphql:workers" || value === "graphql:workersInvocationsAdaptive") return "graphql:workers";
+	if (productUsageDefinition(value)) return value;
 	return null;
 }
 function parseCursor(value) {
@@ -4699,6 +5407,7 @@ var MAX_BATCH = 100;
 async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 	const state = await db.prepare(`SELECT value FROM settings WHERE key='usage_ledger_policy_version' LIMIT 1`).first();
 	if (!force && state?.value === policy.version) return 0;
+	const levels = await loadAlertLevels(db);
 	const now = Date.now();
 	const rootId = resourceId(accountId, "account", "account", accountId);
 	const statements = [db.prepare(`INSERT OR IGNORE INTO resources(
@@ -4714,6 +5423,7 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 		targetResourceId: rootId,
 		metricDefinitionId: "account:estimated_cost_usd",
 		limits: policy.accountDailySpend,
+		levels,
 		now
 	});
 	ruleCount += 1;
@@ -4734,6 +5444,7 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 			targetResourceId: productId,
 			metricDefinitionId: `${family}:estimated_cost_usd`,
 			limits,
+			levels,
 			now
 		});
 		ruleCount += 1;
@@ -4752,12 +5463,13 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 			targetResourceId: row.id,
 			metricDefinitionId: `${parsed.family}:estimated_cost_usd`,
 			limits,
+			levels,
 			now
 		});
 		ruleCount += 1;
 	}
 	for (const threshold of policy.thresholds) for (const product of METRIC_CATALOG.filter((item) => item.metrics.includes(threshold.metric))) {
-		addUsageRule(db, statements, accountId, product.family, threshold, now);
+		addUsageRule(db, statements, accountId, product.family, threshold, levels, now);
 		ruleCount += 1;
 	}
 	statements.push(db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('usage_ledger_policy_version',?1,?2)
@@ -4771,32 +5483,10 @@ function addSpendRule(db, statements, input) {
 		...input,
 		measurement: "estimated_cost",
 		period: "day",
-		lines: [
-			{
-				label: "Warning",
-				color: "#f59e0b",
-				priority: 50,
-				value: input.limits.warning,
-				enabled: true
-			},
-			{
-				label: "Critical",
-				color: "#dc6b24",
-				priority: 75,
-				value: input.limits.critical,
-				enabled: false
-			},
-			{
-				label: "Emergency",
-				color: "#ef4444",
-				priority: 100,
-				value: input.limits.emergency,
-				enabled: true
-			}
-		]
+		lines: materializedSpendLines(input.limits, input.levels)
 	});
 }
-function addUsageRule(db, statements, accountId, family, threshold, now) {
+function addUsageRule(db, statements, accountId, family, threshold, levels, now) {
 	addRule(db, statements, {
 		id: legacyId("threshold", `${family}:${threshold.metric}:${threshold.windowMs}`),
 		key: `threshold:${family}:${threshold.metric}:${threshold.windowMs}`,
@@ -4807,29 +5497,17 @@ function addUsageRule(db, statements, accountId, family, threshold, now) {
 		measurement: "usage",
 		period: threshold.windowMs >= 24192e5 ? "billing_cycle" : "day",
 		now,
-		lines: [
-			...threshold.warning === void 0 ? [] : [{
-				label: "Warning",
-				color: "#f59e0b",
-				priority: 50,
-				value: threshold.warning,
+		lines: levels.flatMap((level, index) => {
+			const value = thresholdValue(threshold, level);
+			return value === void 0 ? [] : [{
+				levelId: level.id,
+				label: level.label,
+				color: levelColor(index, levels.length),
+				priority: level.position * 10,
+				value,
 				enabled: true
-			}],
-			...threshold.critical === void 0 ? [] : [{
-				label: "Critical",
-				color: "#dc6b24",
-				priority: 75,
-				value: threshold.critical,
-				enabled: false
-			}],
-			...threshold.emergency === void 0 ? [] : [{
-				label: "Emergency",
-				color: "#ef4444",
-				priority: 100,
-				value: threshold.emergency,
-				enabled: true
-			}]
-		]
+			}];
+		})
 	});
 }
 function addRule(db, statements, input) {
@@ -4843,13 +5521,36 @@ function addRule(db, statements, input) {
        metric_definition_id=excluded.metric_definition_id,measurement=excluded.measurement,
        period=excluded.period,enabled=1,retired=0,
        legacy_policy_key=excluded.legacy_policy_key,updated_at=excluded.updated_at`).bind(input.id, input.accountId, input.targetResourceId, input.targetSelector ? JSON.stringify(input.targetSelector) : null, input.metricDefinitionId, input.measurement, input.period, input.key, input.now));
+	statements.push(db.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE alert_rule_id=?1`).bind(input.id, input.now));
 	for (const line of input.lines) statements.push(db.prepare(`INSERT INTO alert_lines(
-         id,alert_rule_id,label,color,priority,threshold_value,action,repeat_interval_ms,
+         id,alert_rule_id,level_id,label,color,priority,threshold_value,action,repeat_interval_ms,
          enabled,created_at,updated_at
-       ) VALUES(?1,?2,?3,?4,?5,?6,'notify',?7,?8,?9,?9)
-       ON CONFLICT(alert_rule_id,label) DO UPDATE SET
-         color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
-         repeat_interval_ms=excluded.repeat_interval_ms,enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`).bind(`${input.id}:${line.label.toLowerCase()}`, input.id, line.label, line.color, line.priority, line.value, line.label === "Emergency" ? 216e5 : null, line.enabled ? 1 : 0, input.now));
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,'notify',NULL,?8,?9,?9)
+       ON CONFLICT(alert_rule_id,level_id) DO UPDATE SET
+         label=excluded.label,color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
+         repeat_interval_ms=excluded.repeat_interval_ms,enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`).bind(`${input.id}:${line.levelId}`, input.id, line.levelId, line.label, line.color, line.priority, line.value, line.enabled ? 1 : 0, input.now));
+}
+function materializedSpendLines(limits, levels) {
+	return levels.flatMap((level, index) => finiteLimit(limits[level.id]) ? [{
+		levelId: level.id,
+		label: level.label,
+		color: levelColor(index, levels.length),
+		priority: level.position * 10,
+		value: limits[level.id],
+		enabled: true
+	}] : []);
+}
+function finiteLimit(value) {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function thresholdValue(threshold, level) {
+	const key = level.id === "warning" || level.id === "critical" || level.id === "emergency" ? level.id : level.label.toLowerCase() === "warning" || level.label.toLowerCase() === "critical" || level.label.toLowerCase() === "emergency" ? level.label.toLowerCase() : null;
+	return key ? threshold[key] : void 0;
+}
+function levelColor(index, count) {
+	if (index === count - 1) return "#ef4444";
+	if (index === count - 2) return "#dc6b24";
+	return "#f59e0b";
 }
 function legacyId(kind, key) {
 	return `legacy:${kind}:${encodeURIComponent(key)}`;
@@ -4917,6 +5618,7 @@ async function runMonitor(env, options = {}) {
 	const holder = crypto.randomUUID();
 	if (!await store.acquireLease("minute-monitor", holder, 55e3)) return;
 	const automaticQueue = /* @__PURE__ */ new Map();
+	const automaticCloudflareActions = [];
 	const startedAt = Date.now();
 	const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
 	const collectionEnd = Math.floor((startedAt - 12e4) / 3e5) * 5 * 6e4;
@@ -4929,7 +5631,8 @@ async function runMonitor(env, options = {}) {
 	let hotWatch = false;
 	if (!activeDue && !options.force) {
 		const watched = await env.DB.prepare(`SELECT 1 AS present FROM alert_instances i JOIN alert_lines l ON l.id=i.alert_line_id
-       WHERE i.status='open' AND i.historical=0 AND i.period_end_at>?1 AND l.priority>=50 LIMIT 1`).bind(startedAt).first();
+       WHERE i.status='open' AND i.historical=0 AND i.period_end_at>?1
+         AND l.level_id IN (SELECT id FROM alert_levels ORDER BY position DESC LIMIT 2) LIMIT 1`).bind(startedAt).first();
 		const watermark = await env.DB.prepare(`SELECT MIN(high_watermark_at) AS watermark FROM collector_state
        WHERE account_id=?1 AND collector_key IN ('graphql:durable-objects','graphql:workers')
          AND partition_key='active'`).bind(env.BROLLY_ACCOUNT_ID).first();
@@ -5064,6 +5767,7 @@ async function runMonitor(env, options = {}) {
 		for (const action of alertResult.automaticActions) {
 			const workerScript = String(action.rollback.workerScript ?? "");
 			if (workerScript) automaticQueue.set(workerScript, [...automaticQueue.get(workerScript) ?? [], action]);
+			else if (action.kind === "pause_consumer") automaticCloudflareActions.push(action);
 		}
 		await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "active", durableActiveWindow, durableObjects, now, collectionEnd);
 		await persistWindowState(ledger, env.BROLLY_ACCOUNT_ID, "graphql:durable-objects", "correction", durableCorrectionWindow, durableCorrections, now);
@@ -5082,14 +5786,20 @@ async function runMonitor(env, options = {}) {
 				endsAt: now
 			});
 			const reconciledCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, now);
-			await dispatchAlertNotifications(env, (await evaluateUsageAlerts(env, billing.changes, {
+			const billingAlerts = await evaluateUsageAlerts(env, billing.changes, {
 				timeZone,
 				billingCycleId: reconciledCycle.id,
 				billingCycleStart: reconciledCycle.startsAt,
 				billingCycleEnd: reconciledCycle.endsAt,
 				now,
 				budget: ledgerBudget
-			})).notifications, ledgerBudget);
+			});
+			await dispatchAlertNotifications(env, billingAlerts.notifications, ledgerBudget);
+			for (const action of billingAlerts.automaticActions) {
+				const workerScript = String(action.rollback.workerScript ?? "");
+				if (workerScript) automaticQueue.set(workerScript, [...automaticQueue.get(workerScript) ?? [], action]);
+				else if (action.kind === "pause_consumer") automaticCloudflareActions.push(action);
+			}
 			await store.saveCoverage([{
 				family: "billing",
 				metric: "authoritative_usage",
@@ -5188,9 +5898,13 @@ async function runMonitor(env, options = {}) {
 			...durableObjects.coverage,
 			...workers.coverage
 		], env, automaticQueue);
+		await flushAutomaticCloudflareControls(store, env, automaticCloudflareActions);
 		await flushAutomaticFuses(store, env, automaticQueue);
-		const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
-		if (backfill.worked) normalizedSamples += backfill.samples;
+		while (ledgerBudget.remaining("backfillSlices") > 0 && ledgerBudget.remaining("wallMs") >= 8e3) {
+			const backfill = await runOneBackfillSlice(env, client, ledger, ledgerBudget, timeZone);
+			if (!backfill.worked) break;
+			normalizedSamples += backfill.samples;
+		}
 		const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: env.BROLLY_TIMEZONE ?? "UTC" }).format(new Date(now));
 		if (isDailySummaryHour(env) && await store.claimDailySummary(localDay)) {
 			const [billingCoverage, billedCost] = await Promise.all([env.DB.prepare(`SELECT state,detail FROM metric_coverage
@@ -5322,17 +6036,11 @@ async function cleanupControlPlaneHistory(db, budget, now) {
 }
 async function handleEvaluation(store, evaluation, dailySummary = false, env, automaticQueue) {
 	const { incident, notify: shouldSend } = await store.recordEvaluation(evaluation);
-	if (!shouldSend) return;
-	const targets = await store.listNotificationTargets();
+	if (!shouldSend || !env) return;
+	const levels = await loadAlertLevels(env.DB);
+	const effective = resolveEffectiveEntries(levels, dailySummary || incident.severity === "emergency" ? levels.length - 1 : incident.severity === "critical" ? Math.max(0, levels.length - 2) : 0);
+	const targets = await store.listNotificationTargets(effective.channels.map((channel) => channel.targetId));
 	await Promise.allSettled(targets.slice(0, 10).map(async (row) => {
-		const severityRank = {
-			info: 0,
-			warning: 1,
-			critical: 2,
-			emergency: 3
-		};
-		const minimum = String(row.minimum_severity ?? "warning");
-		if (!dailySummary && severityRank[incident.severity] < (severityRank[minimum] ?? 1)) return;
 		if (!await store.notificationAllowed(String(row.id), String(row.kind))) return;
 		const result = await notify({
 			...env?.BROLLY_CREDENTIAL_KEY ? await openJson(String(row.config_json), env.BROLLY_CREDENTIAL_KEY) : JSON.parse(String(row.config_json)),
@@ -5398,6 +6106,47 @@ async function coverageIncidents(store, coverage, env, automaticQueue) {
 		}, false, env, automaticQueue);
 	}
 	await store.saveCoverage(missing);
+}
+async function flushAutomaticCloudflareControls(store, env, queued) {
+	const actions = [...new Map(queued.map((action) => [action.id, action])).values()].slice(0, 5);
+	for (const action of actions) {
+		if (action.kind !== "pause_consumer" || !await store.claimActionState(action.id, "prepared", "running")) continue;
+		const current = await env.DB.prepare(`SELECT tier,excluded,auto_quarantine_policy FROM resources
+       WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+       ORDER BY last_seen_at DESC LIMIT 1`).bind(action.asset.accountId, action.asset.family, action.asset.id).first();
+		if (!current || Number(current.excluded) === 1 || current.auto_quarantine_policy === "deny" || [
+			"control_plane",
+			"critical",
+			"unclassified"
+		].includes(current.tier)) {
+			await store.setActionState(action.id, "failed", "The resource protection policy changed before automatic control");
+			await store.audit("brolly-policy", "action.pause.refused", action.id, {
+				family: action.asset.family,
+				assetId: action.asset.id
+			});
+			continue;
+		}
+		await store.audit("brolly-policy", "action.pause.start", action.id, {
+			family: action.asset.family,
+			assetId: action.asset.id
+		});
+		try {
+			const rollback = await prepareCloudflareControl(env, action);
+			action.rollback = rollback;
+			await env.DB.prepare(`UPDATE actions SET rollback_json=?2,updated_at=?3 WHERE id=?1`).bind(action.id, JSON.stringify(rollback), Date.now()).run();
+			await store.audit("brolly-policy", "action.rollback_snapshot", action.id, rollback);
+			await executeCloudflareControl(env, action);
+			await store.setActionState(action.id, "succeeded");
+			await store.audit("brolly-policy", "action.pause.succeeded", action.id, {
+				family: action.asset.family,
+				assetId: action.asset.id
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await store.setActionState(action.id, "failed", message);
+			await store.audit("brolly-policy", "action.pause.failed", action.id, { error: message });
+		}
+	}
 }
 async function flushAutomaticFuses(store, env, queue) {
 	for (const [workerScript, queued] of [...queue.entries()].slice(0, 5)) {
@@ -5513,7 +6262,6 @@ async function dashboardData(env) {
 			timezone: env.BROLLY_TIMEZONE ?? "UTC"
 		},
 		policy: {
-			mode: policy.mode,
 			version: policy.version,
 			accountDailySpend: policy.accountDailySpend,
 			familyDailySpend: policy.familyDailySpend ?? DEFAULT_FAMILY_DAILY_SPEND,
@@ -5833,6 +6581,7 @@ function familyLabel(family) {
 		zones: "Zones",
 		images: "Images",
 		stream: "Stream",
+		email: "Email",
 		billing: "Billing"
 	}[family] ?? family.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase());
 }
@@ -6697,12 +7446,20 @@ function billingFamily(row) {
 		["pages", /cloudflare pages|pages build/],
 		["images", /cloudflare images|image transformation/],
 		["stream", /cloudflare stream|stream video/],
+		["containers", /\bcontainers?\b/],
+		["browser_rendering", /browser rendering/],
+		["workflows", /\bworkflows?\b/],
+		["worker_builds", /worker builds?|build minutes?/],
+		["analytics_engine", /analytics engine/],
+		["log_explorer", /log explorer/],
+		["zones", /zone analytics|bandwidth/],
+		["email", /email routing|email service|email sent/],
 		["workers", /\bworkers?\b/]
 	].find(([, pattern]) => pattern.test(value))?.[0] ?? null;
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "6c7a3a5cf9d40d4ec9216d1b287615d7a9e084d5";
+var BROLLY_RELEASE = "119abd570b009391aa3180517df54f48ab37df37";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -6853,11 +7610,106 @@ function emptyStatus(repository, extra) {
 	};
 }
 //#endregion
+//#region src/usage-series.ts
+function scopeResourceId(accountId, scope) {
+	if (scope === "account") return resourceId(accountId, "account", "account", accountId);
+	const family = scope.match(/^family:([^:]+)$/);
+	if (family) return resourceId(accountId, family[1], "product", family[1]);
+	const asset = scope.match(/^asset:([^:]+):([^:]+):(.+)$/);
+	if (asset) return resourceId(accountId, asset[1], `${asset[1]}:${asset[2]}`, asset[3]);
+	return null;
+}
+async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
+	const scope = url.searchParams.get("scope") ?? "account";
+	const id = scopeResourceId(accountId, scope);
+	if (!id) return Response.json({ error: "scope must be account, family:<family>, or asset:<family>:<scope>:<id>" }, { status: 400 });
+	const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 120)));
+	const today = new Date(now).toISOString().slice(0, 10);
+	const from = (/* @__PURE__ */ new Date(now - days * 864e5)).toISOString().slice(0, 10);
+	const [resource, daily, shards, definitions, cycles] = await Promise.all([
+		db.prepare(`SELECT id,product_family FROM resources WHERE id=?1 LIMIT 1`).bind(id).first(),
+		db.prepare(`SELECT local_day,metrics_json,estimated_cost_usd,authoritative_allocated_cost_usd,sealed
+       FROM usage_daily WHERE resource_id=?1 AND local_day>=?2 AND local_day<=?3 ORDER BY local_day ASC`).bind(id, from, today).all(),
+		db.prepare(`SELECT local_day,payload_json FROM usage_accumulator_shards
+       WHERE account_id=?1 AND local_day>=?2 AND local_day<=?3
+         AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`).bind(accountId, from, today).all(),
+		db.prepare(`SELECT id,metric_key,display_name,unit,billing_mapping FROM metric_definitions WHERE active=1`).all(),
+		db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`).bind(accountId, now - (days + 31) * 864e5).all()
+	]);
+	const byDay = /* @__PURE__ */ new Map();
+	for (const row of daily.results) byDay.set(row.local_day, {
+		day: row.local_day,
+		costUsd: Number(row.authoritative_allocated_cost_usd ?? row.estimated_cost_usd ?? 0),
+		metrics: parseNumberMap(row.metrics_json),
+		sealed: Number(row.sealed) === 1
+	});
+	for (const shard of shards.results) {
+		const entry = accumulatorEntry(shard.payload_json, id);
+		if (!entry) continue;
+		const existing = byDay.get(shard.local_day);
+		if (existing?.sealed) continue;
+		const point = existing ?? {
+			day: shard.local_day,
+			costUsd: 0,
+			metrics: {},
+			sealed: false
+		};
+		for (const [metric, value] of Object.entries(entry)) {
+			point.metrics[metric] = (point.metrics[metric] ?? 0) + value.day;
+			point.costUsd += value.estimatedDayUsd;
+		}
+		byDay.set(shard.local_day, point);
+	}
+	const series = [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
+	const present = new Set(series.flatMap((point) => Object.keys(point.metrics)));
+	const metrics = Object.fromEntries(definitions.results.filter((definition) => present.has(definition.id)).map((definition) => [definition.id, {
+		key: definition.metric_key,
+		label: definition.display_name,
+		unit: definition.unit,
+		billable: Boolean(definition.billing_mapping)
+	}]));
+	const body = {
+		scope,
+		resourceId: id,
+		found: Boolean(resource),
+		today,
+		metrics,
+		series,
+		cycles: cycles.results.map((cycle) => ({
+			startsAt: cycle.starts_at,
+			endsAt: cycle.ends_at,
+			approximate: cycle.approximate === 1
+		}))
+	};
+	return Response.json(body);
+}
+function parseNumberMap(value) {
+	try {
+		const parsed = JSON.parse(value);
+		return Object.fromEntries(Object.entries(parsed ?? {}).filter(([, item]) => typeof item === "number" && Number.isFinite(item)));
+	} catch {
+		return {};
+	}
+}
+function accumulatorEntry(payload, id) {
+	try {
+		const metrics = JSON.parse(payload).resources?.[id]?.metrics;
+		if (!metrics) return null;
+		return Object.fromEntries(Object.entries(metrics).map(([metric, item]) => [metric, {
+			day: Number(item.day ?? 0),
+			estimatedDayUsd: Number(item.estimatedDayUsd ?? 0)
+		}]));
+	} catch {
+		return null;
+	}
+}
+//#endregion
 //#region src/ledger-api.ts
 var MAX_PAGE = 500;
 async function ledgerApiRoute(request, env, actor) {
 	const url = new URL(request.url);
 	if (url.pathname === "/api/usage" && request.method === "GET") return usageResponse(env.DB, url);
+	if (url.pathname === "/api/usage-series" && request.method === "GET") return usageSeriesResponse(env.DB, env.BROLLY_ACCOUNT_ID, url);
 	if (url.pathname === "/api/metric-definitions" && request.method === "GET") return metricDefinitionsResponse(env.DB, url);
 	if (url.pathname === "/api/ledger/resources" && request.method === "GET") return resourcesResponse(env.DB, env.BROLLY_ACCOUNT_ID, url);
 	if (url.pathname === "/api/coverage" && request.method === "GET") return coverageResponse(env.DB, env.BROLLY_ACCOUNT_ID);
@@ -6873,13 +7725,10 @@ async function ledgerApiRoute(request, env, actor) {
 	const ruleMatch = url.pathname.match(/^\/api\/alert-rules\/([^/]+)$/);
 	if (ruleMatch && request.method === "PUT") return updateRule(request, env.DB, decodeURIComponent(ruleMatch[1]), env.BROLLY_ACCOUNT_ID, actor);
 	if (ruleMatch && request.method === "DELETE") return deleteRule(env.DB, decodeURIComponent(ruleMatch[1]), env.BROLLY_ACCOUNT_ID, actor);
-	const ruleLinesMatch = url.pathname.match(/^\/api\/alert-rules\/([^/]+)\/lines$/);
-	if (ruleLinesMatch && request.method === "POST") return createLine(request, env.DB, decodeURIComponent(ruleLinesMatch[1]), actor);
 	const lineMatch = url.pathname.match(/^\/api\/alert-lines\/([^/]+)$/);
 	if (lineMatch && request.method === "PUT") return updateLine(request, env.DB, decodeURIComponent(lineMatch[1]), actor);
-	if (lineMatch && request.method === "DELETE") return deleteLine(env.DB, decodeURIComponent(lineMatch[1]), actor);
-	const silenceMatch = url.pathname.match(/^\/api\/alert-instances\/([^/]+)\/silence$/);
-	if (silenceMatch && request.method === "POST") return await silenceAlertInstance(env.DB, decodeURIComponent(silenceMatch[1]), actor) ? Response.json({ ok: true }) : Response.json({ error: "Open alert instance not found" }, { status: 404 });
+	const acknowledgeMatch = url.pathname.match(/^\/api\/alerts\/([^/]+)\/acknowledge$/);
+	if (acknowledgeMatch && request.method === "POST") return await acknowledgeAlertInstance(env.DB, decodeURIComponent(acknowledgeMatch[1]), actor) ? Response.json({ ok: true }) : Response.json({ error: "Open alert instance not found" }, { status: 404 });
 	const protectionMatch = url.pathname.match(/^\/api\/ledger\/resources\/([^/]+)\/protection$/);
 	if (protectionMatch && request.method === "PUT") return updateResourceProtection(request, env.DB, decodeURIComponent(protectionMatch[1]), actor);
 	return null;
@@ -7051,7 +7900,7 @@ async function updateMonitoringLimits(request, db, actor) {
 	const error = validateLedgerRunLimits(body);
 	if (error) return Response.json({ error }, { status: 400 });
 	const limits = await saveLedgerRunLimits(db, body);
-	await audit$1(db, actor, "monitoring.limits.update", "ledger", limits);
+	await audit$2(db, actor, "monitoring.limits.update", "ledger", limits);
 	return Response.json({
 		ok: true,
 		limits
@@ -7107,7 +7956,7 @@ async function createBackfill(request, db, accountId, actor) {
        ) VALUES(?1,?2,?3,'',?4,?5,'pending','missing',?6)`).bind(crypto.randomUUID(), id, collector, start, end, now));
 	}
 	await runBatches(db, statements);
-	await audit$1(db, actor, "backfill.create", id, {
+	await audit$2(db, actor, "backfill.create", id, {
 		startsAt,
 		endsAt,
 		collectors
@@ -7137,29 +7986,14 @@ async function createRule(request, db, accountId, actor) {
 	if (error) return Response.json({ error }, { status: 400 });
 	const id = body.id?.trim() || crypto.randomUUID();
 	const now = Date.now();
-	const lines = body.lines?.length ? body.lines : [{
-		label: "Warning",
-		color: "#f59e0b",
-		priority: 50,
-		thresholdValue: 1,
-		action: "notify",
-		repeatIntervalMs: null,
-		enabled: true
-	}, {
-		label: "Emergency",
-		color: "#ef4444",
-		priority: 100,
-		thresholdValue: 2,
-		action: "quarantine",
-		repeatIntervalMs: 216e5,
-		enabled: true
-	}];
-	const lineError = validateLines(lines);
+	const levels = await loadAlertLevels(db);
+	const lines = body.lines?.length ? body.lines : levels.map((level, index) => levelLine(level, levels.length, index + 1));
+	const lineError = validateLines(lines, levels, true);
 	if (lineError) return Response.json({ error: lineError }, { status: 400 });
 	const statements = [ruleInsert(db, id, accountId, body, now)];
 	for (const line of lines) statements.push(lineInsert(db, id, line, now));
 	await runBatches(db, statements);
-	await audit$1(db, actor, "alert_rule.create", id, {
+	await audit$2(db, actor, "alert_rule.create", id, {
 		metricDefinitionId: body.metricDefinitionId,
 		lines: lines.length
 	});
@@ -7178,70 +8012,28 @@ async function updateRule(request, db, id, accountId, actor) {
        confirmation_window_ms=?11,enabled=?12,updated_at=?13
      WHERE id=?1 AND account_id=?2 AND retired=0`).bind(id, accountId, body.targetResourceId ?? null, body.targetSelector ? JSON.stringify(body.targetSelector) : null, body.metricDefinitionId, body.measurement, body.period, JSON.stringify(body.notificationTargetIds ?? []), body.autoQuarantine ? 1 : 0, body.autoQuarantineContributors ? 1 : 0, validConfirmation(body.confirmationWindowMs), body.enabled === false ? 0 : 1, Date.now()).run();
 	if (Number(result.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert rule not found" }, { status: 404 });
-	await audit$1(db, actor, "alert_rule.update", id, body);
+	await audit$2(db, actor, "alert_rule.update", id, body);
 	return Response.json({ ok: true });
 }
 async function deleteRule(db, id, accountId, actor) {
-	if (await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 AND status IN ('open','silenced') LIMIT 1`).bind(id).first()) return Response.json({ error: "Resolve or expire open alert instances before deleting this rule" }, { status: 409 });
+	if (await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 AND status IN ('open','acknowledged') LIMIT 1`).bind(id).first()) return Response.json({ error: "Resolve or expire open alert instances before deleting this rule" }, { status: 409 });
 	const history = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_rule_id=?1 LIMIT 1`).bind(id).first();
 	const now = Date.now();
 	const results = history ? await db.batch([db.prepare(`UPDATE alert_lines SET enabled=0,retired=1,updated_at=?2 WHERE alert_rule_id=?1`).bind(id, now), db.prepare(`UPDATE alert_rules SET enabled=0,retired=1,updated_at=?3 WHERE id=?1 AND account_id=?2`).bind(id, accountId, now)]) : await db.batch([db.prepare(`DELETE FROM alert_lines WHERE alert_rule_id=?1`).bind(id), db.prepare(`DELETE FROM alert_rules WHERE id=?1 AND account_id=?2`).bind(id, accountId)]);
 	if (Number(results[1]?.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert rule not found" }, { status: 404 });
-	await audit$1(db, actor, history ? "alert_rule.retire" : "alert_rule.delete", id, {});
+	await audit$2(db, actor, history ? "alert_rule.retire" : "alert_rule.delete", id, {});
 	return Response.json({
 		ok: true,
 		retired: Boolean(history)
 	});
-}
-async function createLine(request, db, ruleId, actor) {
-	const line = await request.json();
-	const error = validateLines([line]);
-	if (error) return Response.json({ error }, { status: 400 });
-	if (!await db.prepare(`SELECT 1 AS present FROM alert_rules WHERE id=?1 AND retired=0 LIMIT 1`).bind(ruleId).first()) return Response.json({ error: "Alert rule not found" }, { status: 404 });
-	const matching = await db.prepare(`SELECT id,retired FROM alert_lines WHERE alert_rule_id=?1 AND lower(label)=lower(?2) LIMIT 1`).bind(ruleId, line.label?.trim()).first();
-	if (matching?.retired === 0) return Response.json({ error: "A threshold line with this label already exists" }, { status: 409 });
-	const id = matching?.id ?? (line.id?.trim() || void 0) ?? crypto.randomUUID();
-	const now = Date.now();
-	if (matching) await db.prepare(`UPDATE alert_lines SET label=?2,color=?3,priority=?4,threshold_value=?5,action=?6,
-         repeat_interval_ms=?7,enabled=?8,retired=0,updated_at=?9 WHERE id=?1`).bind(id, line.label?.trim(), line.color, line.priority, line.thresholdValue, line.action ?? null, line.repeatIntervalMs ?? null, line.enabled === false ? 0 : 1, now).run();
-	else await lineInsert(db, ruleId, {
-		...line,
-		id
-	}, now).run();
-	await audit$1(db, actor, "alert_line.create", id, { ruleId });
-	return Response.json({
-		ok: true,
-		id
-	}, { status: 201 });
 }
 async function updateLine(request, db, id, actor) {
 	const line = await request.json();
-	const error = validateLines([line]);
-	if (error) return Response.json({ error }, { status: 400 });
-	if (await db.prepare(`SELECT 1 AS present FROM alert_lines current
-     JOIN alert_lines sibling ON sibling.alert_rule_id=current.alert_rule_id
-     WHERE current.id=?1 AND sibling.id!=current.id AND sibling.retired=0
-       AND lower(sibling.label)=lower(?2) LIMIT 1`).bind(id, line.label?.trim()).first()) return Response.json({ error: "A threshold line with this label already exists" }, { status: 409 });
-	const result = await db.prepare(`UPDATE alert_lines SET label=?2,color=?3,priority=?4,threshold_value=?5,action=?6,
-       repeat_interval_ms=?7,enabled=?8,updated_at=?9 WHERE id=?1 AND retired=0`).bind(id, line.label, line.color, line.priority, line.thresholdValue, line.action ?? null, line.repeatIntervalMs ?? null, line.enabled === false ? 0 : 1, Date.now()).run();
+	if (!Number.isFinite(line.thresholdValue) || Number(line.thresholdValue) < 0) return Response.json({ error: "Thresholds must be finite and nonnegative" }, { status: 400 });
+	const result = await db.prepare(`UPDATE alert_lines SET threshold_value=?2,enabled=?3,updated_at=?4 WHERE id=?1 AND retired=0`).bind(id, line.thresholdValue, line.enabled === false ? 0 : 1, Date.now()).run();
 	if (Number(result.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert line not found" }, { status: 404 });
-	await audit$1(db, actor, "alert_line.update", id, line);
+	await audit$2(db, actor, "alert_line.update", id, line);
 	return Response.json({ ok: true });
-}
-async function deleteLine(db, id, actor) {
-	const line = await db.prepare(`SELECT alert_rule_id FROM alert_lines WHERE id=?1 AND retired=0 LIMIT 1`).bind(id).first();
-	if (!line) return Response.json({ error: "Alert line not found" }, { status: 404 });
-	const count = await db.prepare(`SELECT COUNT(*) AS count FROM alert_lines WHERE alert_rule_id=?1 AND retired=0`).bind(line.alert_rule_id).first();
-	if (Number(count?.count ?? 0) <= 1) return Response.json({ error: "A rule must retain at least one threshold line" }, { status: 409 });
-	if (await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_line_id=?1 AND status IN ('open','silenced') LIMIT 1`).bind(id).first()) return Response.json({ error: "Resolve or expire open instances before deleting this line" }, { status: 409 });
-	const history = await db.prepare(`SELECT 1 AS present FROM alert_instances WHERE alert_line_id=?1 LIMIT 1`).bind(id).first();
-	const result = history ? await db.prepare(`UPDATE alert_lines SET enabled=0,retired=1,updated_at=?2 WHERE id=?1`).bind(id, Date.now()).run() : await db.prepare(`DELETE FROM alert_lines WHERE id=?1`).bind(id).run();
-	if (Number(result.meta.changes ?? 0) !== 1) return Response.json({ error: "Alert line not found" }, { status: 404 });
-	await audit$1(db, actor, history ? "alert_line.retire" : "alert_line.delete", id, {});
-	return Response.json({
-		ok: true,
-		retired: Boolean(history)
-	});
 }
 async function instancesResponse(db, accountId, url) {
 	const status = url.searchParams.get("status");
@@ -7276,7 +8068,7 @@ async function updateResourceProtection(request, db, id, actor) {
 	if (body.tier !== void 0 && isLegacyAssetResource(row.resource_type)) statements.push(db.prepare(`UPDATE assets SET tier=?4
        WHERE account_id=?1 AND family=?2 AND asset_id=?3`).bind(row.account_id, row.product_family, row.cloudflare_id, body.tier));
 	await db.batch(statements);
-	await audit$1(db, actor, "resource.protection.update", id, body);
+	await audit$2(db, actor, "resource.protection.update", id, body);
 	return Response.json({ ok: true });
 }
 function isLegacyAssetResource(resourceType) {
@@ -7306,19 +8098,19 @@ async function validateRule(db, accountId, rule) {
 	}
 	return null;
 }
-function validateLines(lines) {
+function validateLines(lines, levels, requireEveryLevel = false) {
 	if (!lines.length) return "Add at least one threshold line";
-	const labels = /* @__PURE__ */ new Set();
+	const levelIds = new Set(levels.map((level) => level.id));
+	const seen = /* @__PURE__ */ new Set();
 	for (const line of lines) {
-		if (!line.label?.trim() || line.label.length > 80) return "Each line needs a label of at most 80 characters";
-		if (labels.has(line.label.toLowerCase())) return "Line labels must be unique within a rule";
-		labels.add(line.label.toLowerCase());
-		if (!line.color || !/^#[0-9a-f]{6}$/i.test(line.color)) return "Each line needs a six-digit hex color";
-		if (!Number.isFinite(line.priority) || !Number.isInteger(line.priority)) return "Each line needs an integer priority";
+		if (!line.levelId || !levelIds.has(line.levelId)) return "Each threshold must use a current alert level";
+		if (seen.has(line.levelId)) return "Each alert level may appear once per rule";
+		seen.add(line.levelId);
 		if (!Number.isFinite(line.thresholdValue) || Number(line.thresholdValue) < 0) return "Thresholds must be finite and nonnegative";
-		if (line.action !== void 0 && line.action !== null && !["notify", "quarantine"].includes(line.action)) return "Invalid line action";
-		if (line.repeatIntervalMs !== void 0 && line.repeatIntervalMs !== null && (!Number.isFinite(line.repeatIntervalMs) || line.repeatIntervalMs < 6e4)) return "Repeat intervals must be at least one minute";
 	}
+	if (requireEveryLevel && seen.size !== levels.length) return "Every current alert level needs a threshold";
+	const ordered = levels.map((level) => lines.find((line) => line.levelId === level.id).thresholdValue);
+	if (ordered.some((value, index) => index > 0 && value < ordered[index - 1])) return "Thresholds must increase with alert levels";
 	return null;
 }
 function ruleInsert(db, id, accountId, body, now) {
@@ -7330,14 +8122,27 @@ function ruleInsert(db, id, accountId, body, now) {
 }
 function lineInsert(db, ruleId, line, now) {
 	return db.prepare(`INSERT INTO alert_lines(
-       id,alert_rule_id,label,color,priority,threshold_value,action,repeat_interval_ms,enabled,created_at,updated_at
-     ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)
-     ON CONFLICT(alert_rule_id,label) DO UPDATE SET
+       id,alert_rule_id,level_id,label,color,priority,threshold_value,action,repeat_interval_ms,enabled,created_at,updated_at
+     ) VALUES(?1,?2,?3,?4,?5,?6,?7,'notify',NULL,?8,?9,?9)
+     ON CONFLICT(alert_rule_id,level_id) DO UPDATE SET
        color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
-       action=excluded.action,repeat_interval_ms=excluded.repeat_interval_ms,
-       enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`).bind(line.id?.trim() || crypto.randomUUID(), ruleId, line.label?.trim(), line.color, line.priority, line.thresholdValue, line.action ?? null, line.repeatIntervalMs ?? null, line.enabled === false ? 0 : 1, now);
+       label=excluded.label,action='notify',repeat_interval_ms=NULL,
+       enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`).bind(line.id?.trim() || crypto.randomUUID(), ruleId, line.levelId, line.label?.trim(), line.color, line.priority, line.thresholdValue, line.enabled === false ? 0 : 1, now);
 }
-async function audit$1(db, actor, action, target, detail) {
+function levelLine(level, count, thresholdValue) {
+	const index = level.position;
+	return {
+		levelId: level.id,
+		label: level.label,
+		color: index === count - 1 ? "#ef4444" : index === count - 2 ? "#dc6b24" : "#f59e0b",
+		priority: index * 10,
+		thresholdValue,
+		action: "notify",
+		repeatIntervalMs: null,
+		enabled: true
+	};
+}
+async function audit$2(db, actor, action, target, detail) {
 	await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
 }
 async function runBatches(db, statements) {
@@ -7447,6 +8252,7 @@ function mapLine(row) {
 	return {
 		id: row.id,
 		alertRuleId: row.alert_rule_id,
+		levelId: row.level_id,
 		label: row.label,
 		color: row.color,
 		priority: row.priority,
@@ -7526,16 +8332,29 @@ function jsonValue(value) {
 //#region src/initial-ingestion.ts
 var DAY_MS = 864e5;
 var NINETY_DAYS_MS = 90 * DAY_MS;
-var MAX_SLICE_MS = 32 * DAY_MS;
-var INITIAL_USAGE_COLLECTORS = [{
-	collector: "graphql:durable-objects",
-	label: "Durable Objects",
-	dataset: "durable-object-usage"
-}, {
-	collector: "graphql:workers",
-	label: "Workers",
-	dataset: "workersInvocationsAdaptive"
-}];
+var USAGE_SLICE_MS = DAY_MS;
+/** Cloudflare's Billing Usage API accepts at most a 31-day query window. */
+var BILLING_MAX_SLICE_MS = 31 * DAY_MS;
+var INITIAL_USAGE_COLLECTORS = [
+	{
+		collector: "graphql:durable-objects",
+		label: "Durable Objects",
+		dataset: "durable-object-usage",
+		retentionDays: 90
+	},
+	{
+		collector: "graphql:workers",
+		label: "Workers",
+		dataset: "workersInvocationsAdaptive",
+		retentionDays: 90
+	},
+	...PRODUCT_USAGE_DEFINITIONS.map((item) => ({
+		collector: item.collector,
+		label: item.label,
+		dataset: item.datasets.map((dataset) => dataset.dataset).join("+"),
+		retentionDays: item.retentionDays
+	}))
+];
 var INITIAL_BILLING_COLLECTOR = {
 	collector: "billing",
 	label: "Billing",
@@ -7601,20 +8420,27 @@ async function ensureInitialIngestionJob(db, accountId, options = {}) {
 function initialIngestionSlicePlan(now, billingAvailable) {
 	const startsAt = now - NINETY_DAYS_MS;
 	const slices = [];
-	for (const collector of INITIAL_USAGE_COLLECTORS) for (let end = now; end > startsAt;) {
-		const start = Math.max(startsAt, end - MAX_SLICE_MS);
+	for (const collector of INITIAL_USAGE_COLLECTORS) {
+		const availableStartsAt = Math.max(startsAt, now - collector.retentionDays * DAY_MS);
+		for (let end = now; end > availableStartsAt;) {
+			const start = Math.max(availableStartsAt, end - USAGE_SLICE_MS);
+			slices.push({
+				collector: collector.collector,
+				startsAt: start,
+				endsAt: end
+			});
+			end = start;
+		}
+	}
+	if (billingAvailable) for (let end = now; end > startsAt;) {
+		const start = Math.max(startsAt, end - BILLING_MAX_SLICE_MS);
 		slices.push({
-			collector: collector.collector,
+			collector: INITIAL_BILLING_COLLECTOR.collector,
 			startsAt: start,
 			endsAt: end
 		});
 		end = start;
 	}
-	if (billingAvailable) slices.push({
-		collector: INITIAL_BILLING_COLLECTOR.collector,
-		startsAt,
-		endsAt: now
-	});
 	return slices;
 }
 /** Build the progress response directly from backfill_slices counts. */
@@ -7673,6 +8499,289 @@ function collectorLabel(collector) {
 	return INITIAL_USAGE_COLLECTORS.find((item) => item.collector === collector)?.label ?? collector;
 }
 //#endregion
+//#region src/notification-api.ts
+var PROVIDER_KINDS = [
+	"twilio",
+	"cloudflare_email",
+	"resend",
+	"postmark"
+];
+var TARGET_KINDS = [
+	"cloudflare_email",
+	"discord",
+	"postmark",
+	"resend",
+	"slack",
+	"twilio",
+	"webhook"
+];
+async function notificationApiRoute(request, env, actor, fetcher = fetch) {
+	const url = new URL(request.url);
+	if (url.pathname === "/api/providers" && request.method === "GET") return Response.json({ providers: await listProviders(env) }, { headers: { "cache-control": "no-store" } });
+	const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/);
+	if (providerMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+		const kind = decodeURIComponent(providerMatch[1]);
+		if (!isProviderKind(kind)) return Response.json({ error: "Unknown notification account kind" }, { status: 404 });
+		if (request.method === "DELETE") return removeProvider(env, actor, kind);
+		const body = await request.json();
+		return replaceProvider(env, actor, kind, body.config && typeof body.config === "object" ? body.config : body, fetcher);
+	}
+	if (url.pathname === "/api/targets" && request.method === "GET") {
+		const result = await env.DB.prepare(`SELECT t.id,t.kind,t.label,t.enabled,t.provider_id,t.created_at,t.updated_at,
+         (SELECT created_at FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY created_at DESC LIMIT 1) AS last_delivery_at,
+         (SELECT ok FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY created_at DESC LIMIT 1) AS last_delivery_ok,
+         (SELECT error FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY created_at DESC LIMIT 1) AS last_delivery_error
+       FROM notification_targets t ORDER BY lower(t.label),t.created_at`).all();
+		return Response.json({
+			credentialStorageReady: Boolean(env.BROLLY_CREDENTIAL_KEY),
+			targets: result.results.map((row) => ({
+				id: String(row.id),
+				kind: String(row.kind),
+				label: String(row.label),
+				enabled: Number(row.enabled) === 1,
+				providerId: row.provider_id == null ? null : String(row.provider_id),
+				createdAt: Number(row.created_at),
+				updatedAt: Number(row.updated_at),
+				lastDeliveryAt: row.last_delivery_at == null ? null : Number(row.last_delivery_at),
+				lastDeliveryOk: row.last_delivery_ok == null ? null : Number(row.last_delivery_ok) === 1,
+				lastDeliveryError: row.last_delivery_error == null ? null : String(row.last_delivery_error)
+			}))
+		}, { headers: { "cache-control": "no-store" } });
+	}
+	if (url.pathname === "/api/targets" && request.method === "POST") return saveTarget(request, env, actor, fetcher);
+	const targetMatch = url.pathname.match(/^\/api\/targets\/([^/]+)$/);
+	if (targetMatch && request.method === "PATCH") {
+		const id = decodeURIComponent(targetMatch[1]);
+		const body = await request.json();
+		if (body.label === void 0) return Response.json({ error: "No channel change supplied" }, { status: 400 });
+		const label = normalizeTargetLabel(body.label);
+		if (typeof label !== "string") return Response.json({ error: labelError(label) }, { status: 400 });
+		if (await duplicateTargetLabel(env.DB, label, id)) return Response.json({ error: "Another alert channel uses this label" }, { status: 400 });
+		const result = await env.DB.prepare(`UPDATE notification_targets SET label=?2,updated_at=?3 WHERE id=?1`).bind(id, label, Date.now()).run();
+		if (Number(result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
+		await audit$1(env.DB, actor, "notification_target.update", id, { label });
+		return Response.json({
+			ok: true,
+			id
+		});
+	}
+	if (targetMatch && request.method === "DELETE") {
+		const id = decodeURIComponent(targetMatch[1]);
+		const result = await env.DB.prepare(`DELETE FROM notification_targets WHERE id=?1`).bind(id).run();
+		if (Number(result.meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
+		await audit$1(env.DB, actor, "notification_target.delete", id, {});
+		return Response.json({
+			ok: true,
+			id
+		});
+	}
+	return null;
+}
+async function saveTarget(request, env, actor, fetcher) {
+	const body = await request.json();
+	if (!TARGET_KINDS.includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
+	const label = normalizeTargetLabel(body.label);
+	if (typeof label !== "string") return Response.json({ error: labelError(label) }, { status: 400 });
+	if (!env.BROLLY_CREDENTIAL_KEY) return Response.json({ error: "BROLLY_CREDENTIAL_KEY is required; target credentials will never be stored in plaintext" }, { status: 503 });
+	const id = body.id ?? crypto.randomUUID();
+	if (await duplicateTargetLabel(env.DB, label, id)) return Response.json({ error: "Another alert channel uses this label" }, { status: 400 });
+	let providerId = null;
+	let config;
+	const now = Date.now();
+	if (isProviderKind(body.kind)) {
+		const destination = { to: body.destination?.to };
+		let providerConfig;
+		if (body.provider) {
+			providerConfig = body.provider.config ?? {};
+			const providerError = validateProviderConfig(body.kind, providerConfig, env.BROLLY_ACCOUNT_ID);
+			if (providerError) return Response.json({ error: providerError }, { status: 400 });
+			const mergedError = validateNotificationConfig(body.kind, {
+				...providerConfig,
+				...destination
+			});
+			if (mergedError) return Response.json({ error: mergedError }, { status: 400 });
+			if (body.kind === "cloudflare_email") try {
+				await verifyCloudflareEmailToken(String(providerConfig.token), fetcher);
+			} catch (error) {
+				return Response.json({ error: errorMessage(error) }, { status: 400 });
+			}
+			const replacement = await replaceProvider(env, actor, body.kind, providerConfig, fetcher, true);
+			if (!replacement.ok) return replacement;
+			providerId = providerIdFor(body.kind);
+		} else {
+			const row = await env.DB.prepare(`SELECT id,config_json FROM notification_providers WHERE kind=?1 LIMIT 1`).bind(body.kind).first();
+			if (!row) return Response.json({ error: providerRequiredMessage(body.kind) }, { status: 400 });
+			providerId = row.id;
+			providerConfig = await openJson(row.config_json, env.BROLLY_CREDENTIAL_KEY);
+		}
+		config = {
+			...providerConfig,
+			...destination
+		};
+	} else config = body.config ?? {};
+	const configError = validateNotificationConfig(body.kind, config);
+	if (configError) return Response.json({ error: configError }, { status: 400 });
+	await env.DB.prepare(`INSERT INTO notification_targets(id,kind,label,config_json,enabled,provider_id,created_at,updated_at)
+     VALUES(?1,?2,?3,?4,1,?5,?6,?6)
+     ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,label=excluded.label,config_json=excluded.config_json,
+       enabled=1,provider_id=excluded.provider_id,updated_at=excluded.updated_at`).bind(id, body.kind, label, await sealJson(config, env.BROLLY_CREDENTIAL_KEY), providerId, now).run();
+	await audit$1(env.DB, actor, "notification_target.upsert", id, {
+		kind: body.kind,
+		label,
+		providerId
+	});
+	return Response.json({
+		ok: true,
+		id
+	});
+}
+async function listProviders(env) {
+	if (!env.BROLLY_CREDENTIAL_KEY) return [];
+	const result = await env.DB.prepare(`SELECT id,kind,config_json,updated_at FROM notification_providers ORDER BY kind`).all();
+	return Promise.all(result.results.map(async (row) => {
+		const config = await openJson(row.config_json, env.BROLLY_CREDENTIAL_KEY);
+		return {
+			kind: row.kind,
+			from: String(config.from ?? ""),
+			updatedAt: Number(row.updated_at)
+		};
+	}));
+}
+async function replaceProvider(env, actor, kind, config, fetcher, verified = false) {
+	if (!env.BROLLY_CREDENTIAL_KEY) return Response.json({ error: "Credential encryption is not configured" }, { status: 503 });
+	const providerError = verified ? null : validateProviderConfig(kind, config, env.BROLLY_ACCOUNT_ID);
+	if (providerError) return Response.json({ error: providerError }, { status: 400 });
+	if (!verified && kind === "cloudflare_email") try {
+		await verifyCloudflareEmailToken(String(config.token), fetcher);
+	} catch (error) {
+		return Response.json({ error: errorMessage(error) }, { status: 400 });
+	}
+	const providerId = (await env.DB.prepare(`SELECT id FROM notification_providers WHERE kind=?1 LIMIT 1`).bind(kind).first())?.id ?? providerIdFor(kind);
+	const targets = await env.DB.prepare(`SELECT id,config_json FROM notification_targets WHERE provider_id=?1 ORDER BY id`).bind(providerId).all();
+	const now = Date.now();
+	const statements = [env.DB.prepare(`INSERT INTO notification_providers(id,kind,config_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)
+     ON CONFLICT(kind) DO UPDATE SET config_json=excluded.config_json,updated_at=excluded.updated_at`).bind(providerId, kind, await sealJson(config, env.BROLLY_CREDENTIAL_KEY), now)];
+	for (const target of targets.results) {
+		const current = await openJson(target.config_json, env.BROLLY_CREDENTIAL_KEY);
+		const merged = {
+			...config,
+			to: current.to
+		};
+		const error = validateNotificationConfig(kind, merged);
+		if (error) return Response.json({ error }, { status: 400 });
+		statements.push(env.DB.prepare(`UPDATE notification_targets SET config_json=?2,updated_at=?3 WHERE id=?1`).bind(target.id, await sealJson(merged, env.BROLLY_CREDENTIAL_KEY), now));
+	}
+	await env.DB.batch(statements);
+	await audit$1(env.DB, actor, "notification_provider.update", kind, { channels: targets.results.length });
+	return Response.json({
+		ok: true,
+		kind,
+		channels: targets.results.length
+	});
+}
+async function removeProvider(env, actor, kind) {
+	const row = await env.DB.prepare(`SELECT id FROM notification_providers WHERE kind=?1 LIMIT 1`).bind(kind).first();
+	if (!row) return Response.json({ error: "Notification account not found" }, { status: 404 });
+	const used = await env.DB.prepare(`SELECT COUNT(*) AS count FROM notification_targets WHERE provider_id=?1`).bind(row.id).first();
+	if (Number(used?.count ?? 0) > 0) return Response.json({ error: "Remove this account's alert channels before removing the account" }, { status: 409 });
+	await env.DB.prepare(`DELETE FROM notification_providers WHERE id=?1`).bind(row.id).run();
+	await audit$1(env.DB, actor, "notification_provider.delete", kind, {});
+	return Response.json({
+		ok: true,
+		kind
+	});
+}
+function validateProviderConfig(kind, config, accountId) {
+	if (!config || typeof config !== "object") return "Account details are required";
+	const present = (key) => typeof config[key] === "string" && String(config[key]).trim().length > 0;
+	if (kind === "twilio" && ![
+		"accountSid",
+		"token",
+		"from"
+	].every(present)) return "Twilio account SID, auth token, and from number are required";
+	if ((kind === "resend" || kind === "postmark") && !["token", "from"].every(present)) return `${displayKind(kind)} API token and from address are required`;
+	if (kind === "cloudflare_email" && ![
+		"accountId",
+		"token",
+		"from"
+	].every(present)) return "Cloudflare account, API token, and from address are required";
+	if (kind === "cloudflare_email" && accountId && String(config.accountId) !== accountId) return "Cloudflare Email must use the connected account";
+	if (!isProviderKind(kind)) return "This channel does not use a saved account";
+	return null;
+}
+function validateNotificationConfig(kind, config) {
+	if (!config || typeof config !== "object") return "Notification configuration is required";
+	const present = (key) => typeof config[key] === "string" && String(config[key]).trim().length > 0;
+	if ((kind === "discord" || kind === "slack" || kind === "webhook") && !present("url")) return `${kind} webhook URL is required`;
+	if (kind === "discord" || kind === "slack" || kind === "webhook") try {
+		notificationWebhookUrl(kind, String(config.url));
+	} catch (error) {
+		return errorMessage(error);
+	}
+	if (kind === "twilio" && ![
+		"accountSid",
+		"token",
+		"from",
+		"to"
+	].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
+	if ((kind === "resend" || kind === "postmark") && ![
+		"token",
+		"from",
+		"to"
+	].every(present)) return `${displayKind(kind)} API token, from address, and destination address are required`;
+	if (kind === "cloudflare_email" && ![
+		"accountId",
+		"token",
+		"from",
+		"to"
+	].every(present)) return "Cloudflare account, API token, from address, and destination address are required";
+	return null;
+}
+async function verifyCloudflareEmailToken(token, fetcher = fetch) {
+	const response = await fetcher("https://api.cloudflare.com/client/v4/user/tokens/verify", {
+		headers: { authorization: `Bearer ${token}` },
+		redirect: "error",
+		signal: AbortSignal.timeout(8e3)
+	});
+	if (!response.ok) throw new Error(`Cloudflare rejected this API token (${response.status})`);
+	const payload = await response.json();
+	if (!payload.success) throw new Error(payload.errors?.map((error) => error.message).filter(Boolean).join("; ") || "Cloudflare rejected this API token");
+	if (payload.result?.status !== "active") throw new Error("Cloudflare reports that this API token is inactive");
+}
+function isProviderKind(kind) {
+	return PROVIDER_KINDS.includes(kind);
+}
+function providerIdFor(kind) {
+	return `provider:${kind}`;
+}
+function providerRequiredMessage(kind) {
+	if (kind === "twilio") return "Twilio account details are required";
+	if (kind === "cloudflare_email") return "Cloudflare Email account details are required";
+	return `${displayKind(kind)} account details are required`;
+}
+function displayKind(kind) {
+	return kind === "postmark" ? "Postmark" : kind === "resend" ? "Resend" : kind;
+}
+function normalizeTargetLabel(label) {
+	if (label == null) return null;
+	const trimmed = String(label).trim();
+	if (!trimmed || trimmed.length > 80) return false;
+	return trimmed;
+}
+function labelError(label) {
+	return label === null ? "Channel label is required" : "Channel label must contain 1 to 80 characters";
+}
+async function duplicateTargetLabel(db, label, exceptId) {
+	const row = await db.prepare(`SELECT 1 AS present FROM notification_targets WHERE label=?1 COLLATE NOCASE AND id!=?2 LIMIT 1`).bind(label, exceptId).first();
+	return Boolean(row);
+}
+async function audit$1(db, actor, action, target, detail) {
+	await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
+}
+function errorMessage(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+//#endregion
 //#region src/index.ts
 var src_default = {
 	async scheduled(_controller, env, ctx) {
@@ -7694,6 +8803,10 @@ var src_default = {
 		const activeEnv = await configuredEnv(env, actor);
 		if (!activeEnv) return Response.json({ error: "Choose one Cloudflare account during sign-in before using Brolly" }, { status: 409 });
 		env = activeEnv;
+		const notificationResponse = await notificationApiRoute(request, env, actor.actor);
+		if (notificationResponse) return notificationResponse;
+		const alertLevelsResponse = await alertLevelsApiRoute(request, env, actor.actor);
+		if (alertLevelsResponse) return alertLevelsResponse;
 		const ledgerResponse = await ledgerApiRoute(request, env, actor.actor);
 		if (ledgerResponse) return ledgerResponse;
 		if (url.pathname === "/api/dashboard" && request.method === "GET") return Response.json(await dashboardData(env));
@@ -7712,6 +8825,18 @@ var src_default = {
 			}
 		}
 		if (url.pathname === "/api/assets" && request.method === "GET") return Response.json(await assetList(request, env));
+		if (url.pathname === "/api/cloudflare-zones" && request.method === "GET") {
+			const budget = new RunBudget({
+				apiCalls: 10,
+				databaseRows: 0,
+				samples: 500,
+				wallMs: 1e4
+			});
+			return Response.json({
+				accountId: env.BROLLY_ACCOUNT_ID,
+				zones: await new CloudflareClient(env, budget).zones()
+			}, { headers: { "cache-control": "no-store" } });
+		}
 		if (url.pathname === "/api/configuration" && request.method === "GET") return Response.json(await configurationData(env));
 		if (url.pathname === "/api/configuration/verify" && request.method === "POST") {
 			const body = await request.json();
@@ -7770,7 +8895,8 @@ var src_default = {
 		}
 		if (url.pathname === "/api/onboarding" && request.method === "POST") {
 			const body = await request.json();
-			if (!validPolicy(body.policy, true)) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered warning ≤ critical ≤ emergency" }, { status: 400 });
+			const alertLevels = await loadAlertLevels(env.DB);
+			if (!validPolicy(body.policy, true, alertLevels.map((level) => level.id))) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered by alert level" }, { status: 400 });
 			const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all();
 			const missingScopedBudgets = scopedAssets.results.filter((asset) => !body.policy.assetDailySpend?.[assetBudgetKey({
 				family: asset.family,
@@ -7812,7 +8938,7 @@ var src_default = {
 				if (ctx) ctx.waitUntil(work);
 			}
 			await audit(env.DB, "admin", "onboarding.complete", body.policy.version, {
-				mode: body.policy.mode,
+				levels: alertLevels.length,
 				families: Object.keys(body.policy.familyDailySpend ?? {}).length,
 				scopedAssets: Object.keys(body.policy.assetDailySpend ?? {}).length,
 				runtimeIntegrations: body.integrations?.filter((item) => item.installed).length ?? 0,
@@ -7883,12 +9009,13 @@ var src_default = {
 		}
 		if (url.pathname === "/api/policy" && request.method === "PUT") {
 			const policy = await request.json();
-			if (!validPolicy(policy)) return Response.json({ error: "Invalid policy" }, { status: 400 });
+			const alertLevels = await loadAlertLevels(env.DB);
+			if (!validPolicy(policy, false, alertLevels.map((level) => level.id))) return Response.json({ error: "Invalid policy" }, { status: 400 });
 			await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(policy), Date.now()).run();
 			await new LedgerStore(env.DB).syncMetricCatalog();
 			await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, policy, true);
 			await audit(env.DB, "admin", "policy.update", policy.version, {
-				mode: policy.mode,
+				levels: alertLevels.length,
 				thresholds: policy.thresholds.length
 			});
 			return Response.json({
@@ -7964,74 +9091,6 @@ var src_default = {
 			if (row.kind === "runtime_quarantine" && !workerScript) return Response.json({ error: "An authoritative owning Worker and deployment fuse are required; legacy callback controls are retired" }, { status: 409 });
 			if (rollback.workerScript && workerScript !== rollback.workerScript) return Response.json({ error: "The authoritative Worker mapping changed after this action was prepared; prepare a new action" }, { status: 409 });
 			return runAction(env, action, { workerScript }, actionMatch[2] === "resume" ? "resume" : "quarantine");
-		}
-		if (url.pathname === "/api/targets" && request.method === "GET") {
-			const result = await env.DB.prepare(`SELECT t.id,t.kind,t.enabled,t.minimum_severity,t.created_at,t.updated_at,
-          (SELECT d.created_at FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_at,
-          (SELECT d.ok FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_ok,
-          (SELECT d.error FROM notification_deliveries d WHERE d.target_id=t.id ORDER BY d.created_at DESC LIMIT 1) AS last_delivery_error
-         FROM notification_targets t ORDER BY t.created_at ASC LIMIT 50`).all();
-			return Response.json({
-				targets: result.results.map((row) => ({
-					id: String(row.id),
-					kind: String(row.kind),
-					enabled: Number(row.enabled) === 1,
-					minimumSeverity: String(row.minimum_severity),
-					createdAt: Number(row.created_at),
-					updatedAt: Number(row.updated_at),
-					lastDeliveryAt: row.last_delivery_at == null ? null : Number(row.last_delivery_at),
-					lastDeliveryOk: row.last_delivery_ok == null ? null : Number(row.last_delivery_ok) === 1,
-					lastDeliveryError: row.last_delivery_error == null ? null : String(row.last_delivery_error)
-				})),
-				credentialStorageReady: Boolean(env.BROLLY_CREDENTIAL_KEY)
-			});
-		}
-		if (url.pathname === "/api/targets" && request.method === "POST") {
-			const body = await request.json();
-			if (![
-				"discord",
-				"slack",
-				"webhook",
-				"resend",
-				"postmark",
-				"twilio"
-			].includes(body.kind)) return Response.json({ error: "Invalid notification target kind" }, { status: 400 });
-			if (![
-				"info",
-				"warning",
-				"critical",
-				"emergency"
-			].includes(body.minimumSeverity ?? "warning")) return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
-			const configError = validateNotificationConfig(body.kind, body.config);
-			if (configError) return Response.json({ error: configError }, { status: 400 });
-			if (!env.BROLLY_CREDENTIAL_KEY) return Response.json({ error: "BROLLY_CREDENTIAL_KEY is required; target credentials will never be stored in plaintext" }, { status: 503 });
-			const id = body.id ?? crypto.randomUUID();
-			const now = Date.now();
-			await env.DB.prepare(`INSERT INTO notification_targets(id,kind,config_json,enabled,minimum_severity,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)
-         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,config_json=excluded.config_json,enabled=excluded.enabled,minimum_severity=excluded.minimum_severity,updated_at=excluded.updated_at`).bind(id, body.kind, await sealJson(body.config, env.BROLLY_CREDENTIAL_KEY), body.enabled === false ? 0 : 1, body.minimumSeverity ?? "warning", now).run();
-			await audit(env.DB, "admin", "notification_target.upsert", id, { kind: body.kind });
-			return Response.json({
-				ok: true,
-				id
-			});
-		}
-		const targetMatch = url.pathname.match(/^\/api\/targets\/([^/]+)$/);
-		if (targetMatch && request.method === "PATCH") {
-			const body = await request.json();
-			if (body.minimumSeverity !== void 0 && ![
-				"info",
-				"warning",
-				"critical",
-				"emergency"
-			].includes(body.minimumSeverity)) return Response.json({ error: "Invalid minimum severity" }, { status: 400 });
-			if (body.enabled === void 0 && body.minimumSeverity === void 0) return Response.json({ error: "No target change supplied" }, { status: 400 });
-			const id = decodeURIComponent(targetMatch[1]);
-			if (((await env.DB.prepare(`UPDATE notification_targets SET enabled=COALESCE(?2,enabled),minimum_severity=COALESCE(?3,minimum_severity),updated_at=?4 WHERE id=?1`).bind(id, body.enabled === void 0 ? null : body.enabled ? 1 : 0, body.minimumSeverity ?? null, Date.now()).run()).meta.changes ?? 0) === 0) return Response.json({ error: "Notification target not found" }, { status: 404 });
-			await audit(env.DB, "admin", "notification_target.update", id, body);
-			return Response.json({
-				ok: true,
-				id
-			});
 		}
 		const assetMatch = url.pathname.match(/^\/api\/assets\/([^/]+)\/([^/]+)$/);
 		if (assetMatch && request.method === "PATCH") {
@@ -8137,7 +9196,7 @@ function executableIncidentError(incident) {
 }
 function executableAlertInstanceError(instance, now = Date.now()) {
 	if (!instance) return "The source alert instance no longer exists; no control was applied";
-	if (String(instance.status) !== "open" || Number(instance.historical) === 1 || Number(instance.period_end_at) <= now) return "The source alert instance is inactive; no control was applied";
+	if (!["open", "acknowledged"].includes(String(instance.status)) || Number(instance.historical) === 1 || Number(instance.period_end_at) <= now) return "The source alert instance is inactive; no control was applied";
 	if (["missing", "stale"].includes(String(instance.data_quality))) return "The source alert evidence is unavailable or stale; run a fresh scan before applying control";
 	const lastBreachedAt = Number(instance.last_breached_at);
 	if (!Number.isFinite(lastBreachedAt) || lastBreachedAt < now - ACTION_INCIDENT_MAX_AGE_MS) return "The source alert evidence is stale; run a fresh scan before applying control";
@@ -8218,49 +9277,22 @@ function isBrollyWorker(env, family, id) {
 	if (family !== "workers") return false;
 	return id === (env.BROLLY_SELF_WORKER_NAME ?? "brolly-guard") || id === "brolly-guard" || id.startsWith("brolly-guard-");
 }
-function validateNotificationConfig(kind, config) {
-	if (!config || typeof config !== "object") return "Notification configuration is required";
-	const present = (key) => typeof config[key] === "string" && String(config[key]).trim().length > 0;
-	if ((kind === "discord" || kind === "slack" || kind === "webhook") && !present("url")) return `${kind} webhook URL is required`;
-	if (kind === "discord" || kind === "slack" || kind === "webhook") try {
-		notificationWebhookUrl(kind, String(config.url));
-	} catch (error) {
-		return error instanceof Error ? error.message : `${kind} webhook URL is invalid`;
-	}
-	if (kind === "twilio" && ![
-		"accountSid",
-		"token",
-		"from",
-		"to"
-	].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
-	if (kind === "resend" && ![
-		"token",
-		"from",
-		"to"
-	].every(present)) return "Resend API key, from address, and destination address are required";
-	if (kind === "postmark" && ![
-		"token",
-		"from",
-		"to"
-	].every(present)) return "Postmark token, from address, and destination address are required";
-	return null;
-}
 async function audit(db, actor, action, target, detail) {
 	await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
 }
-function validPolicy(policy, requireEveryFamily = false) {
+function validPolicy(policy, requireEveryFamily = false, levelIds = [
+	"warning",
+	"critical",
+	"emergency"
+]) {
 	const finiteNonnegative = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
-	if (![
-		"observe",
-		"approval",
-		"automatic"
-	].includes(policy?.mode) || typeof policy?.version !== "string" || !policy.version || !Array.isArray(policy.thresholds)) return false;
-	const spend = policy.accountDailySpend;
-	if (!spend || !finiteNonnegative(spend.warning) || !finiteNonnegative(spend.critical) || !finiteNonnegative(spend.emergency) || spend.warning > spend.critical || spend.critical > spend.emergency) return false;
+	const validSpend = (spend) => Boolean(spend) && levelIds.every((levelId) => finiteNonnegative(spend?.[levelId])) && levelIds.every((levelId, index) => index === 0 || spend[levelIds[index - 1]] <= spend[levelId]);
+	if (typeof policy?.version !== "string" || !policy.version || !Array.isArray(policy.thresholds) || !levelIds.length) return false;
+	if (!validSpend(policy.accountDailySpend)) return false;
 	const familySpend = policy.familyDailySpend ?? {};
 	if (requireEveryFamily && METRIC_CATALOG.some((definition) => !familySpend[definition.family])) return false;
-	if (Object.values(familySpend).some((limit) => !finiteNonnegative(limit?.warning) || !finiteNonnegative(limit?.critical) || !finiteNonnegative(limit?.emergency) || limit.warning > limit.critical || limit.critical > limit.emergency)) return false;
-	if (Object.values(policy.assetDailySpend ?? {}).some((limit) => !finiteNonnegative(limit?.warning) || !finiteNonnegative(limit?.critical) || !finiteNonnegative(limit?.emergency) || limit.warning > limit.critical || limit.critical > limit.emergency)) return false;
+	if (Object.values(familySpend).some((limit) => !validSpend(limit))) return false;
+	if (Object.values(policy.assetDailySpend ?? {}).some((limit) => !validSpend(limit))) return false;
 	return policy.thresholds.every((threshold) => typeof threshold.metric === "string" && !!threshold.metric && finiteNonnegative(threshold.windowMs) && threshold.windowMs > 0 && [
 		threshold.warning,
 		threshold.critical,
@@ -8273,4 +9305,4 @@ function validPolicy(policy, requireEveryFamily = false) {
 //#region \0virtual:cloudflare/worker-entry
 var worker_entry_default = src_default ?? {};
 //#endregion
-export { worker_entry_default as default, executableAlertInstanceError, executableIncidentError, validateNotificationConfig };
+export { worker_entry_default as default, executableAlertInstanceError, executableIncidentError, validateNotificationConfig, validateProviderConfig };

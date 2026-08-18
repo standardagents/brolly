@@ -136,29 +136,70 @@ ceiling.
 The implementation details, API surface, cost labels, and retention policy are
 maintained in [usage-ledger.md](usage-ledger.md).
 
+## Onboarding and alert configuration
+
+First-run completion is stored in D1 as `onboarding_complete`. A new browser
+does not bypass setup, and the browser never receives or stores the break-glass
+admin token. The wizard connects Cloudflare, adds alert channels, configures the
+alert level board, collects account limits, collects product limits, collects
+resource limits, and presents the runtime-fuse handoff.
+
+The Alert channels step starts the bounded history import. Two progress rows
+remain in the wizard sidebar while the import runs. The import writes ledger
+history and coverage state without creating alert instances, notifications, or
+control actions. The account, product, and resource limit steps remain editable
+while the import continues.
+
+Each installation has one ordered alert-level board. Warning, Critical, and
+Emergency are seeded as empty levels. A level has a case-insensitive unique
+label, a position, and ordered entries. Custom levels use the same data model as
+the seeded levels. The board permits up to eight levels and keeps one level when
+an operator removes a column. A level's position supplies its priority as
+`position * 10`; the rightmost position supplies the highest display severity.
+
+A channel entry names one configured destination and an interval. Action entries
+select Prepare or Auto behavior for the stop/pause and quarantine families.
+Entries accumulate from left to right. A channel entry in a later level can
+replace the interval for the same target. Empty levels remain valid. Deleting a
+channel cascades its entries. Deleting a level cascades its entries and retires
+its materialized alert lines so existing history retains its references.
+
+Channel credentials use encrypted provider records. Twilio, Cloudflare Email,
+Resend, and Postmark each have one reusable account record. A channel stores a
+sealed full configuration containing its provider values and destination. A
+provider update reseals every channel attached to that provider. Discord, Slack,
+and generic webhooks store one URL per channel. Labels remain required and
+unique without regard to letter case.
+
+Cloudflare Email uses the REST Email Sending API with a dedicated token. Brolly
+verifies token activity through `GET /user/tokens/verify`, lists the connected
+account's zones for the from-address form, and sends through the account-scoped
+Email Sending endpoint. The token verification call does not send mail. Domain
+onboarding and Email Sending permission setup remain Cloudflare dashboard work.
+
 ## Policy model
 
-Legacy Policy values remain accepted by setup and the CLI. They migrate into
-ledger alert rules at these levels:
+Each policy spend scope stores a map keyed by alert-level ID:
 
 - `accountDailySpend` for the protected account;
 - `familyDailySpend` for every cataloged billable product family;
 - `assetDailySpend` for every discovered Worker script and Durable Object
   namespace, keyed by family, scope, and resource ID;
 - metric/window thresholds for individual assets, including Durable Object
-  local-day or billing-cycle usage and cost across every
-  billable fast-telemetry meter.
+  local-day or billing-cycle usage and cost across every billable
+  fast-telemetry meter.
 
-Each rule selects a target, metric, measurement, and period. It owns arbitrary
-threshold lines. New rules begin with Warning and Emergency. A migrated
-Critical threshold remains available as a disabled custom line. Alert
-instances are unique to one line, target, and period. Silencing an instance
-leaves future periods and the underlying rule active.
+Policy materialization reads the ordered level board and writes one alert line
+for each level value that exists in the selected scope. The alert line retains
+its level ID, receives priority `position * 10`, and uses the level label. A
+missing map value produces no line. This allows a custom level to carry its own
+threshold while a scope remains intentionally unconfigured at another level.
 
-First-run completion is stored in D1 as `onboarding_complete`. A new browser
-does not bypass setup, and the browser never receives or stores the break-glass
-admin token. Existing policies without `familyDailySpend` are migrated in the wizard
-by merging conservative defaults before saving.
+Each rule selects a target, metric, measurement, and period. Alert instances
+remain unique to one line, target, and period. The effective entry union for a
+firing line drives channel delivery and action creation. Acknowledge marks the
+instance seen, records the operator, and clears its next notification time.
+Resolution and expiry also clear future notification work.
 
 The optional first-run usage check is a separate, read-only path. A 20-second
 `RunBudget` caps it at four API calls and 20,000 returned samples, while the
@@ -187,7 +228,7 @@ SQLite retained storage. Worker spend is projected from per-script billed
 invocations and CPU milliseconds; cache-side request attribution remains a
 visible coverage gap rather than being double-counted.
 
-## Policy tiers
+## Policy tiers and action safety
 
 | Tier | Default response |
 | --- | --- |
@@ -224,14 +265,23 @@ only the selected object is denied after rollout, but unrelated active objects
 in that script may restart as the version changes. Brolly exposes that
 collateral lifecycle risk in confirmation UI and audit records.
 
-Automatic execution requires global automatic mode, explicit opt-in on an applicable rule, complete
-fresh unsampled usage, an eligible inherited resource policy, and current fuse
-verification. Exact targets must stay breached through their confirmation
-window. Aggregate rules prioritize a child that crossed its own Emergency line,
-then require the same deterministic contributor in two consecutive scans, at
-least half of interval usage or aggregate excess, and a
+An Auto entry can execute only after complete, fresh, unsampled usage, an
+eligible inherited resource policy, current fuse verification, and a sustained
+breach through the confirmation window. Exact targets must stay breached
+through that window. Aggregate rules prioritize a child that crossed its own
+highest level, then require the same deterministic contributor in two
+consecutive scans, at least half of interval usage or aggregate excess, and a
 latest rate at least four times its rolling baseline. Billing and modeled cost
-can alert and prepare an operator-reviewed action. They cannot authorize an automatic mutation.
+can alert and prepare an operator-reviewed action. They cannot authorize an
+automatic mutation.
+
+Prepare entries create audited actions in `prepared` state. An operator can
+approve an eligible action from the action surface. Auto entries run the same
+actuator path after validation. Worker-ingress stop, Durable Object quarantine,
+and queue pause are the supported families. Control-plane assets, refused
+tiers, denied resource policies, stale evidence, partial evidence, sampled
+evidence, and missing evidence remain ineligible. Every action records its
+rollback state before Cloudflare changes begin.
 
 The actuator coalesces up to 15 exact-object changes into one Worker
 deployment. Deployment-changing automation allows one action per Worker in 15

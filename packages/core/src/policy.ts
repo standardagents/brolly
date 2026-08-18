@@ -8,7 +8,6 @@ export const DEFAULT_FAMILY_DAILY_SPEND: Record<string, SpendLimits> = Object.fr
 
 export const DEFAULT_POLICY: Policy = {
   version: "2026-08-09.1",
-  mode: "approval",
   accountDailySpend: { warning: 5, critical: 12.5, emergency: 25 },
   familyDailySpend: DEFAULT_FAMILY_DAILY_SPEND,
   assetDailySpend: {},
@@ -34,7 +33,7 @@ export function evaluateSample(
   sample: MetricSample,
   threshold: Threshold,
   baseline: number[],
-  policy: Policy,
+  _policy: Policy,
 ): Evaluation | null {
   const absolute = absoluteSeverity(sample.value, threshold);
   const expected = baseline.length >= (threshold.minimumBaselineSamples ?? Number.POSITIVE_INFINITY)
@@ -44,10 +43,6 @@ export function evaluateSample(
   const severity: Severity | null = absolute ?? (anomalous ? "warning" : null);
   if (!severity) return null;
 
-  const estimatedSpend = sample.metric === "projected_daily_cost_usd" || sample.source === "billing" || sample.metric.endsWith("_cost_usd");
-  const action = estimatedSpend
-    ? policy.mode === "observe" ? "notify" : "prepare_stop"
-    : controlAction(sample.asset, severity, policy);
   return {
     key: [sample.asset.accountId, sample.asset.family, sample.asset.id, sample.metric, threshold.windowMs].join(":"),
     asset: sample.asset,
@@ -59,7 +54,7 @@ export function evaluateSample(
     reason: anomalous && !absolute
       ? `${sample.metric} is ${formatMultiple(sample.value, expected)} above its robust baseline`
       : `${sample.metric} crossed the ${severity} hard threshold`,
-    action,
+    action: "notify",
   };
 }
 
@@ -72,10 +67,7 @@ export function evaluateProjectedDailySpend(asset: AssetRef, usd: number, policy
     key: `${asset.accountId}:${asset.family}:${asset.scope}:${asset.id}:projected_daily_cost_usd`, asset, metric: threshold.metric,
     severity, observed: usd, threshold: thresholdForSeverity(threshold, severity),
     reason: `Projected ${asset.family === "account" ? "monitored account" : asset.family} spend crossed the ${severity} threshold`,
-    // GraphQL pricing is an estimate rather than an invoice-grade billing
-    // measure. It may prepare an operator-reviewed action, but must never be
-    // the sole signal for an automatic shutdown.
-    action: policy.mode === "observe" ? "notify" : "prepare_stop",
+    action: "notify",
   };
 }
 
@@ -101,12 +93,6 @@ function absoluteSeverity(value: number, threshold: Threshold): Severity | null 
 
 function thresholdForSeverity(threshold: Threshold, severity: Severity): number | undefined {
   return severity === "emergency" ? threshold.emergency : severity === "critical" ? threshold.critical : threshold.warning;
-}
-
-function controlAction(asset: AssetRef, severity: Severity, policy: Policy): Evaluation["action"] {
-  if (asset.tier === "control_plane" || asset.tier === "critical" || asset.tier === "unclassified") return "notify";
-  if (severity !== "emergency") return "notify";
-  return policy.mode === "automatic" ? "stop" : policy.mode === "approval" ? "prepare_stop" : "notify";
 }
 
 function formatMultiple(value: number, expected: number): string {

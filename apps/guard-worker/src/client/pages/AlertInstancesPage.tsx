@@ -4,8 +4,10 @@ import { dateTime, number } from "../format";
 import type { AlertInstanceView, DataQuality } from "../types";
 import { Button, CellStack, EmptyState, Notice, Panel, PanelHead, SeverityBadge, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 import { QualityBadge } from "./UsagePage";
+import { useAlertLevels } from "../onboarding/levels";
 
 export function AlertInstancesPage({ token }: { token: string }) {
+  const board = useAlertLevels(token);
   const [instances, setInstances] = useState<AlertInstanceView[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -19,10 +21,10 @@ export function AlertInstancesPage({ token }: { token: string }) {
 
   useEffect(() => { void load().catch(cause => setError(message(cause))); }, [load]);
 
-  async function silence(id: string) {
+  async function acknowledge(id: string) {
     setError("");
     try {
-      await api(`/api/alert-instances/${encodeURIComponent(id)}/silence`, token, { method: "POST" });
+      await api(`/api/alerts/${encodeURIComponent(id)}/acknowledge`, token, { method: "POST" });
       await load();
     } catch (cause) { setError(message(cause)); }
   }
@@ -32,7 +34,7 @@ export function AlertInstancesPage({ token }: { token: string }) {
       <PanelHead
         eyebrow="Threshold periods"
         title="Alert instances"
-        sub="Every line crossing belongs to one local day or Cloudflare billing cycle. Silencing applies to this instance and preserves its rule and future periods."
+        sub="Each threshold crossing belongs to one local day or Cloudflare billing cycle. Acknowledgement stops repeat notifications for that instance."
         actions={
           <select
             className="min-h-9 rounded border border-line bg-panel px-3 text-sm text-ink"
@@ -41,7 +43,7 @@ export function AlertInstancesPage({ token }: { token: string }) {
           >
             <option value="">All states</option>
             <option value="open">Open</option>
-            <option value="silenced">Silenced</option>
+            <option value="acknowledged">Acknowledged</option>
             <option value="resolved">Resolved</option>
             <option value="expired">Expired</option>
           </select>
@@ -54,13 +56,13 @@ export function AlertInstancesPage({ token }: { token: string }) {
             <tbody>
               {instances.map(instance => (
                 <Tr key={instance.id}>
-                  <Td><CellStack title={<><SeverityBadge severity={severity(instance.label, instance.priority)} /> {instance.label}</>} sub={instance.metricDefinitionId} /></Td>
+                  <Td><CellStack title={<><SeverityBadge severity={severity(instance.priority, board.levels.length)} /> {instance.label}</>} sub={instance.metricDefinitionId} /></Td>
                   <Td><CellStack title={instance.displayName} sub={<>{instance.productFamily} · {instance.cloudflareId}</>} /></Td>
                   <Td numeric><strong>{number(instance.observedValue)}</strong><small className="block text-faint">line {number(instance.thresholdValue)}</small></Td>
                   <Td><QualityBadge quality={instance.dataQuality as DataQuality} />{instance.historical ? <small className="ml-2 text-faint">historical</small> : null}</Td>
                   <Td><CellStack title={new Date(instance.periodStartAt).toLocaleDateString()} sub={`through ${new Date(instance.periodEndAt).toLocaleDateString()}`} /></Td>
                   <Td><CellStack title={instance.notificationCount} sub={instance.nextNotificationAt ? `Next ${dateTime(instance.nextNotificationAt)}` : instance.status} /></Td>
-                  <Td>{instance.status === "open" && <Button variant="secondary" onClick={() => void silence(instance.id)}>Silence period</Button>}</Td>
+                  <Td>{instance.status === "open" && <Button variant="secondary" onClick={() => void acknowledge(instance.id)}>Acknowledge</Button>}</Td>
                 </Tr>
               ))}
             </tbody>
@@ -72,9 +74,11 @@ export function AlertInstancesPage({ token }: { token: string }) {
   );
 }
 
-function severity(label: string, priority: number): string {
-  if (label.toLowerCase() === "emergency" || priority >= 100) return "emergency";
-  if (label.toLowerCase() === "critical" || priority >= 75) return "critical";
+function severity(priority: number, levelCount: number): string {
+  if (levelCount === 0) return "warning";
+  const position = Math.floor(priority / 10);
+  if (position >= levelCount - 1) return "emergency";
+  if (levelCount >= 3 && position >= levelCount - 2) return "critical";
   return "warning";
 }
 

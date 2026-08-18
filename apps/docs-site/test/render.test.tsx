@@ -20,8 +20,8 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("See runaway usage while there is time to respond.");
     expect(html).toContain("A durable Cloudflare usage ledger with granular protection.");
     expect(html).toContain("exact object IDs");
-    expect(html).toContain("Quarantine exact runaways");
-    expect(html).toContain("Discord, Slack, Resend, Postmark, Twilio SMS");
+    expect(html).toContain("Define one threshold for each current alert level");
+    expect(html).toContain("Configure Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS");
     expect(html).toContain("300 GraphQL dataset queries");
     // The dollar amount is wrapped in a highlight element mid-sentence.
     expect(html).toContain("Woke up to a");

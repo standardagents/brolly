@@ -35,7 +35,7 @@ inside your Cloudflare account.
 | **☂ Account-wide coverage** | Workers, Durable Objects, D1, R2, KV, Queues, AI, and other billable assets. |
 | **⚡ Fast detection** | Five-minute active telemetry, optional one-minute hot watch, and hourly billing reconciliation. |
 | **📚 Persistent ledger** | Correction-safe daily history in D1 for up to 730 days with explicit evidence quality. |
-| **🎯 Scoped limits** | Arbitrary Warning, Emergency, and custom lines for daily or Cloudflare billing-cycle periods. |
+| **🎯 Scoped limits** | Ordered alert levels with per-level limits for daily or Cloudflare billing-cycle periods. |
 | **↩ Reversible controls** | Approval-first quarantine, rollback state, and a complete audit trail. |
 
 > [!IMPORTANT]
@@ -81,6 +81,21 @@ while that bounded job runs in the background. The account-budget screen then
 offers historical usage suggestions for the editable draft. An operator may
 instead continue supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which
 takes precedence over the D1 credential.
+
+The setup wizard has seven steps:
+
+1. Connect Cloudflare and verify monitoring access.
+2. Add alert channels. The first Twilio, Cloudflare Email, Resend, or Postmark channel saves its account credentials; later channels reuse that account and ask for a destination and label. Discord, Slack, and generic webhooks use one URL per channel.
+3. Arrange the alert level board. Warning, Critical, and Emergency start as empty columns. Custom columns can be inserted, renamed, reordered, or removed while one column remains. Channel entries carry their own repeat interval. Prepare and Auto entries select reversible controls for eligible Workers, Durable Objects, and Queues.
+4. Set account spend limits.
+5. Set product spend and usage limits.
+6. Set resource spend and usage limits.
+7. Install the shutdown fuse through the generated coding-agent handoff.
+
+Each level includes entries from the levels before it. A firing level therefore
+uses the union of its inherited channel and action entries. The rightmost level
+has the highest display severity. Acknowledge on an alert instance stops its
+repeats; a resolved instance also stops them.
 
 Browser sign-in briefly passes through Brolly's separately operated, stateless
 OAuth relay at `brolly-login.standardagents.ai`. The relay verifies the
@@ -149,11 +164,50 @@ Durable Object storage operation on the hot path.
 - Account, product, namespace, Worker, and exact-object usage history
 - Configurable period limits and discrete alert instances
 - Human-readable collector coverage and ingestion watermarks
-- Discord, Slack, Resend, Postmark, Twilio SMS, and generic webhook notifications
+- Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, and generic webhook notifications
 - Monitoring-cost, backfill, retention, and D1-capacity views
-- Approval and automatic emergency modes
+- Per-level prepared and automatic control entries
 - Prepare, execute, inspect, and roll back controls
 - Runtime-install verification per Worker and namespace
+
+## Alert channels and levels
+
+Channel labels are required and unique without regard to letter case. The
+channel list stores each destination separately. A provider account stores the
+shared credentials for one Twilio, Cloudflare Email, Resend, or Postmark kind.
+Removing a channel leaves its provider account until an operator removes that
+account from Notifications settings. Changing a provider account reseals every
+channel that uses it.
+
+Cloudflare Email uses a dedicated API token with Email Sending permission. Brolly
+verifies that the token is active through Cloudflare's token endpoint, lists the
+connected account's zones for the from-address domain, and sends through the
+account REST API. Email Service domain onboarding remains a Cloudflare dashboard
+task under Compute → Email Service. Delivery failures, including permanent
+bounces, appear on the channel's delivery status.
+
+The level board is available in the setup wizard and through the Budgets action
+when an installation is configured. Entries are additive from left to right. A
+channel repeated in a later level uses that later entry's interval. Once,
+5-minute, 15-minute, 30-minute, 1-hour, 3-hour, 6-hour, 12-hour, and 24-hour
+intervals are available. The 20 deliveries-per-hour per-target cap and the
+Twilio five-per-day cap apply to every interval.
+
+Prepare entries create an audited action awaiting approval. Auto entries run an
+eligible action after the same safety checks. Worker-ingress stop, Durable
+Object quarantine, and queue pause preserve resources and storage. Recovery is
+manual.
+
+## Deployment and schema releases
+
+The release template includes the notification provider and alert-level schema
+migrations. A fresh Deploy to Cloudflare installation applies them in migration
+order before the dashboard accepts channel or level changes. The generated
+`deploy-template` branch is the source for the deployment button, so run
+`pnpm build:deploy-template` after guard Worker or migration changes and review
+the generated release before publishing it. Installation-owned Wrangler
+configuration, D1 identity, variables, and secrets remain outside the copied
+release artifacts.
 
 ## Safety limits
 
@@ -164,12 +218,13 @@ written**, and **45 seconds**. Durable Object and Worker collectors use stable
 application storage during a scan. Operators can configure lower or higher
 ceilings on the Monitoring page within fixed product maximums.
 
-Automatic quarantine requires global automatic mode, explicit rule opt-in, complete fresh unsampled
-usage, an eligible inherited resource policy, current runtime verification, and
-confirmation evidence. Aggregate contributor automation requires the same
-deterministic candidate in two scans, majority contribution, and four-times
-baseline acceleration. Brolly allows one deployment-changing action per Worker
-in 15 minutes and three automatic quarantines per account hour.
+An Auto action entry requires complete fresh unsampled usage, an eligible
+inherited resource policy, current runtime verification, and confirmation
+evidence. Existing tier, control-plane, and resource-policy refusals remain in
+force. Aggregate contributor automation requires the same deterministic
+candidate in two scans, majority contribution, and four-times baseline
+acceleration. Brolly allows one deployment-changing action per Worker in 15
+minutes and three automatic quarantines per account hour.
 
 ## Documentation
 

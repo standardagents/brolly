@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ProductIcon } from "../components/ui";
 import { normalizeNumericDraft } from "../format";
-import type { SpendLimits, Threshold } from "../types";
+import type { AlertLevel, SpendLimits, Threshold } from "../types";
 import type { LimitRow } from "./model";
 
-const LIMIT_KEYS = ["warning", "critical", "emergency"] as const;
+const THRESHOLD_KEYS = ["warning", "critical", "emergency"] as const;
 
-/** Grid template shared by the spend-limit table head and its rows. */
-const LIMIT_TABLE_GRID = "grid grid-cols-[minmax(180px,1.5fr)_repeat(3,minmax(88px,.65fr))] items-center gap-3";
+/** Shared grid classes for spend limits. The column count comes from the level board. */
+const LIMIT_TABLE_GRID = "grid items-center gap-3";
+
+function limitGridStyle(levelCount: number, firstColumn = "minmax(180px,1.5fr)"): CSSProperties {
+  return { gridTemplateColumns: `${firstColumn} repeat(${Math.max(levelCount, 1)}, minmax(88px,.65fr))` };
+}
 
 /** Money field wrapper used by every limit input. */
 const MONEY_BOX = "flex items-center rounded-field border border-field-line bg-field text-ink focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c]";
@@ -17,21 +21,26 @@ export function CoverageDot({ active, className = "" }: { active: boolean; class
   return <i className={`inline-block size-2 flex-none rounded-full ${active ? "bg-[#1b9e5a]" : "bg-[#e79021]"} ${className}`} aria-hidden="true" />;
 }
 
-export function LimitEditor({ title, value, onChange }: { title: string; value: SpendLimits; onChange: (value: SpendLimits) => void }) {
+export function LimitEditor({ title, levels, value, onChange }: {
+  title: string;
+  levels: AlertLevel[];
+  value: SpendLimits;
+  onChange: (value: SpendLimits) => void;
+}) {
   return (
     <div className="rounded-panel border border-line p-[22px]">
       <h3 className="mb-[18px] text-[15px]">{title}</h3>
-      <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-1">
-        {LIMIT_KEYS.map(key => (
-          <label key={key} className="text-[12px] font-bold text-muted">
-            <span className="capitalize">{key}</span>
+      <div className="grid gap-3.5 overflow-x-auto" style={{ gridTemplateColumns: `repeat(${Math.max(levels.length, 1)}, minmax(130px, 1fr))` }}>
+        {levels.map(level => (
+          <label key={level.id} className="text-[12px] font-bold text-muted">
+            <span>{level.label}</span>
             <div className={`${MONEY_BOX} my-[7px] px-3`}>
               <b>$</b>
               <NumericInput
                 className="h-11 w-full border-0 bg-transparent pl-[7px] text-[19px] font-[740] outline-none"
-                value={value[key]}
+                value={value[level.id] ?? 0}
                 step="0.01"
-                onChange={next => onChange({ ...value, [key]: next })}
+                onChange={next => onChange({ ...value, [level.id]: next })}
               />
             </div>
             <small className="font-medium text-faint">per rolling day</small>
@@ -52,20 +61,28 @@ export type LimitTableRow = {
   onChange: (value: SpendLimits) => void;
 };
 
-export function LimitTable({ heading, rows }: { heading: string; rows: LimitTableRow[] }) {
-  return <>
-    <div className={`${LIMIT_TABLE_GRID} px-3.5 pb-[9px] text-[11px] font-extrabold uppercase tracking-[.08em] text-faint max-md:hidden`}>
-      <span>{heading}</span><span>Warn</span><span>Critical</span><span>Emergency</span>
+export function LimitTable({ heading, levels, rows }: { heading: string; levels: AlertLevel[]; rows: LimitTableRow[] }) {
+  return <div className="overflow-x-auto">
+      <div
+        className={`${LIMIT_TABLE_GRID} min-w-max px-3.5 pb-[9px] text-[11px] font-extrabold uppercase tracking-[.08em] text-faint max-md:hidden`}
+        style={limitGridStyle(levels.length)}
+      >
+        <span>{heading}</span>{levels.map(level => <span key={level.id}>{level.label}</span>)}
+      </div>
+    <div className="rounded-panel border border-line">
+      <div className="min-w-max">
+        {rows.map(({ key, ...row }) => <BudgetLimitRow key={key} levels={levels} {...row} />)}
+      </div>
     </div>
-    <div className="overflow-hidden rounded-panel border border-line">
-      {rows.map(({ key, ...row }) => <BudgetLimitRow key={key} {...row} />)}
-    </div>
-  </>;
+  </div>;
 }
 
-function BudgetLimitRow({ family, label, detail, connected, value, onChange }: Omit<LimitTableRow, "key">) {
+function BudgetLimitRow({ family, label, detail, connected, levels, value, onChange }: Omit<LimitTableRow, "key"> & { levels: AlertLevel[] }) {
   return (
-    <div className={`${LIMIT_TABLE_GRID} border-t border-line-soft px-3.5 py-3 first:border-t-0 max-md:grid-cols-3 max-md:gap-1.5 max-md:px-3 max-md:py-[13px]`}>
+    <div
+      className={`${LIMIT_TABLE_GRID} border-t border-line-soft px-3.5 py-3 first:border-t-0 max-md:gap-1.5 max-md:px-3 max-md:py-[13px]`}
+      style={limitGridStyle(levels.length)}
+    >
       <div className="flex min-w-0 items-center gap-2.5 max-md:col-span-full max-md:mb-[5px]">
         <ProductIcon family={family} />
         <span className="flex min-w-0 flex-col gap-0.5">
@@ -73,15 +90,15 @@ function BudgetLimitRow({ family, label, detail, connected, value, onChange }: O
           <small className="inline-flex items-center gap-[5px] text-[11.5px] text-faint"><CoverageDot active={connected} />{detail}</small>
         </span>
       </div>
-      {LIMIT_KEYS.map(key => (
-        <label key={key} className={`${MONEY_BOX} h-[38px] px-[9px] text-faint`}>
+      {levels.map(level => (
+        <label key={level.id} className={`${MONEY_BOX} h-[38px] px-[9px] text-faint`}>
           <span>$</span>
           <NumericInput
             className="w-full border-0 bg-transparent pl-1 font-bold outline-none"
-            ariaLabel={`${label} ${key}`}
-            value={value[key]}
+            ariaLabel={`${label} ${level.label}`}
+            value={value[level.id] ?? 0}
             step="0.01"
-            onChange={next => onChange({ ...value, [key]: next })}
+            onChange={next => onChange({ ...value, [level.id]: next })}
           />
         </label>
       ))}
@@ -111,7 +128,7 @@ export function ObjectLimitRow({ row, threshold, onChange }: { row: LimitRow; th
         <strong className="text-[13.5px]">{row.label}</strong>
         <small className="text-[12px] text-muted">{row.unit}</small>
       </div>
-      {LIMIT_KEYS.map(key => (
+      {THRESHOLD_KEYS.map(key => (
         <label key={key} className="text-[10px] font-extrabold uppercase text-muted">
           <span>{key}</span>
           <NumericInput

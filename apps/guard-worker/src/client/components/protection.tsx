@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button, Eyebrow, Icon, InfoTip, Panel, PanelHead, Pill, ProductIcon, StepNumber, type Tone } from "./ui";
-import type { OnboardingData, Policy } from "../types";
+import type { OnboardingData } from "../types";
 
 /** Dark code block used by the install guide. */
 function Code({ children }: { children: ReactNode }) {
@@ -34,7 +34,7 @@ export function ControlCapabilities() {
         titleExtra={
           <InfoTip label="How shutdown controls work">
             <h4>Detection is not enforcement</h4>
-            <p>A budget crossing creates an incident. A stop is only available when the asset is classified, the relevant control is supported, and the selected policy mode permits it.</p>
+            <p>A budget crossing creates an incident. A stop is available when the asset is classified, the relevant control is supported, and an alert-level entry enables it.</p>
             <p>Every Cloudflare-side change saves rollback state first and is written to the audit log. Brolly never deletes stored customer data.</p>
           </InfoTip>
         }
@@ -143,13 +143,7 @@ function ControlFlowStep({ step, title, children }: { step: number; title: React
   );
 }
 
-export function ProtectionExplainer({ mode }: { mode: Policy["mode"] }) {
-  const finalStep = mode === "observe"
-    ? "Observe mode records the incident and alerts you, but never sends a quarantine command."
-    : mode === "approval"
-      ? "Approval mode waits for you to inspect the incident and explicitly approve quarantine. Nothing is stopped automatically."
-      : "Automatic mode may quarantine a standard or disposable object immediately after every safety requirement passes.";
-
+export function ProtectionExplainer() {
   return (
     <section className="mt-[22px] overflow-hidden rounded-panel border border-line">
       <header className="flex gap-[11px] bg-dark-surface px-4 py-3.5 text-white">
@@ -171,8 +165,8 @@ export function ProtectionExplainer({ mode }: { mode: Policy["mode"] }) {
         </section>
         <ObjectStopImpact />
         <section className="rounded-field border border-line bg-panel-soft px-3.5 py-3">
-          <strong className="text-[13px]">What your selected mode does</strong>
-          <p className="mt-[3px] text-[12.5px] text-muted">{finalStep} Warning and critical incidents only alert; only an emergency is eligible for quarantine.</p>
+          <strong className="text-[13px]">What the alert-level board controls</strong>
+          <p className="mt-[3px] text-[12.5px] text-muted">Channel and action entries accumulate from left to right. A quarantine entry can prepare or run a reversible control after every safety requirement passes.</p>
         </section>
       </div>
       <QuarantineNote className="mx-4 mb-4">
@@ -225,7 +219,7 @@ return env.ROOMS.get(id).fetch(request)`}</Code>
         </InstallStep>
         <InstallStep step={5} title="Map each namespace to its owning Worker">
           <Code>brolly classify durable_objects NAMESPACE_ID standard --worker-script=my-worker</Code>
-          <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">The budget wizard's install step saves the same mapping. Individual object IDs inherit it from their namespace. Do this before enabling automatic mode; clearing remains an explicit Resume action.</p>
+          <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">The budget wizard's install step saves the same mapping. Individual object IDs inherit it from their namespace. Complete this before adding an auto quarantine entry; clearing remains an explicit Resume action.</p>
         </InstallStep>
       </ol>
       <QuarantineNote className="mt-3">

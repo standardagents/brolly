@@ -24,7 +24,7 @@ export class Store {
     if (!row) return DEFAULT_POLICY;
     try {
       const policy = JSON.parse(row.value) as Policy;
-      return policy && ["observe", "approval", "automatic"].includes(policy.mode) && Array.isArray(policy.thresholds) ? policy : DEFAULT_POLICY;
+      return policy && typeof policy.version === "string" && policy.accountDailySpend && Array.isArray(policy.thresholds) ? policy : DEFAULT_POLICY;
     } catch { return DEFAULT_POLICY; }
   }
 
@@ -160,8 +160,11 @@ export class Store {
     this.chargeMeta(result.meta);
   }
 
-  async listNotificationTargets(): Promise<Array<Record<string, unknown>>> {
-    const result = await this.db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 LIMIT 20`).all<Record<string, unknown>>();
+  async listNotificationTargets(ids: string[] = []): Promise<Array<Record<string, unknown>>> {
+    if (!ids.length) return [];
+    const page = ids.slice(0, 20);
+    const placeholders = page.map((_, index) => `?${index + 1}`).join(",");
+    const result = await this.db.prepare(`SELECT * FROM notification_targets WHERE enabled=1 AND id IN (${placeholders}) LIMIT 20`).bind(...page).all<Record<string, unknown>>();
     this.chargeMeta(result.meta);
     return result.results;
   }

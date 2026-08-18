@@ -96,7 +96,6 @@ function ConnectionSection({ data, connection }: { data: DashboardData; connecti
             ["Account", connection.kind === "local" ? "Placeholder (not installed)" : <code className="font-mono text-[.92em] break-all">{shortId(data.account.id)}</code>],
             ["Timezone", data.account.timezone],
             ["Last monitor pass", data.summary.lastCheckAt ? `${dateTime(data.summary.lastCheckAt)} (${relativeTime(data.summary.lastCheckAt)})` : "Never"],
-            ["Control mode", metricTitle(data.policy.mode)],
           ]}
         />
         <div>
@@ -430,7 +429,6 @@ function NotificationStatusSection({ token, onNavigate }: { token: string; onNav
               <CellStack
                 title={metricTitle(target.kind)}
                 sub={<>
-                  Notifies at {target.minimumSeverity} and above ·{" "}
                   {target.lastDeliveryAt
                     ? `${target.lastDeliveryOk ? "delivered" : "delivery failed"} ${relativeTime(target.lastDeliveryAt)}`
                     : "no delivery attempts yet"}

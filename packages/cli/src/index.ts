@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { authorizeCloudflare } from "./oauth.js";
 import { loadConfig, saveConfig } from "./config.js";
 import { deployGuard } from "./install.js";
+import { createTargetPayload } from "./notifications.js";
 
 const BROLLY_PUBLIC_OAUTH_CLIENT_ID = "5690968d2377c6200202668946420dec";
 
@@ -20,7 +21,6 @@ try {
   else if (command === "stop") await prepareOrStop(true);
   else if (command === "resume") await resumeAction();
   else if (command === "classify") await classifyAsset();
-  else if (command === "mode") await setMode();
   else if (command === "target") await addTarget();
   else if (command === "open") await openUrl((await loadConfig()).guardUrl);
   else help();
@@ -101,18 +101,12 @@ async function classifyAsset(): Promise<void> {
   }), null, 2));
 }
 
-async function setMode(): Promise<void> {
-  const mode = process.argv[3];
-  if (!mode || !["observe", "approval", "automatic"].includes(mode)) throw new Error("Usage: brolly mode <observe|approval|automatic>");
-  const policy = await guardRequest("/api/policy") as Record<string, unknown>;
-  console.log(JSON.stringify(await guardRequest("/api/policy", { method: "PUT", body: JSON.stringify({ ...policy, mode }) }), null, 2));
-}
-
 async function addTarget(): Promise<void> {
-  const [kind, configFile, minimumSeverity = "warning"] = process.argv.slice(3, 6);
-  if (!kind || !configFile) throw new Error("Usage: brolly target <discord|slack|resend|postmark|twilio> <config-json-file> [minimum-severity]");
-  const config = JSON.parse(await readFile(configFile, "utf8")) as Record<string, unknown>;
-  console.log(JSON.stringify(await guardRequest("/api/targets", { method: "POST", body: JSON.stringify({ kind, config, minimumSeverity }) }), null, 2));
+  const [kind, configFile] = process.argv.slice(3, 5);
+  if (!kind || !configFile) throw new Error("Usage: brolly target <channel-kind> <json-file>");
+  const document = JSON.parse(await readFile(configFile, "utf8")) as unknown;
+  const payload = createTargetPayload(kind, document);
+  console.log(JSON.stringify(await guardRequest("/api/targets", { method: "POST", body: JSON.stringify(payload) }), null, 2));
 }
 
 async function cloudflare<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
@@ -148,7 +142,6 @@ Usage:
   brolly prepare      Prepare a reversible action from an incident
   brolly stop         Prepare and execute a reversible action from an incident
   brolly resume       Roll back an action (forensic holds require explicit release)
-  brolly mode         Select observe, approval, or automatic policy mode
-  brolly target       Add an encrypted notification target from a JSON file
+  brolly target       Add a labeled notification channel from a JSON file
   brolly open         Open the guard dashboard`);
 }
