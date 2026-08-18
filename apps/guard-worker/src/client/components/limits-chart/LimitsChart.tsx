@@ -270,7 +270,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
           {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance)} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
+            {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance) && order.some(id => resetToTolerance![id] !== complete[id])} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
             {headerContent}
           </div>
         </div>
