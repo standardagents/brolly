@@ -28,9 +28,8 @@ const STEPS = [
   { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
   { key: "levels", label: "Alert levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
   { key: "tolerance", label: "Risk tolerance", preview: "How far above typical usage each alert level starts." },
-  { key: "account", label: "Account limits", preview: "One cost limit for the whole account, per day and per billing cycle." },
-  { key: "daily", label: "Daily limits", preview: "Cost and billable usage limits for each product and resource, per calendar day." },
-  { key: "cycle", label: "Billing-cycle limits", preview: "Cost and billable usage limits for each product and resource, per billing cycle." },
+  { key: "account", label: "Global account spend limits", preview: "One cost limit for the whole account, per day and per billing cycle." },
+  { key: "products", label: "Product limits", preview: "Cost and billable usage limits for each product and resource, per day and per billing cycle." },
   { key: "runtime", label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
 ] as const;
 type StepKey = typeof STEPS[number]["key"];
@@ -96,8 +95,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <AlertLevelsStep token={token} targets={targets} board={board} />,
     <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
-    <LimitStep window="day" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
-    <LimitStep window="cycle" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <LimitStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
   ];
 
@@ -126,7 +124,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
-                {index === navigation.unlocked && index === stepIndex("daily") && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
+                {index === navigation.unlocked && index === stepIndex("products") && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
                 {index === navigation.unlocked && index < STEPS.length - 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}

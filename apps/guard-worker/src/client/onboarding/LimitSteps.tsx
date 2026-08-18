@@ -6,8 +6,7 @@ import { StepIntro } from "./BudgetSteps";
 type Window = keyof PolicyLimits;
 type ScopeOption = { key: string; label: string; family?: string; kind: "account" | "family" | "asset"; legacyKey?: string };
 
-export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
-  window: Window;
+export function LimitStep({ token, data, policy, levels, setPolicy }: {
   token: string;
   data: OnboardingData;
   policy: Policy;
@@ -20,17 +19,13 @@ export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
   ], [data.families, data.scopedAssets]);
   const [selectedKey, setSelectedKey] = useState(scopes[0]?.key ?? "");
   const selected = scopes.find(scope => scope.key === selectedKey) ?? scopes[0];
-  if (!selected) return <StepIntro title={window === "day" ? "Daily limits" : "Billing-cycle limits"}>No products with usage were found for this account yet.</StepIntro>;
-  const current = policy.limits?.[window]?.[selected.key] ?? emptyScope();
+  if (!selected) return <StepIntro title="Product limits">No products with usage were found for this account yet.</StepIntro>;
   const daily = policy.limits?.day?.[selected.key];
   const chartLevels = levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) }));
-  const update = (change: (scope: ScopeLimits) => ScopeLimits) => setPolicy(previous => updateScope(previous, window, selected, change));
 
   return <>
-    <StepIntro title={window === "day" ? "Daily limits" : "Billing-cycle limits"}>
-      {window === "day"
-        ? "Set cost and billable usage limits for one calendar day. Each scope starts from its typical history and your risk tolerance."
-        : "Set cost and billable usage limits for one billing cycle. Each scope starts from its daily limits and your risk tolerance."}
+    <StepIntro title="Product limits">
+      Cost and billable usage limits for each product and resource: per day on the left, per billing cycle on the right. Each starts from its typical history and your risk tolerance.
     </StepIntro>
     <label className="mb-5 block max-w-[420px] text-[12px] font-bold text-muted">
       Scope
@@ -43,29 +38,40 @@ export function LimitStep({ window, token, data, policy, levels, setPolicy }: {
         {scopes.some(scope => scope.kind === "asset") && <optgroup label="Resources">{scopes.filter(scope => scope.kind === "asset").map(scope => <option key={scope.key} value={scope.key}>{scope.label}</option>)}</optgroup>}
       </select>
     </label>
-    <LimitsChartPair
-      key={`${window}:${selected.key}`}
-      token={token}
-      scope={selected.key}
-      family={selected.family}
-      window={window}
-      levels={chartLevels}
-      cost={current.cost}
-      onCostChange={cost => update(scope => ({ ...scope, cost }))}
-      usage={current.usage}
-      onUsageChange={usage => update(scope => ({ ...scope, usage }))}
-      costFloor={window === "cycle" ? daily?.cost : undefined}
-      usageFloor={window === "cycle" ? daily?.usage : undefined}
-      tolerance={policy.riskTolerance?.percentOfTypical}
-      costEnabled={current.costEnabled ?? true}
-      onCostEnabledChange={costEnabled => update(scope => ({ ...scope, costEnabled }))}
-      usageEnabled={current.usageEnabled}
-      onUsageEnabledChange={usageEnabled => update(scope => ({ ...scope, usageEnabled }))}
-      costLevelEnabled={current.costLevelEnabled}
-      onCostLevelEnabledChange={costLevelEnabled => update(scope => ({ ...scope, costLevelEnabled }))}
-      usageLevelEnabled={current.usageLevelEnabled}
-      onUsageLevelEnabledChange={usageLevelEnabled => update(scope => ({ ...scope, usageLevelEnabled }))}
-    />
+    <div className="grid grid-cols-2 gap-6 max-xl:grid-cols-1">
+      {(["day", "cycle"] as const).map(window => {
+        const current = policy.limits?.[window]?.[selected.key] ?? emptyScope();
+        const update = (change: (scope: ScopeLimits) => ScopeLimits) => setPolicy(previous => updateScope(previous, window, selected, change));
+        return (
+          <section key={window} className="min-w-0">
+            <h3 className="mb-3 text-[11px] font-extrabold uppercase tracking-[.08em] text-faint">{window === "day" ? "Per day" : "Per billing cycle"}</h3>
+            <LimitsChartPair
+              key={`${window}:${selected.key}`}
+              token={token}
+              scope={selected.key}
+              family={selected.family}
+              window={window}
+              levels={chartLevels}
+              cost={current.cost}
+              onCostChange={cost => update(scope => ({ ...scope, cost }))}
+              usage={current.usage}
+              onUsageChange={usage => update(scope => ({ ...scope, usage }))}
+              costFloor={window === "cycle" ? daily?.cost : undefined}
+              usageFloor={window === "cycle" ? daily?.usage : undefined}
+              tolerance={policy.riskTolerance?.percentOfTypical}
+              costEnabled={current.costEnabled ?? true}
+              onCostEnabledChange={costEnabled => update(scope => ({ ...scope, costEnabled }))}
+              usageEnabled={current.usageEnabled}
+              onUsageEnabledChange={usageEnabled => update(scope => ({ ...scope, usageEnabled }))}
+              costLevelEnabled={current.costLevelEnabled}
+              onCostLevelEnabledChange={costLevelEnabled => update(scope => ({ ...scope, costLevelEnabled }))}
+              usageLevelEnabled={current.usageLevelEnabled}
+              onUsageLevelEnabledChange={usageLevelEnabled => update(scope => ({ ...scope, usageLevelEnabled }))}
+            />
+          </section>
+        );
+      })}
+    </div>
   </>;
 }
 
@@ -106,7 +112,7 @@ export function AccountLimitStep({ token, policy, levels, setPolicy }: {
     />
   );
   return <>
-    <StepIntro title="Account limits">One dollar limit for the whole Cloudflare account per day and per billing cycle, across every product. Product limits on the next steps sit under these.</StepIntro>
+    <StepIntro title="Global account spend limits">One dollar limit for the whole Cloudflare account per day and per billing cycle, across every product. Product limits on the next step sit under these.</StepIntro>
     <div className="grid grid-cols-2 gap-6 max-lg:grid-cols-1">
       {pair("day", dayScope)}
       {pair("cycle", cycleScope)}

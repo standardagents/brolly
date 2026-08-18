@@ -68,19 +68,18 @@ describe("BudgetWizard", () => {
       root!.render(<BudgetWizard data={data} token="test" editing onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
-    await waitFor(() => expect(container.querySelectorAll("aside ol li")).toHaveLength(8));
+    await waitFor(() => expect(container.querySelectorAll("aside ol li")).toHaveLength(7));
     expect([...container.querySelectorAll("aside ol li")].map(item => item.textContent?.replace(/^[✓\d]+/, "").trim())).toEqual([
       "Connect Cloudflare",
       "Alert channels",
       "Alert levels",
       "Risk tolerance",
-      "Account limits",
-      "Daily limits",
-      "Billing-cycle limits",
+      "Global account spend limits",
+      "Product limits",
       "Install shutdown fuse",
     ]);
     expect(container.textContent).toContain("How far above your daily historical average each alert should sit.");
-    expect(container.textContent).toContain("Set cost and billable usage limits for one calendar day.");
+    expect(container.textContent).toContain("Cost and billable usage limits for each product and resource");
   });
 
   it("saves the balanced risk tolerance for an existing policy", async () => {

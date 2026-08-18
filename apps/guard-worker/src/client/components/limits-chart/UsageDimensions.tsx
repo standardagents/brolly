@@ -55,7 +55,12 @@ export function summarizeCost(data: UsageSeriesResponse): DimensionSummary {
  * selected row expands and `renderChart` draws the full chart under it; the
  * open/close transition animates through a `grid-template-rows` tween.
  */
-const ROW_GRID = "grid grid-cols-[minmax(140px,240px)_120px_96px_minmax(220px,1fr)_36px] items-center gap-4 max-md:grid-cols-[minmax(0,1fr)_72px_80px_minmax(150px,1fr)_36px]";
+/**
+ * Row layout follows the pair's container width (not the viewport): narrow
+ * columns put the level chips on a second line; from 620px up everything
+ * sits on one line.
+ */
+const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_84px_84px_36px] items-center gap-x-3 gap-y-1.5 @[620px]:grid-cols-[minmax(140px,240px)_120px_96px_minmax(220px,1fr)_36px] @[620px]:gap-4";
 
 export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled, onToggleLevel, onValueChange, window = "day", cycles, today }: {
   dimensions: DimensionSummary[];
@@ -82,7 +87,7 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
   today?: string;
 }) {
   return (
-    <ul className="grid gap-1.5" aria-label={label}>
+    <ul className="@container grid gap-1.5" aria-label={label}>
       {dimensions.map(dimension => {
         const on = enabled?.[dimension.id] ?? true;
         const open = on && dimension.id === selected;
@@ -97,12 +102,12 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
               </span>
               <MiniChart series={dimension.series} cycles={cycles} today={today} window={window} accent={accent}
                 levels={levels.filter(level => levelEnabled?.[dimension.id]?.[level.id] ?? true)} values={values[dimension.id] ?? {}}
-                className="pointer-events-none relative h-7 w-[120px] max-md:w-[72px]" />
+                className="pointer-events-none relative h-6 w-[84px] @[620px]:h-7 @[620px]:w-[120px]" />
               <span className="pointer-events-none relative text-right text-[12.5px] font-[740] tabular-nums">
                 {dimension.unit === "USD" ? formatLimitValue(dimension.cycleToDate, "USD") : formatNumber(dimension.cycleToDate)}
                 <small className="block text-[10px] font-medium text-faint">this cycle</small>
               </span>
-              <span className="relative flex items-center gap-3 pl-2">
+              <span className="relative order-last col-span-4 flex flex-wrap items-center gap-x-3 gap-y-1 @[620px]:order-none @[620px]:col-span-1 @[620px]:pl-2">
                 {levels.map(level => {
                   const levelOn = levelEnabled?.[dimension.id]?.[level.id] ?? true;
                   const value = values[dimension.id]?.[level.id];

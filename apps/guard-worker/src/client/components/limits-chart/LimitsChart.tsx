@@ -265,7 +265,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     : undefined;
 
   return (
-    <div ref={containerRef} className="min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
+    <div ref={containerRef} className="@container min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
       {(title || headerContent || !readOnly) && (
         <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
           {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
@@ -400,7 +400,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         </ul>
       ) : (
         // Four across when there are four or more levels; fewer levels share the row three-wide so each card gets a third.
-        <div className={`mt-2.5 grid gap-2 max-sm:grid-cols-2 ${levels.length >= 4 ? "grid-cols-4" : "grid-cols-3"}`}>
+        <div className={`mt-2.5 grid grid-cols-2 gap-2 ${levels.length >= 4 ? "@[560px]:grid-cols-4" : "@[560px]:grid-cols-3"}`}>
           {levels.map(level => (
             <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
