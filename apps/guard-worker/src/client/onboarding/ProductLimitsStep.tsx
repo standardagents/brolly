@@ -1,7 +1,8 @@
 import { familyControl } from "@standardagents/brolly-core";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { LimitsChartPair, levelColor, useUsageSeries, type UsageSeriesResponse } from "../components/limits-chart";
-import { billableMetricIds } from "../components/limits-chart/api";
+import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
+import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
 import { Icon, ProductIcon, Spinner } from "../components/ui";
 import type { AlertLevel, OnboardingData, Policy, PolicyLimits, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
@@ -9,7 +10,7 @@ import { StepIntro } from "./BudgetSteps";
 type Window = keyof PolicyLimits;
 type OpenState = { cost: boolean; usage: string | null | undefined };
 type SidebarItem = { id: string; label: string };
-type SectionInfo = { items: SidebarItem[]; hasUsage: boolean };
+type SectionInfo = { items: SidebarItem[]; hasUsage: boolean; deviated: string[] };
 
 /** Fallback offset (page header + step rail) when the rail cannot be measured. */
 const DEFAULT_STICKY_TOP = 108;
@@ -84,7 +85,11 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   }, [ordered, STICKY_TOP]);
 
   const reportInfo = useCallback((scope: string, info: SectionInfo) => {
-    setInfoByScope(current => (current[scope] && current[scope]!.hasUsage === info.hasUsage && sameItems(current[scope]!.items, info.items) ? current : { ...current, [scope]: info }));
+    setInfoByScope(current => {
+      const previous = current[scope];
+      if (previous && previous.hasUsage === info.hasUsage && sameItems(previous.items, info.items) && previous.deviated.join("|") === info.deviated.join("|")) return current;
+      return { ...current, [scope]: info };
+    });
   }, []);
   // Product sections start collapsed; the sidebar or a row click opens one.
   const openFor = (scope: string): OpenState => openByScope[scope] ?? { cost: false, usage: null };
@@ -112,23 +117,28 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
                 const active = scope === currentActive;
                 const open = openFor(scope);
                 const items = infoByScope[scope]?.items ?? [];
+                const deviated = new Set(infoByScope[scope]?.deviated ?? []);
                 const openItem = open.usage === undefined ? items[1]?.id : open.usage;
                 return (
                   <li key={scope}>
                     <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
                       className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"}`}>
                       <ProductIcon family={family.family} size="sm" />
-                      <span className="min-w-0 flex-1 truncate">{family.label}</span>
+                      <span className="min-w-0 flex-1 truncate">{family.label}{deviated.size > 0 && <span className="ml-0.5 text-orange" title="Some limits differ from the tolerance defaults">*</span>}</span>
                       {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
                     </button>
                     {active && items.length > 0 && (
                       <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
                         {items.map(item => {
                           const itemActive = item.id === "cost" ? open.cost : item.id === openItem;
+                          const changed = deviated.has(item.id);
                           return (
                             <li key={item.id}>
-                              <button type="button" onClick={() => jumpTo(scope, item.id)}
-                                className={`w-full truncate rounded px-1.5 py-1 text-left text-[12.5px] ${itemActive ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>{item.label}</button>
+                              <button type="button" onClick={() => jumpTo(scope, item.id)} aria-current={itemActive ? "true" : undefined}
+                                className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12.5px] ${changed ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>
+                                <i className={`size-1.5 flex-none rounded-full ${itemActive ? "bg-orange" : "bg-transparent"}`} aria-hidden="true" />
+                                <span className="truncate">{item.label}{changed && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</span>
+                              </button>
                             </li>
                           );
                         })}
@@ -181,11 +191,31 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
 }) {
   const usage = useUsageSeries(token, scope);
   const STICKY_TOP = useStickyTop();
+  const order = useMemo(() => levels.map(level => level.id), [levels]);
+  const tolerance = policy.riskTolerance?.percentOfTypical;
+  const dayLimits = policy.limits?.day?.[scope];
+  const cycleLimits = policy.limits?.cycle?.[scope];
   useEffect(() => {
     if (!usage.data) return;
-    const hasUsage = usage.data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
-    onInfo({ hasUsage, items: [{ id: "cost", label: "Cost" }, ...billableMetricIds(usage.data).map(id => ({ id, label: usage.data!.metrics[id]?.label ?? id }))] });
-  }, [usage.data, onInfo]);
+    const data = usage.data;
+    const hasUsage = data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
+    const metricIds = billableMetricIds(data);
+    // An item is "deviated" when either window's saved values differ from
+    // what the tolerance would set for it.
+    const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle") => {
+      if (!tolerance || !saved || !order.every(id => Number.isFinite(saved[id]))) return false;
+      const days = (() => { const at = Date.parse(`${data.today}T00:00:00Z`); const cycle = data.cycles.find(item => at >= item.startsAt && at < item.endsAt); return cycle ? Math.max(1, Math.round((cycle.endsAt - cycle.startsAt) / 86_400_000)) : 30; })();
+      const seed = window === "cycle" && dailySaved ? Object.fromEntries(Object.entries(dailySaved).map(([id, value]) => [id, value * days])) : undefined;
+      const expected = defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, seed, toleranceDefaults(series, data.cycles, data.today, order, tolerance, window));
+      return order.some(id => expected[id] !== saved[id]);
+    };
+    const deviated: string[] = [];
+    if (deviates(costSeries(data), dayLimits?.cost, undefined, "day") || deviates(costSeries(data), cycleLimits?.cost, dayLimits?.cost, "cycle")) deviated.push("cost");
+    for (const id of metricIds) {
+      if (deviates(metricSeries(data, id), dayLimits?.usage?.[id], undefined, "day") || deviates(metricSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle")) deviated.push(id);
+    }
+    onInfo({ hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
+  }, [usage.data, onInfo, order, tolerance, dayLimits, cycleLimits]);
   const daily = policy.limits?.day?.[scope];
   const control = familyControl(family);
 
