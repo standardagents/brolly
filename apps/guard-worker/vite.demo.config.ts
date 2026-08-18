@@ -139,6 +139,13 @@ const catalogFamilies = [
   { family: "zones", label: "Zones", metrics: ["requests", "bandwidth_bytes"] },
   { family: "email", label: "Email", metrics: ["sent", "routed"] },
 ];
+// Keep the returning-operator fixture aligned with the current catalog so the
+// editable budget board exercises every product glyph in the local preview.
+const returningActiveFamilies = new Set(["workers", "durable_objects", "d1", "kv"]);
+const returningFamilies = catalogFamilies.map(definition => ({
+  ...definition,
+  protection: returningActiveFamilies.has(definition.family) ? "active" as const : "coverage_gap" as const,
+}));
 
 const discoveredAssets = [
   { key: "workers:api-gateway", family: "workers", id: "api-gateway", name: "api-gateway", scope: "resource", protection: "active", tags: { env: "production" } },
@@ -207,13 +214,7 @@ const onboarding = {
   policy: freshInstall ? defaultPolicy : policy,
   families: freshInstall
     ? catalogFamilies.map(definition => ({ ...definition, protection: "coverage_gap" }))
-    : [
-      { family: "workers", label: "Workers", metrics: ["requests", "duration_gbs", "subrequests"], protection: "active" },
-      { family: "durable_objects", label: "Durable Objects", metrics: ["duration_gbs", "requests", "storage_bytes"], protection: "active" },
-      { family: "d1", label: "D1", metrics: ["rows_read", "rows_written"], protection: "active" },
-      { family: "kv", label: "Workers KV", metrics: ["reads", "writes"], protection: "active" },
-      { family: "queues", label: "Queues", metrics: ["backlog", "operations"], protection: "coverage_gap" },
-    ],
+    : returningFamilies,
   scopedAssets: freshInstall
     ? firstRun === "empty"
       ? []
@@ -569,10 +570,17 @@ function demoUsageSeries(scope: string): UsageSeriesResponse {
     const weekend = weekday === 0 || weekday === 6 ? 0.55 : 1;
     const spike = index === 61 ? 26 : index === 62 ? 9 : 1;
     const costUsd = Number((base * weekend * (0.7 + random(index) * 0.6) * spike).toFixed(4));
-    return {
-      day: new Date(at).toISOString().slice(0, 10), costUsd, sealed: index < 89,
-      metrics: { "workers.requests": Math.round(costUsd * 3_300_000), "workers.cpu_ms": Math.round(costUsd * 41_000) },
-    };
+    const metrics: Record<string, number> = scope === "family:durable_objects"
+      ? {
+        "durable_objects.requests": Math.round(costUsd * 900_000 * (0.8 + random(index + 7) * 0.4)),
+        "durable_objects.duration_gb_seconds": Math.round(costUsd * 2_400 * (0.8 + random(index + 11) * 0.4)),
+        "durable_objects.rows_read": Math.round(costUsd * 4_800_000 * (index > 60 ? 4 : 1) * (0.8 + random(index + 3) * 0.4)),
+        "durable_objects.rows_written": Math.round(costUsd * 260_000 * (0.8 + random(index + 5) * 0.4)),
+        "durable_objects.incoming_websocket_messages": Math.round(costUsd * 120_000 * (0.8 + random(index + 13) * 0.4)),
+        "durable_objects.sql_storage_bytes": Math.round(2_000_000_000 + index * 18_000_000),
+      }
+      : { "workers.requests": Math.round(costUsd * 3_300_000), "workers.cpu_ms": Math.round(costUsd * 41_000) };
+    return { day: new Date(at).toISOString().slice(0, 10), costUsd, sealed: index < 89, metrics };
   });
   const cycles = [-2, -1, 0, 1].map(offset => {
     const date = new Date(now);
@@ -580,10 +588,19 @@ function demoUsageSeries(scope: string): UsageSeriesResponse {
   });
   return {
     scope, resourceId: `demo:${scope}`, found: true, today,
-    metrics: {
-      "workers.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
-      "workers.cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "ms", billable: true },
-    },
+    metrics: scope === "family:durable_objects"
+      ? {
+        "durable_objects.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
+        "durable_objects.duration_gb_seconds": { key: "duration_gb_seconds", label: "Duration", unit: "GB-s", billable: true },
+        "durable_objects.rows_read": { key: "rows_read", label: "Rows read", unit: "rows", billable: true },
+        "durable_objects.rows_written": { key: "rows_written", label: "Rows written", unit: "rows", billable: true },
+        "durable_objects.incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", billable: true },
+        "durable_objects.sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", billable: true },
+      }
+      : {
+        "workers.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
+        "workers.cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "ms", billable: true },
+      },
     series, cycles,
   };
 }

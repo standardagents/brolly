@@ -1,8 +1,11 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money, number as formatNumber } from "../../format";
+import { ProductIcon } from "../ui";
 import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
-import { type LevelValues, completeLevels, crossedLevel, pushLevels } from "./levels";
-import { type Axis, chooseAxis, niceLadder, snapStep, snapToNice } from "./scale";
+import { type LevelValues, crossedLevel, pushLevels } from "./levels";
+import { completeWithDefaults } from "./defaults";
+import { type Axis, chooseAxis, snapStep, snapToNice } from "./scale";
+import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
 
 export interface LimitsChartLevel { id: string; label: string; color: string }
@@ -28,8 +31,17 @@ export interface LimitsChartProps {
   seed?: LevelValues;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
+  /** levelId → active on this chart. Missing ids are active. Inactive levels keep their value but draw no line. */
+  levelEnabled?: Record<string, boolean>;
+  onLevelEnabledChange?(next: Record<string, boolean>): void;
   /** Accessible name for the chart. */
   label?: string;
+  /** Optional heading rendered above the chart. */
+  title?: string;
+  /** Product family glyph rendered before the heading. */
+  family?: string;
+  /** Content placed beside the history controls in the heading row. */
+  headerContent?: ReactNode;
 }
 
 const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
@@ -50,10 +62,11 @@ export function formatLimitValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unit}`;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, onChange, readOnly = false, label }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
-  const order = useMemo(() => levels.map(level => level.id), [levels]);
+  const activeLevels = useMemo(() => levels.filter(level => levelEnabled?.[level.id] ?? true), [levels, levelEnabled]);
+  const order = useMemo(() => activeLevels.map(level => level.id), [activeLevels]);
   const today = todayProp ?? series.at(-1)?.day ?? new Date().toISOString().slice(0, 10);
   const cycles = useMemo(
     () => (cyclesProp?.length ? cyclesProp : monthlyCycles(series[0]?.day ?? today, today)),
@@ -78,11 +91,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // Fill in defaults for levels that have no value yet. The defaults are
   // pushed on an axis that already contains the default ladder, so a ladder
   // above today's data does not get clamped to the top of the chart.
-  const complete = useMemo(() => {
-    const ladder = niceLadder(observedMax, order.length);
-    const defaultsAxis = chooseAxis(heightValues, [...order.map(id => value[id] ?? 0), ...ladder, ...Object.values(floor ?? {}), ...Object.values(seed ?? {})]);
-    return completeLevels(defaultsAxis, order, value, observedMax, floor, seed);
-  }, [heightValues, order, value, observedMax, floor, seed]);
+  const complete = useMemo(() => completeWithDefaults(heightValues, observedMax, order, value, floor, seed), [heightValues, order, value, observedMax, floor, seed]);
   useEffect(() => {
     if (order.some(id => complete[id] !== value[id])) onChange(complete);
   }, [complete, order, value, onChange]);
@@ -105,12 +114,16 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // per animation frame.
   const [dragValues, setDragValues] = useState<LevelValues | null>(null);
   const shown = dragValues ?? complete;
+  const history = useLimitHistory(complete);
+  const dragBase = useRef<LevelValues | null>(null);
   const frame = useRef<number | null>(null);
   const pending = useRef<{ id: string; clientY: number } | null>(null);
   const svgRect = useRef<DOMRect | null>(null);
 
   const commit = (id: string, next: number) => {
-    onChange(pushLevels(axis, order, complete, id, next, floor));
+    const result = pushLevels(axis, order, complete, id, next, floor);
+    history.record(result);
+    onChange(result);
   };
 
   const valueAtClientY = (clientY: number) => {
@@ -126,7 +139,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     if (!move) return;
     const next = valueAtClientY(move.clientY);
     if (next === null) return;
-    setDragValues(current => pushLevels(axis, order, current ?? complete, move.id, next, floor));
+    setDragValues(() => pushLevels(axis, order, dragBase.current ?? complete, move.id, next, floor));
   };
 
   const startDrag = (id: string) => (event: PointerEvent<SVGElement>) => {
@@ -135,6 +148,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     (event.currentTarget as SVGElement).setPointerCapture?.(event.pointerId);
     svgRect.current = svgRef.current?.getBoundingClientRect() ?? null;
     setFrozenAxis(axis);
+    dragBase.current = complete;
     setDragValues(complete);
     setDragging(id);
   };
@@ -151,10 +165,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const last = pending.current ? valueAtClientY(pending.current.clientY) : null;
     pending.current = null;
     svgRect.current = null;
-    const final = last === null ? dragValues ?? complete : pushLevels(axis, order, dragValues ?? complete, id, last, floor);
+    const final = last === null ? dragValues ?? dragBase.current ?? complete : pushLevels(axis, order, dragBase.current ?? complete, id, last, floor);
+    dragBase.current = null;
     setDragging(null);
     setDragValues(null);
     setFrozenAxis(null);
+    history.record(final);
     onChange(final);
   };
   const keyStep = (id: string) => (event: KeyboardEvent<SVGElement>) => {
@@ -166,6 +182,23 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     if (delta === undefined) return;
     event.preventDefault();
     commit(id, Math.max(0, current + delta));
+  };
+
+  const historyStep = (direction: "undo" | "redo") => {
+    if (readOnly) return;
+    const next = direction === "undo" ? history.undo() : history.redo();
+    if (next) onChange(next);
+  };
+  const historyKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "z" && event.shiftKey) {
+      event.preventDefault();
+      historyStep("redo");
+    } else if (key === "z") {
+      event.preventDefault();
+      historyStep("undo");
+    }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
@@ -180,9 +213,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const bands = useMemo(() => {
     const edges = order.map(id => ({ id, value: shown[id] ?? 0 }));
     const list: Array<{ id: string; color: string; bottom: number; top: number }> = [{ id: "base", color: ACCENT[kind], bottom: 0, top: edges[0]?.value ?? Number.POSITIVE_INFINITY }];
-    edges.forEach((edge, index) => list.push({ id: edge.id, color: levels[index]?.color ?? ACCENT[kind], bottom: edge.value, top: edges[index + 1]?.value ?? Number.POSITIVE_INFINITY }));
+    edges.forEach((edge, index) => list.push({ id: edge.id, color: activeLevels[index]?.color ?? ACCENT[kind], bottom: edge.value, top: edges[index + 1]?.value ?? Number.POSITIVE_INFINITY }));
     return list;
-  }, [order, shown, levels, kind]);
+  }, [order, shown, activeLevels, kind]);
   const colorById = useMemo(() => new Map(levels.map(level => [level.id, level.color])), [levels]);
   const cycleStarts = cycles.filter(cycle => cycle.startsAt > dayStart(window.fromDay) && cycle.startsAt <= dayStart(window.toDay));
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
@@ -190,7 +223,16 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const chartLabel = label ?? `${kind === "cost" ? "Cost" : "Usage"} per ${limitWindow === "day" ? "day" : "billing cycle"}`;
 
   return (
-    <div ref={containerRef} className="min-w-0 select-none" data-limits-chart={kind}>
+    <div ref={containerRef} className="min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
+      {(title || headerContent || !readOnly) && (
+        <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
+          {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+            {!readOnly && <HistoryButtons history={history} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
+            {headerContent}
+          </div>
+        </div>
+      )}
       <svg
         ref={svgRef}
         className="block w-full touch-none overflow-visible text-ink"
@@ -276,7 +318,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         })}
 
         {/* Level lines and handles */}
-        {levels.map(level => {
+        {activeLevels.map(level => {
           const current = shown[level.id] ?? 0;
           const y = yFor(current);
           const interactive = !readOnly;
@@ -308,7 +350,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
       {readOnly ? (
         <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
-          {levels.map(level => (
+          {activeLevels.map(level => (
             <li key={level.id} className="inline-flex items-center gap-1.5">
               <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
               {level.label} <span className="font-[740] tabular-nums text-ink">{formatLimitValue(shown[level.id] ?? 0, unit)}</span>
@@ -318,7 +360,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       ) : (
         <div className="mt-2.5 grid gap-2" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(128px, 1fr))` }}>
           {levels.map(level => (
-            <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)} />
+            <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+              enabled={levelEnabled?.[level.id] ?? true}
+              onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
         </div>
       )}
@@ -326,29 +370,32 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   );
 }
 
-function LevelField({ level, unit, value, onCommit }: { level: LimitsChartLevel; unit: string; value: number; onCommit(next: number): void }) {
+function LevelField({ level, unit, value, onCommit, enabled, onToggle }: { level: LimitsChartLevel; unit: string; value: number; onCommit(next: number): void; enabled: boolean; onToggle?(next: boolean): void }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
+  const shown = draft ?? compactValue(value, unit);
   const commitDraft = () => {
     if (draft === null) return;
-    const parsed = Number(draft.replace(/[^0-9.]/g, "").replace(/(\..*)\./g, "$1"));
+    const parsed = parseCompact(draft);
     setDraft(null);
-    if (Number.isFinite(parsed) && parsed >= 0) onCommit(parsed);
+    if (parsed !== null && parsed >= 0) onCommit(parsed);
   };
   return (
-    <label className="flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2.5 py-2 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c]">
+    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2.5 py-2 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
       <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
         <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
         <span className="truncate">{level.label}</span>
-        {unit !== "USD" && <small className="ml-auto truncate text-[10.5px] font-medium text-faint">{unit}</small>}
+        {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
       </span>
       <span className="flex min-w-0 items-baseline gap-1 text-ink">
         {unit === "USD" && <b className="text-[13px] text-faint">$</b>}
         <input
-          className="min-w-0 flex-1 border-0 bg-transparent text-[15px] font-[740] tabular-nums outline-none"
+          className="min-w-[2ch] max-w-full border-0 bg-transparent text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default"
+          style={{ width: `${Math.max(2, shown.length) + 0.5}ch` }}
           inputMode="decimal"
+          disabled={!enabled}
           value={shown}
           aria-label={`${level.label} limit${unit === "USD" ? " in dollars" : ` in ${unit}`}`}
+          onFocus={() => setDraft(String(roundForField(value)))}
           onChange={event => setDraft(event.target.value)}
           onBlur={commitDraft}
           onKeyDown={event => {
@@ -356,11 +403,76 @@ function LevelField({ level, unit, value, onCommit }: { level: LimitsChartLevel;
             if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
             event.preventDefault();
             const step = snapStep(value) * (event.shiftKey ? 10 : 1);
-            onCommit(Math.max(0, value + (event.key === "ArrowUp" ? step : -step)));
+            const next = Math.max(0, value + (event.key === "ArrowUp" ? step : -step));
+            setDraft(String(roundForField(next)));
+            onCommit(next);
           }}
         />
+        {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unit}</small>}
       </span>
     </label>
+  );
+}
+
+function LevelSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
+  return (
+    <span className="inline-flex cursor-pointer items-center" title={on ? `${label} is active on this chart. Switch off to skip it.` : `${label} is off for this chart.`} onClick={event => event.preventDefault()}>
+      <span className="sr-only">Use {label} level</span>
+      <input type="checkbox" role="switch" checked={on} aria-checked={on} className="peer sr-only" onChange={event => onChange(event.target.checked)} onClick={event => event.stopPropagation()} />
+      <span
+        className="relative inline-block h-[14px] w-[24px] rounded-full bg-[#c3cad2] transition-colors peer-checked:bg-[#1a9c8c] peer-focus-visible:shadow-[0_0_0_3px_#f6821f33] dark:bg-[#505862] after:absolute after:top-[2px] after:left-[2px] after:size-[10px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[10px]"
+        aria-hidden="true"
+        onClick={() => onChange(!on)}
+      />
+    </span>
+  );
+}
+
+/** Short display form: $2,000 / $12.5K for money, 5.8B for counts. */
+export function compactValue(value: number, _unit: string): string {
+  return value >= 10_000
+    ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
+    : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
+}
+
+/** Accepts "5.8B", "12k", "2,000", "1.5 M". Returns null when unreadable. */
+export function parseCompact(text: string): number | null {
+  const match = text.trim().replace(/,/g, "").match(/^\$?\s*([0-9]*\.?[0-9]+)\s*([kKmMbBtT])?/);
+  if (!match) return null;
+  const base = Number(match[1]);
+  if (!Number.isFinite(base)) return null;
+  const scale: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, t: 1e12 };
+  return base * (match[2] ? scale[match[2].toLowerCase()]! : 1);
+}
+
+function HistoryButtons({ history, onUndo, onRedo }: { history: LimitHistory; onUndo(): void; onRedo(): void }) {
+  return (
+    <div className="inline-flex items-center gap-1" role="group" aria-label="Chart history">
+      <button
+        type="button"
+        className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+        aria-label="Undo last limit change"
+        title="Undo (Cmd/Ctrl+Z)"
+        disabled={!history.canUndo}
+        onClick={onUndo}
+      >
+        <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M9 7 4 12l5 5" /><path d="M5 12h8a6 6 0 0 1 6 6" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+        aria-label="Redo limit change"
+        title="Redo (Cmd/Ctrl+Shift+Z)"
+        disabled={!history.canRedo}
+        onClick={onRedo}
+      >
+        <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m15 7 5 5-5 5" /><path d="M19 12h-8a6 6 0 0 0-6 6" />
+        </svg>
+      </button>
+    </div>
   );
 }
 

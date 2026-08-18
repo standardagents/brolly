@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type RefObject, type SelectHTMLAttributes } from "react";
+import { createPortal } from "react-dom";
 import { PRODUCT_ICON } from "../lib/meta";
 import type { NotificationKind } from "../types";
 
@@ -70,14 +71,53 @@ export function Brand({ large = false }: { large?: boolean }) {
 }
 
 /** Cloudflare product glyph, rendered from the local docs icon set via a mask so it inherits color. */
-export function ProductIcon({ family, tone = "neutral" }: { family: string; tone?: "neutral" | "orange" }) {
+export function ProductIcon({ family, tone = "neutral", size = "md" }: { family: string; tone?: "neutral" | "orange"; size?: "sm" | "md" }) {
   const icon = PRODUCT_ICON[family] ?? "dns";
+  const compact = size === "sm";
   return (
     <span
-      className={`product-glyph relative inline-block size-[34px] flex-none rounded-[7px] ${tone === "orange" ? "bg-orange-soft text-orange-deep" : "bg-[#edf0f3] text-[#566070] dark:bg-[#252b32] dark:text-[#aab3bd]"}`}
+      className={`product-glyph relative inline-block ${compact ? "size-[22px] rounded-[5px]" : "size-[34px] rounded-[7px]"} flex-none ${tone === "orange" ? "bg-orange-soft text-orange-deep" : "bg-[#edf0f3] text-[#566070] dark:bg-[#252b32] dark:text-[#aab3bd]"}`}
       style={{ "--product-icon": `url(/cloudflare-icons/${icon}.svg)` } as React.CSSProperties}
       aria-hidden="true"
     />
+  );
+}
+
+/**
+ * Anchored floating panel rendered through a portal, so it escapes any
+ * `overflow` clipping ancestor (horizontal scrollers clip vertically too).
+ * Position is fixed and recomputed from the anchor on scroll and resize.
+ */
+export function Popover({ anchor, open, side = "bottom", align = "start", className, children }: {
+  anchor: RefObject<HTMLElement | null>;
+  open: boolean;
+  side?: "top" | "bottom";
+  align?: "start" | "end" | "stretch";
+  className?: string;
+  children: ReactNode;
+}) {
+  const [box, setBox] = useState<{ top?: number; bottom?: number; left?: number; right?: number; width?: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setBox(null); return; }
+    const update = () => {
+      const rect = anchor.current?.getBoundingClientRect();
+      if (!rect) return;
+      const gap = 6;
+      setBox({
+        ...(side === "bottom" ? { top: rect.bottom + gap } : { bottom: window.innerHeight - rect.top + gap }),
+        ...(align === "end" ? { right: window.innerWidth - rect.right } : { left: rect.left }),
+        ...(align === "stretch" ? { width: rect.width } : {}),
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => { window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update); };
+  }, [anchor, open, side, align]);
+  if (!open || !box) return null;
+  return createPortal(
+    <div className={cx("fixed z-50", className)} style={box}>{children}</div>,
+    document.body,
   );
 }
 

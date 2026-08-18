@@ -73,6 +73,13 @@ describe("level pushing", () => {
     expect(next.emergency).toBe(50);
   });
 
+  it("restores neighbors when a drag returns to its start value", () => {
+    const base = { warn: 10, critical: 20, emergency: 50 };
+    const pushed = pushLevels(axis, ORDER, base, "warn", 40);
+    expect(pushed.critical).toBeGreaterThan(base.critical);
+    expect(pushLevels(axis, ORDER, base, "warn", 10)).toEqual(base);
+  });
+
   it("pushes lower levels down when a higher level is dragged under them", () => {
     const next = pushLevels(axis, ORDER, { warn: 10, critical: 20, emergency: 50 }, "emergency", 25);
     expect(next.emergency).toBe(25);

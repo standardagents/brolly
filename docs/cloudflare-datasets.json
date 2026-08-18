@@ -1,0 +1,7074 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-18T13:13:32.342Z",
+  "source": {
+    "endpoint": "https://api.cloudflare.com/client/v4/graphql",
+    "accountScope": "account and zone schema fields ending in Groups",
+    "billingWindowDays": 35
+  },
+  "datasets": [
+    {
+      "root": "account",
+      "dataset": "accessLoginRequestsAdaptiveGroups",
+      "graphqlType": "AccountAccessLoginRequestsAdaptiveGroups",
+      "dimensions": [
+        "appId",
+        "approvingPolicyId",
+        "cfRayId",
+        "country",
+        "deviceId",
+        "hasExistingJWT",
+        "hasGatewayEnabled",
+        "hasWarpEnabled",
+        "identityProvider",
+        "ipAddress",
+        "isSuccessfulLogin",
+        "mtlsCertSerialId",
+        "mtlsCommonName",
+        "mtlsStatus",
+        "serviceTokenId",
+        "serviceTokenVersion",
+        "userUuid"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "advancedDnsProtectionNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountAdvancedDnsProtectionNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "dnsQueryName",
+        "dnsQueryType",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationReason",
+        "mitigationScope",
+        "outcome",
+        "prefixTag",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "advancedTcpProtectionNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountAdvancedTcpProtectionNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationReason",
+        "mitigationScope",
+        "outcome",
+        "prefixTag",
+        "protocolState",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aegisIpUtilizationAdaptiveGroups",
+      "graphqlType": "AccountAegisIpUtilizationAdaptiveGroups",
+      "dimensions": [
+        "popUtilizationKey"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "agentMemoryOperationsAdaptiveGroups",
+      "graphqlType": "AccountAgentMemoryOperationsAdaptiveGroups",
+      "dimensions": [
+        "namespaceId",
+        "operation",
+        "profile",
+        "status"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "agentModelInvocationsAdaptiveGroups",
+      "graphqlType": "AccountAgentModelInvocationsAdaptiveGroups",
+      "dimensions": [
+        "agentName",
+        "model",
+        "scriptName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewayCacheAdaptiveGroups",
+      "graphqlType": "AccountAiGatewayCacheAdaptiveGroups",
+      "dimensions": [
+        "cacheOp",
+        "gateway",
+        "model",
+        "provider",
+        "tokensIn",
+        "tokensOut"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewayErrorsAdaptiveGroups",
+      "graphqlType": "AccountAiGatewayErrorsAdaptiveGroups",
+      "dimensions": [
+        "gateway",
+        "model",
+        "provider"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewayRequestsAdaptiveGroups",
+      "graphqlType": "AccountAiGatewayRequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "cached",
+        "contextTokens",
+        "cost",
+        "durationMs",
+        "error",
+        "freshInputTokens",
+        "gateway",
+        "mcpServerCount",
+        "mcpToolCount",
+        "metadataCommonName",
+        "metadataKey",
+        "metadataKeys",
+        "metadataRaw",
+        "metadataSessionId",
+        "metadataUserId",
+        "metadataValue",
+        "metadataValues",
+        "model",
+        "prompts",
+        "promptsIds",
+        "promptsVersions",
+        "provider",
+        "rateLimited",
+        "sampleInterval",
+        "statusCode",
+        "tokensIn",
+        "tokensOut",
+        "usageMetadataRaw",
+        "userAgent",
+        "wholesale"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewayRequestsStagingAdaptiveGroups",
+      "graphqlType": "AccountAiGatewayRequestsStagingAdaptiveGroups",
+      "dimensions": [
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "cached",
+        "contextTokens",
+        "cost",
+        "durationMs",
+        "error",
+        "freshInputTokens",
+        "gateway",
+        "mcpServerCount",
+        "mcpToolCount",
+        "metadataCommonName",
+        "metadataKey",
+        "metadataKeys",
+        "metadataRaw",
+        "metadataSessionId",
+        "metadataUserId",
+        "metadataValue",
+        "metadataValues",
+        "model",
+        "prompts",
+        "promptsIds",
+        "promptsVersions",
+        "provider",
+        "rateLimited",
+        "sampleInterval",
+        "statusCode",
+        "tokensIn",
+        "tokensOut",
+        "usageMetadataRaw",
+        "userAgent",
+        "wholesale"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewaySizeAdaptiveGroups",
+      "graphqlType": "AccountAiGatewaySizeAdaptiveGroups",
+      "dimensions": [
+        "gateway",
+        "logManagement",
+        "rows"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewaySpendSessionsAdaptiveGroups",
+      "graphqlType": "AccountAiGatewaySpendSessionsAdaptiveGroups",
+      "dimensions": [
+        "commonName",
+        "firstModel",
+        "firstProvider",
+        "flagAbnormalCost",
+        "flagAbnormalDuration",
+        "flagHighFirstContext",
+        "flagHighMcpTools",
+        "flagLowCacheHit",
+        "flagPremiumModel",
+        "flagThinkingModel",
+        "gateway",
+        "modelsJson",
+        "primaryModel",
+        "primaryProvider",
+        "primaryRequestType",
+        "producerVersion",
+        "providersJson",
+        "rowId",
+        "sessionId",
+        "sessionStart",
+        "sessionStartDate",
+        "source",
+        "userId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiGatewaySpendUserDailyAdaptiveGroups",
+      "graphqlType": "AccountAiGatewaySpendUserDailyAdaptiveGroups",
+      "dimensions": [
+        "commonName",
+        "flagAbnormalCost",
+        "flagAbnormalDuration",
+        "flagHighFirstContext",
+        "flagHighMcpTools",
+        "flagLowCacheHit",
+        "flagPremiumModel",
+        "flagThinkingModel",
+        "flagsJson",
+        "gateway",
+        "producerVersion",
+        "recommendationCodes",
+        "rowId",
+        "source",
+        "topModel",
+        "topProvider",
+        "userId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiInferenceAdaptiveGroups",
+      "graphqlType": "AccountAiInferenceAdaptiveGroups",
+      "dimensions": [
+        "costMetricName1",
+        "costMetricName2",
+        "costMetricValue1",
+        "costMetricValue2",
+        "errorCode",
+        "inferenceTimeMs",
+        "modelId",
+        "modelIsBeta",
+        "neurons",
+        "requestBytesIn",
+        "requestBytesOut",
+        "requestSource",
+        "tag"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "aiSearchAPIAdaptiveGroups",
+      "graphqlType": "AccountAiSearchAPIAdaptiveGroups",
+      "dimensions": [
+        "aiPromptIncluded",
+        "aiSearchDurationMs",
+        "aiSearchInputSizeTokens",
+        "aiSearchModel",
+        "aiSearchResultSizeTokens",
+        "chunkOverlap",
+        "chunkSize",
+        "doReranking",
+        "doRewrite",
+        "embeddingModel",
+        "enableChunking",
+        "getFilesDurationMs",
+        "getQueryVectorsAvgDurationMs",
+        "getResultVectorsAvgDurationMs",
+        "instanceId",
+        "isStream",
+        "maxResults",
+        "numChunksToRetrieve",
+        "numResults",
+        "querySizeTokens",
+        "regenerateMarkdown",
+        "rerankingDurationMs",
+        "rerankingModel",
+        "rewriteDurationMs",
+        "rewriteInputSizeTokens",
+        "rewriteModel",
+        "rewritePromptIncluded",
+        "rewriteResultSizeTokens",
+        "scoreThreshold",
+        "searchType",
+        "totalDurationMs"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiSearchIngestedItemsAdaptiveGroups",
+      "graphqlType": "AccountAiSearchIngestedItemsAdaptiveGroups",
+      "dimensions": [
+        "chunkOverlap",
+        "chunkSize",
+        "embeddingModel",
+        "error",
+        "fileKey",
+        "indexId",
+        "instanceId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "aiSearchPublicEventsAdaptiveGroups",
+      "graphqlType": "AccountAiSearchPublicEventsAdaptiveGroups",
+      "dimensions": [
+        "clickPosition",
+        "clickViewMore",
+        "clickedResultId",
+        "eventVersion",
+        "inputQuery",
+        "origin",
+        "publicEndpointId",
+        "totalResult"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "artifactsEventsAdaptiveGroups",
+      "graphqlType": "AccountArtifactsEventsAdaptiveGroups",
+      "dimensions": [
+        "errorMessage",
+        "eventKind",
+        "eventType",
+        "repository",
+        "repositoryName",
+        "repositoryNamespace"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "auditLogsGroups",
+      "graphqlType": "AccountAuditLogsGroups",
+      "dimensions": [
+        "actionDescription",
+        "actionResult",
+        "actionType",
+        "actorContext",
+        "actorEmail",
+        "actorId",
+        "actorTokenId",
+        "actorTokenName",
+        "actorType",
+        "rawMethod",
+        "rawStatusCode",
+        "resourceId",
+        "resourceProduct",
+        "resourceScope",
+        "resourceType"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "autoRAGConfigAPIAdaptiveGroups",
+      "graphqlType": "AccountAutoRAGConfigAPIAdaptiveGroups",
+      "dimensions": [
+        "aiPromptIncluded",
+        "aiSearchDurationMs",
+        "aiSearchInputSizeTokens",
+        "aiSearchModel",
+        "aiSearchResultSizeTokens",
+        "chuckSizeTokensArray",
+        "chunkOverlap",
+        "chunkSize",
+        "doReranking",
+        "doRewrite",
+        "embeddingModel",
+        "enableChunking",
+        "fileIdArray",
+        "filenameArray",
+        "getFilesDurationMs",
+        "getQueryVectorsAvgDurationMs",
+        "getResultVectorsAvgDurationMs",
+        "isStream",
+        "maxResults",
+        "numChunksToRetrieve",
+        "numResults",
+        "querySizeTokens",
+        "rag",
+        "regenerateMarkdown",
+        "rerankingDurationMs",
+        "rerankingModel",
+        "rewriteDurationMs",
+        "rewriteInputSizeTokens",
+        "rewriteModel",
+        "rewritePromptIncluded",
+        "rewriteResultSizeTokens",
+        "scoreArray",
+        "scoreThreshold",
+        "searchType",
+        "totalDurationMs"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "autoRAGEngineAdaptiveGroups",
+      "graphqlType": "AccountAutoRAGEngineAdaptiveGroups",
+      "dimensions": [
+        "completed",
+        "errored",
+        "queued",
+        "rag",
+        "running",
+        "sourceType"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "browserIsolationSessionsAdaptiveGroups",
+      "graphqlType": "AccountBrowserIsolationSessionsAdaptiveGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "browserIsolationUserActionsAdaptiveGroups",
+      "graphqlType": "AccountBrowserIsolationUserActionsAdaptiveGroups",
+      "dimensions": [
+        "decision",
+        "type"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "browserRenderingApiAdaptiveGroups",
+      "graphqlType": "AccountBrowserRenderingApiAdaptiveGroups",
+      "dimensions": [
+        "browserSessionEndTime",
+        "browserSessionStartTime",
+        "crawlJobId",
+        "endpoint",
+        "requestEndTime",
+        "requestId",
+        "requestStartTime",
+        "sessionId",
+        "status",
+        "targetUrl"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "browserRenderingBindingSessionsAdaptiveGroups",
+      "graphqlType": "AccountBrowserRenderingBindingSessionsAdaptiveGroups",
+      "dimensions": [
+        "concurrentSessions",
+        "sessionId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "browserRenderingBrowserTimeUsageAdaptiveGroups",
+      "graphqlType": "AccountBrowserRenderingBrowserTimeUsageAdaptiveGroups",
+      "dimensions": [
+        "sessionDurationMs",
+        "sessionEnd",
+        "sessionId",
+        "sessionStart"
+      ],
+      "timeFields": [
+        "avg",
+        "confidence",
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "dimensions",
+        "max",
+        "min",
+        "sum"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "browserRenderingEventsAdaptiveGroups",
+      "graphqlType": "AccountBrowserRenderingEventsAdaptiveGroups",
+      "dimensions": [
+        "browserCloseReason",
+        "clientLibrary",
+        "concurrentSessions",
+        "connectionId",
+        "recordingMode",
+        "scriptName",
+        "sessionId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "callsTurnUsageAdaptiveGroups",
+      "graphqlType": "AccountCallsTurnUsageAdaptiveGroups",
+      "dimensions": [
+        "customIdentifier",
+        "datacenterCity",
+        "datacenterCode",
+        "datacenterCountry",
+        "datacenterRegion",
+        "keyId",
+        "username"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "callsUsageAdaptiveGroups",
+      "graphqlType": "AccountCallsUsageAdaptiveGroups",
+      "dimensions": [
+        "appId",
+        "sessionId",
+        "trackId",
+        "trackType"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cdnNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountCdnNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationDeviceTag",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationSystem",
+        "outcome",
+        "popName",
+        "prefixTag",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceDeviceTag",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1AccessLogins1dGroups",
+      "graphqlType": "AccountCf1AccessLogins1dGroups",
+      "dimensions": [
+        "allowed",
+        "appName",
+        "appType",
+        "country",
+        "idp",
+        "loginType"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1AccessLogins1hGroups",
+      "graphqlType": "AccountCf1AccessLogins1hGroups",
+      "dimensions": [
+        "allowed",
+        "appName",
+        "appType",
+        "country",
+        "idp",
+        "loginType"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1AccessLoginsRawGroups",
+      "graphqlType": "AccountCf1AccessLoginsRawGroups",
+      "dimensions": [
+        "allowed",
+        "appName",
+        "appType",
+        "country",
+        "idp",
+        "loginType"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDns1dGroups",
+      "graphqlType": "AccountCf1GatewayDns1dGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "deviceId",
+        "edeErrors",
+        "email",
+        "isNonidentity",
+        "location",
+        "matchedCategoryIds",
+        "policyId",
+        "protocol",
+        "queryApplicationIds",
+        "queryCategoryIds",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDns1hGroups",
+      "graphqlType": "AccountCf1GatewayDns1hGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "deviceId",
+        "edeErrors",
+        "email",
+        "isNonidentity",
+        "location",
+        "matchedCategoryIds",
+        "policyId",
+        "protocol",
+        "queryApplicationIds",
+        "queryCategoryIds",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDnsLuga1dGroups",
+      "graphqlType": "AccountCf1GatewayDnsLuga1dGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "deviceId",
+        "email",
+        "isNonidentity",
+        "location",
+        "policyId",
+        "protocol",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDnsLuga1hGroups",
+      "graphqlType": "AccountCf1GatewayDnsLuga1hGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "deviceId",
+        "email",
+        "isNonidentity",
+        "location",
+        "policyId",
+        "protocol",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDnsLugaRawGroups",
+      "graphqlType": "AccountCf1GatewayDnsLugaRawGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "destination",
+        "deviceId",
+        "email",
+        "isNonidentity",
+        "location",
+        "policyId",
+        "protocol",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayDnsRawGroups",
+      "graphqlType": "AccountCf1GatewayDnsRawGroups",
+      "dimensions": [
+        "coloName",
+        "country",
+        "destination",
+        "deviceId",
+        "edeErrors",
+        "email",
+        "isNonidentity",
+        "location",
+        "matchedCategoryIds",
+        "policyId",
+        "protocol",
+        "queryApplicationIds",
+        "queryApplicationNames",
+        "queryCategoryIds",
+        "queryType",
+        "rcode",
+        "resolverDecision",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayHttp1dGroups",
+      "graphqlType": "AccountCf1GatewayHttp1dGroups",
+      "dimensions": [
+        "action",
+        "avBlockedFileHashes",
+        "avResult",
+        "blockedFileReason",
+        "country",
+        "deviceId",
+        "directApplicationIds",
+        "directApplicationStatuses",
+        "directApplicationTypeIds",
+        "email",
+        "httpHost",
+        "isIsolated",
+        "isolatedApplicationCounts",
+        "isolatedApplicationIds",
+        "isolatedApplicationNames",
+        "isolatedCategoryCounts",
+        "isolatedCategoryIds",
+        "requestAntivirusScanned",
+        "responseAntivirusScanned",
+        "sandboxResult",
+        "sandboxScanned",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayHttp1hGroups",
+      "graphqlType": "AccountCf1GatewayHttp1hGroups",
+      "dimensions": [
+        "action",
+        "avBlockedFileHashes",
+        "avResult",
+        "blockedFileReason",
+        "country",
+        "deviceId",
+        "directApplicationIds",
+        "directApplicationStatuses",
+        "directApplicationTypeIds",
+        "email",
+        "httpHost",
+        "isIsolated",
+        "isolatedApplicationCounts",
+        "isolatedApplicationIds",
+        "isolatedApplicationNames",
+        "isolatedCategoryCounts",
+        "isolatedCategoryIds",
+        "requestAntivirusScanned",
+        "responseAntivirusScanned",
+        "sandboxResult",
+        "sandboxScanned",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayHttpRawGroups",
+      "graphqlType": "AccountCf1GatewayHttpRawGroups",
+      "dimensions": [
+        "action",
+        "avBlockedFileHash",
+        "avResult",
+        "blockedFileReason",
+        "categoryIds",
+        "categoryNames",
+        "country",
+        "deviceId",
+        "directApplicationIds",
+        "directApplicationNames",
+        "directApplicationStatuses",
+        "directApplicationTypeIds",
+        "email",
+        "hasDlpScans",
+        "httpHost",
+        "isIsolated",
+        "mcpUrlCount",
+        "proxyEndpoint",
+        "requestAntivirusScanned",
+        "responseAntivirusScanned",
+        "sandboxResult",
+        "sandboxScanned",
+        "sourceIP"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetwork1dGroups",
+      "graphqlType": "AccountCf1GatewayNetwork1dGroups",
+      "dimensions": [
+        "action",
+        "applicationIds",
+        "applicationTypeIds",
+        "categoryIds",
+        "coloName",
+        "destinationCountry",
+        "deviceId",
+        "email",
+        "ruleId",
+        "sni",
+        "sourceCountry",
+        "sourceIP",
+        "transport"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetwork1hGroups",
+      "graphqlType": "AccountCf1GatewayNetwork1hGroups",
+      "dimensions": [
+        "action",
+        "applicationIds",
+        "applicationTypeIds",
+        "categoryIds",
+        "coloName",
+        "destinationCountry",
+        "deviceId",
+        "email",
+        "ruleId",
+        "sni",
+        "sourceCountry",
+        "sourceIP",
+        "transport"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetworkRawGroups",
+      "graphqlType": "AccountCf1GatewayNetworkRawGroups",
+      "dimensions": [
+        "action",
+        "applicationIds",
+        "applicationTypeIds",
+        "categoryIds",
+        "coloName",
+        "destinationCountry",
+        "destinationIP",
+        "destinationPort",
+        "detectedProtocol",
+        "deviceId",
+        "email",
+        "hostApplicationId",
+        "proxyEndpoint",
+        "ruleId",
+        "sni",
+        "sourceCountry",
+        "sourceIP",
+        "transport"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetworkSession1dGroups",
+      "graphqlType": "AccountCf1GatewayNetworkSession1dGroups",
+      "dimensions": [
+        "clientTlsVersion",
+        "connectionCloseReason",
+        "destinationPort",
+        "destinationTunnelId",
+        "egressColoName",
+        "egressIPv4",
+        "egressIPv6",
+        "egressRuleId",
+        "ingressColoName",
+        "offramp",
+        "onRamp",
+        "originTlsCertificateValidationResult",
+        "originTlsCipher",
+        "protocol",
+        "sni",
+        "sourceCountry"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetworkSession1hGroups",
+      "graphqlType": "AccountCf1GatewayNetworkSession1hGroups",
+      "dimensions": [
+        "clientTlsVersion",
+        "connectionCloseReason",
+        "destinationPort",
+        "destinationTunnelId",
+        "egressColoName",
+        "egressIPv4",
+        "egressIPv6",
+        "egressRuleId",
+        "ingressColoName",
+        "offramp",
+        "onRamp",
+        "originTlsCertificateValidationResult",
+        "originTlsCipher",
+        "protocol",
+        "sni",
+        "sourceCountry"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1GatewayNetworkSessionRawGroups",
+      "graphqlType": "AccountCf1GatewayNetworkSessionRawGroups",
+      "dimensions": [
+        "clientTlsVersion",
+        "connectionCloseReason",
+        "destinationPort",
+        "destinationTunnelId",
+        "egressColoName",
+        "egressIPv4",
+        "egressIPv6",
+        "egressRuleId",
+        "ingressColoName",
+        "offramp",
+        "onRamp",
+        "originTlsCertificateValidationResult",
+        "originTlsCipher",
+        "protocol",
+        "sni",
+        "sourceCountry"
+      ],
+      "timeFields": [
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cf1McpHost1dGroups",
+      "graphqlType": "AccountCf1McpHost1dGroups",
+      "dimensions": [
+        "country",
+        "httpHost"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cloudchamberMetricsAdaptiveGroups",
+      "graphqlType": "AccountCloudchamberMetricsAdaptiveGroups",
+      "dimensions": [
+        "active",
+        "applicationId",
+        "deploymentId",
+        "durableObjectId",
+        "instanceId",
+        "label",
+        "location",
+        "placementId",
+        "procType",
+        "region"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cloudflareTunnelsAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountCloudflareTunnelsAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "connectionDuration",
+        "destinationCountry",
+        "destinationIP",
+        "destinationPort",
+        "deviceID",
+        "deviceName",
+        "onRamp",
+        "protocol",
+        "sourceCountry",
+        "sourceIP",
+        "sourcePort",
+        "tcpHandshakeDuration"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cloudforceOneDetectionsAdaptiveGroups",
+      "graphqlType": "AccountCloudforceOneDetectionsAdaptiveGroups",
+      "dimensions": [
+        "detection",
+        "detectionType",
+        "dispatchNamespace",
+        "resource",
+        "source"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "cloudforceOneDetectionsStagingAdaptiveGroups",
+      "graphqlType": "AccountCloudforceOneDetectionsStagingAdaptiveGroups",
+      "dimensions": [
+        "detection",
+        "detectionType",
+        "dispatchNamespace",
+        "resource",
+        "source"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "containersMetricsAdaptiveGroups",
+      "graphqlType": "AccountContainersMetricsAdaptiveGroups",
+      "dimensions": [
+        "active",
+        "applicationId",
+        "deploymentId",
+        "durableObjectId",
+        "instanceId",
+        "label",
+        "location",
+        "placementId",
+        "procType",
+        "region"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "containersUsageAdaptiveGroups",
+      "graphqlType": "AccountContainersUsageAdaptiveGroups",
+      "dimensions": [
+        "applicationId",
+        "instanceId",
+        "label",
+        "location",
+        "placementId",
+        "region"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "d1AnalyticsAdaptiveGroups",
+      "graphqlType": "AccountD1AnalyticsAdaptiveGroups",
+      "dimensions": [
+        "databaseId",
+        "databaseRole",
+        "servedByInstance",
+        "servedByRegion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "d1QueriesAdaptiveGroups",
+      "graphqlType": "AccountD1QueriesAdaptiveGroups",
+      "dimensions": [
+        "databaseId",
+        "databaseRole",
+        "error",
+        "query",
+        "servedByInstance",
+        "servedByRegion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "d1StorageAdaptiveGroups",
+      "graphqlType": "AccountD1StorageAdaptiveGroups",
+      "dimensions": [
+        "databaseId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "dnsAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountDnsAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "coloName",
+        "destinationIP",
+        "ipVersion",
+        "protocol",
+        "queryName",
+        "querySizeBucket",
+        "queryType",
+        "responseCached",
+        "responseCode",
+        "responseSizeBucket",
+        "responseStale",
+        "sourceIP",
+        "upstreamIP",
+        "zoneTag"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "dnsFirewallAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountDnsFirewallAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "clusterName",
+        "clusterTag",
+        "coloName",
+        "destinationIP",
+        "ipVersion",
+        "protocol",
+        "queryName",
+        "querySizeBucket",
+        "queryType",
+        "responseCached",
+        "responseCode",
+        "responseReason",
+        "responseSizeBucket",
+        "responseStale",
+        "sourceIP",
+        "upstreamIP"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "dosdAttackAnalyticsGroups",
+      "graphqlType": "AccountDosdAttackAnalyticsGroups",
+      "dimensions": [],
+      "timeFields": [
+        "endDatetime",
+        "startDatetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "dosdNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountDosdNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "attackId",
+        "attackVector",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationReason",
+        "mitigationScope",
+        "outcome",
+        "prefixTag",
+        "protocolState",
+        "ruleId",
+        "ruleName",
+        "rulesetId",
+        "rulesetOverrideId",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "durableObjectsInvocationsAdaptiveGroups",
+      "graphqlType": "AccountDurableObjectsInvocationsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "environmentName",
+        "isPreview",
+        "name",
+        "namespaceId",
+        "objectId",
+        "previewSlug",
+        "scriptName",
+        "scriptVersion",
+        "status",
+        "type"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "specialized",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "durableObjectsPeriodicGroups",
+      "graphqlType": "AccountDurableObjectsPeriodicGroups",
+      "dimensions": [
+        "coloCode",
+        "name",
+        "namespaceId",
+        "objectId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "specialized",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "durableObjectsSqlStorageGroups",
+      "graphqlType": "AccountDurableObjectsSqlStorageGroups",
+      "dimensions": [
+        "namespaceId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "specialized",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "durableObjectsStorageGroups",
+      "graphqlType": "AccountDurableObjectsStorageGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "specialized",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "durableObjectsSubrequestsAdaptiveGroups",
+      "graphqlType": "AccountDurableObjectsSubrequestsAdaptiveGroups",
+      "dimensions": [
+        "environmentName",
+        "name",
+        "namespaceId",
+        "objectId",
+        "scriptName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "fbmAttackAnalyticsGroups",
+      "graphqlType": "AccountFbmAttackAnalyticsGroups",
+      "dimensions": [],
+      "timeFields": [
+        "endDatetime",
+        "startDatetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "firewallEventsAdaptiveGroups",
+      "graphqlType": "AccountFirewallEventsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "apiGatewayMatchedEndpoint",
+        "apiGatewayMatchedHost",
+        "botDetectionIds",
+        "botDetectionTags",
+        "botScore",
+        "botScoreSrcName",
+        "clientASNDescription",
+        "clientAsn",
+        "clientCountryName",
+        "clientIP",
+        "clientIPClass",
+        "clientRefererHost",
+        "clientRefererPath",
+        "clientRefererQuery",
+        "clientRefererScheme",
+        "clientRequestHTTPHost",
+        "clientRequestHTTPMethodName",
+        "clientRequestHTTPProtocol",
+        "clientRequestPath",
+        "clientRequestQuery",
+        "clientRequestScheme",
+        "contentScanHasFailed",
+        "contentScanNumMaliciousObj",
+        "contentScanNumObj",
+        "contentScanObjResults",
+        "contentScanObjSizes",
+        "contentScanObjTypes",
+        "description",
+        "edgeColoName",
+        "edgeResponseStatus",
+        "firewallForAiAnyPiiCategory",
+        "firewallForAiCustomTopicCategoriesScoresMin",
+        "firewallForAiInjectionScore",
+        "firewallForAiPiiCategories",
+        "firewallForAiUnsafeTopicCategories",
+        "fraudAttack",
+        "fraudDetectionIds",
+        "fraudDetectionTags",
+        "fraudEmailRisk",
+        "fraudEventType",
+        "fraudUserId",
+        "httpApplicationVersion",
+        "ja3Hash",
+        "ja4",
+        "jsDetectionPassed",
+        "kind",
+        "matchIndex",
+        "originResponseStatus",
+        "originatorRayName",
+        "rayName",
+        "ref",
+        "ruleId",
+        "rulesetId",
+        "sampleInterval",
+        "source",
+        "userAgent",
+        "verifiedBotCategory",
+        "wafAttackScore",
+        "wafAttackScoreClass",
+        "wafMlAttackScore",
+        "wafMlSqliAttackScore",
+        "wafMlXssAttackScore",
+        "wafPathTraversalAttackScore",
+        "wafRceAttackScore",
+        "wafRequestSignatureCategories",
+        "wafRequestSignatureRefs",
+        "wafSqliAttackScore",
+        "wafXssAttackScore",
+        "zoneTag",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "flagshipFlagEvaluationsAdaptiveGroups",
+      "graphqlType": "AccountFlagshipFlagEvaluationsAdaptiveGroups",
+      "dimensions": [
+        "appId",
+        "colo",
+        "evaluationReason",
+        "flagEnabled",
+        "flagKey",
+        "flagValue",
+        "variant"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "flowtrackdNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountFlowtrackdNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationReason",
+        "mitigationScope",
+        "outcome",
+        "prefixTag",
+        "protocolState",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayL4DownstreamSessionsAdaptiveGroups",
+      "graphqlType": "AccountGatewayL4DownstreamSessionsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "coloCountry",
+        "quicErrorCode",
+        "rttUs",
+        "sessionId",
+        "sourceIP",
+        "tokenAuthStatus",
+        "tokenSigningRegion",
+        "transport",
+        "transportHandshakeDurationUs",
+        "transportStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayL4SessionsAdaptiveGroups",
+      "graphqlType": "AccountGatewayL4SessionsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "applicationIds",
+        "applicationNames",
+        "categoryIds",
+        "categoryNames",
+        "coloCode",
+        "destinationIp",
+        "destinationPort",
+        "detectedProtocol",
+        "deviceId",
+        "dstIpContinent",
+        "dstIpCountry",
+        "email",
+        "isIsolated",
+        "offramp",
+        "onramp",
+        "proxyEndpoint",
+        "ruleId",
+        "sessionId",
+        "sni",
+        "sourceInternalIp",
+        "sourceIp",
+        "sourcePort",
+        "srcIpContinent",
+        "srcIpCountry",
+        "tenantId",
+        "transport",
+        "transportProtocol",
+        "userId",
+        "virtualNetworkId",
+        "virtualNetworkName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayL4UpstreamSessionsAdaptiveGroups",
+      "graphqlType": "AccountGatewayL4UpstreamSessionsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "coloCountry",
+        "destinationIP",
+        "domainName",
+        "downstreamSessionId",
+        "httpConnectReqStatus",
+        "quicErrorCode",
+        "rttUs",
+        "tokenSigningRegion",
+        "totalTunnelSetupDurationUs",
+        "transport",
+        "transportStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayL7RequestsAdaptiveGroups",
+      "graphqlType": "AccountGatewayL7RequestsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "applicationIds",
+        "applicationNames",
+        "categoryIds",
+        "categoryNames",
+        "coloCode",
+        "deviceId",
+        "dstIpContinent",
+        "dstIpCountry",
+        "email",
+        "experimentalIsMcp",
+        "httpHost",
+        "httpStatusCode",
+        "isIsolated",
+        "offramp",
+        "onramp",
+        "packageEcosystem",
+        "packageName",
+        "packageNamespace",
+        "packagePURL",
+        "packageVersion",
+        "privateAppAUD",
+        "proxyEndpoint",
+        "quarantined",
+        "redirectTargetURI",
+        "requestId",
+        "ruleId",
+        "sourceInternalIp",
+        "srcIpContinent",
+        "srcIpCountry",
+        "tenantId",
+        "untrustedCertificateAction",
+        "url",
+        "userId",
+        "virtualNetworkId",
+        "virtualNetworkName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayResolverByCategoryAdaptiveGroups",
+      "graphqlType": "AccountGatewayResolverByCategoryAdaptiveGroups",
+      "dimensions": [
+        "authoritativeNameserverIps",
+        "categoryId",
+        "cnames",
+        "customResolverAddress",
+        "customResolverCacheStatus",
+        "customResolverResponseCode",
+        "dohSubdomain",
+        "dotSubdomain",
+        "edeErrors",
+        "internalDnsFallbackStrategy",
+        "internalDnsRCode",
+        "internalDnsViewId",
+        "internalDnsZoneId",
+        "locationId",
+        "matchedApplicationId",
+        "matchedApplicationName",
+        "policyId",
+        "policyName",
+        "resolvedIpContinents",
+        "resolvedIpCountries",
+        "resolvedIps",
+        "resolverDecision",
+        "resolverPolicyId",
+        "resolverPolicyName",
+        "resourceRecordClasses",
+        "resourceRecordNames",
+        "resourceRecordRDatas",
+        "resourceRecordTTLs",
+        "resourceRecordTypes",
+        "srcIpContinent",
+        "srcIpCountry"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayResolverByCustomResolverGroups",
+      "graphqlType": "AccountGatewayResolverByCustomResolverGroups",
+      "dimensions": [
+        "cacheStatus",
+        "customResolverAddress",
+        "customResolverResponseCode",
+        "customResolverTimeInMs",
+        "locationId",
+        "queryName",
+        "resolverDecision"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayResolverByRuleExecutionPerformanceAdaptiveGroups",
+      "graphqlType": "AccountGatewayResolverByRuleExecutionPerformanceAdaptiveGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeMonth"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "gatewayResolverQueriesAdaptiveGroups",
+      "graphqlType": "AccountGatewayResolverQueriesAdaptiveGroups",
+      "dimensions": [
+        "authoritativeNameserverIps",
+        "categoryIds",
+        "categoryNames",
+        "cnames",
+        "customResolverAddress",
+        "customResolverCacheStatus",
+        "customResolverResponseCode",
+        "dohSubdomain",
+        "dotSubdomain",
+        "edeErrors",
+        "internalDnsFallbackStrategy",
+        "internalDnsRCode",
+        "internalDnsViewId",
+        "internalDnsZoneId",
+        "locationId",
+        "locationName",
+        "matchedApplicationId",
+        "matchedApplicationName",
+        "matchedIndicatorFeedIds",
+        "matchedIndicatorFeedNames",
+        "policyId",
+        "policyName",
+        "queryName",
+        "queryNameReversed",
+        "resolvedIpContinents",
+        "resolvedIpCountries",
+        "resolvedIps",
+        "resolverDecision",
+        "resolverPolicyId",
+        "resolverPolicyName",
+        "resourceRecordClasses",
+        "resourceRecordNames",
+        "resourceRecordRDatas",
+        "resourceRecordTTLs",
+        "resourceRecordTypes",
+        "scheduleInfo",
+        "srcIpContinent",
+        "srcIpCountry"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "httpRequests1dGroups",
+      "graphqlType": "AccountHttpRequests1dGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "httpRequests1hGroups",
+      "graphqlType": "AccountHttpRequests1hGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "httpRequests1mGroups",
+      "graphqlType": "AccountHttpRequests1mGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "httpRequestsAdaptiveGroups",
+      "graphqlType": "AccountHttpRequestsAdaptiveGroups",
+      "dimensions": [
+        "apiGatewayMatchedEndpoint",
+        "apiGatewayMatchedHost",
+        "botDetectionIds",
+        "botDetectionTags",
+        "botManagementDecision",
+        "botScore",
+        "botScoreBucketBy10",
+        "botScoreSrcName",
+        "cacheReserveUsed",
+        "cacheStatus",
+        "clientASNDescription",
+        "clientAsn",
+        "clientCountryName",
+        "clientDeviceType",
+        "clientIP",
+        "clientRefererHost",
+        "clientRequestAcceptContentTypeCategories",
+        "clientRequestAcceptContentTypeCategory",
+        "clientRequestAcceptContentTypeNames",
+        "clientRequestAcceptContentTypes",
+        "clientRequestHTTPHost",
+        "clientRequestHTTPMethodName",
+        "clientRequestHTTPProtocol",
+        "clientRequestPath",
+        "clientRequestQuery",
+        "clientRequestQueryParameterNames",
+        "clientRequestReferer",
+        "clientRequestScheme",
+        "clientSSLProtocol",
+        "coloCode",
+        "contentScanHasFailed",
+        "contentScanNumMaliciousObj",
+        "contentScanNumObj",
+        "contentScanObjResults",
+        "contentScanObjSizes",
+        "contentScanObjTypes",
+        "edgeDnsResponseTimeMs",
+        "edgeResponseContentType",
+        "edgeResponseContentTypeMatched",
+        "edgeResponseContentTypeMatchedByWildcard",
+        "edgeResponseContentTypeName",
+        "edgeResponseStatus",
+        "edgeTimeToFirstByteMs",
+        "firewallForAiAnyPiiCategory",
+        "firewallForAiCustomTopicCategoriesScoresMin",
+        "firewallForAiInjectionScore",
+        "firewallForAiPiiCategories",
+        "firewallForAiUnsafeTopicCategories",
+        "fraudAttack",
+        "fraudDetectionIds",
+        "fraudDetectionTags",
+        "fraudEmailRisk",
+        "fraudEventType",
+        "fraudUserId",
+        "httpApplicationVersion",
+        "isCrossZoneSubrequest",
+        "ja3Hash",
+        "ja4",
+        "jsDetectionPassed",
+        "leakedCredentialCheckResult",
+        "originASN",
+        "originASNDescription",
+        "originIP",
+        "originResponseDurationMs",
+        "originResponseHeaderReceiveDurationMs",
+        "originResponseStatus",
+        "originTcpHandshakeDurationMs",
+        "originTlsHandshakeDurationMs",
+        "payPerCrawlStatus",
+        "requestSource",
+        "sampleInterval",
+        "schemaValidationLearnedOutcome",
+        "schemaValidationUploadedOutcome",
+        "securityAction",
+        "securitySource",
+        "sessionIdHash",
+        "threatIntelIpDatasets",
+        "threatIntelIpEventIds",
+        "upperTierColoName",
+        "userAgent",
+        "userAgentBrowser",
+        "userAgentOS",
+        "verifiedBotCategory",
+        "wafAttackScore",
+        "wafAttackScoreClass",
+        "wafPathTraversalAttackScore",
+        "wafRceAttackScore",
+        "wafRequestSignatureCategories",
+        "wafRequestSignatureRefs",
+        "wafSqliAttackScore",
+        "wafXssAttackScore",
+        "webAssetsLabelsManaged",
+        "webAssetsOperationId",
+        "xRequestedWith",
+        "zoneTag",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "httpRequestsOverviewAdaptiveGroups",
+      "graphqlType": "AccountHttpRequestsOverviewAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "clientRequestHTTPProtocol",
+        "clientSSLProtocol",
+        "edgeResponseContentTypeName",
+        "edgeResponseStatus",
+        "httpApplicationVersion",
+        "userAgentBrowser",
+        "zoneTag",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "hyperdrivePoolSizesAdaptiveGroups",
+      "graphqlType": "AccountHyperdrivePoolSizesAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "configId",
+        "databaseType",
+        "poolShardId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "hyperdriveQueriesAdaptiveGroups",
+      "graphqlType": "AccountHyperdriveQueriesAdaptiveGroups",
+      "dimensions": [
+        "cacheStatus",
+        "coloCode",
+        "configId",
+        "eventStatus",
+        "isFree"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "imagesRequestsAdaptiveGroups",
+      "graphqlType": "AccountImagesRequestsAdaptiveGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "imagesTransformationsAdaptiveGroups",
+      "graphqlType": "AccountImagesTransformationsAdaptiveGroups",
+      "dimensions": [
+        "isBindingRequest",
+        "originHost",
+        "scriptName",
+        "transformation",
+        "zoneTag"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "kvOperationsAdaptiveGroups",
+      "graphqlType": "AccountKvOperationsAdaptiveGroups",
+      "dimensions": [
+        "actionType",
+        "namespaceId",
+        "responseStatusCode",
+        "result"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "kvStorageAdaptiveGroups",
+      "graphqlType": "AccountKvStorageAdaptiveGroups",
+      "dimensions": [
+        "namespaceId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "lbHealthEntitiesGroups",
+      "graphqlType": "AccountLbHealthEntitiesGroups",
+      "dimensions": [
+        "originName",
+        "poolId",
+        "poolName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "liveInputEventsAdaptiveGroups",
+      "graphqlType": "AccountLiveInputEventsAdaptiveGroups",
+      "dimensions": [
+        "eventCode",
+        "inputId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "logExplorerIngestionAdaptiveGroups",
+      "graphqlType": "AccountLogExplorerIngestionAdaptiveGroups",
+      "dimensions": [
+        "dataset",
+        "zoneTag"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "logpushHealthAdaptiveGroups",
+      "graphqlType": "AccountLogpushHealthAdaptiveGroups",
+      "dimensions": [
+        "destinationType",
+        "error",
+        "final",
+        "jobId",
+        "status",
+        "success"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "logpushTransformersAdaptiveGroups",
+      "graphqlType": "AccountLogpushTransformersAdaptiveGroups",
+      "dimensions": [
+        "errorCode",
+        "jobId",
+        "product",
+        "success",
+        "transformerId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicEndpointHealthCheckAdaptiveGroups",
+      "graphqlType": "AccountMagicEndpointHealthCheckAdaptiveGroups",
+      "dimensions": [
+        "checkId",
+        "checkType",
+        "endpoint",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicFirewallNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountMagicFirewallNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationDeviceTag",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "outcome",
+        "prefixTag",
+        "ruleId",
+        "rulesetId",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceDeviceTag",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicFirewallRateLimitNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountMagicFirewallRateLimitNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationDeviceTag",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "outcome",
+        "prefixTag",
+        "ruleId",
+        "rulesetId",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceDeviceTag",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicFirewallSamplesAdaptiveGroups",
+      "graphqlType": "AccountMagicFirewallSamplesAdaptiveGroups",
+      "dimensions": [
+        "ruleId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinute",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicIDPSNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountMagicIDPSNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationDeviceTag",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "outcome",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceDeviceTag",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicTransitNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountMagicTransitNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "egressTunnelID",
+        "egressTunnelName",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ingressTunnelID",
+        "ingressTunnelName",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationSystem",
+        "offRamp",
+        "onRamp",
+        "outcome",
+        "prefixTag",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "trafficType",
+        "udpChecksum",
+        "udpPayloadLength"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicTransitTunnelHealthChecksAdaptiveGroups",
+      "graphqlType": "AccountMagicTransitTunnelHealthChecksAdaptiveGroups",
+      "dimensions": [
+        "active",
+        "edgeColoCity",
+        "edgeColoCode",
+        "edgeColoCountry",
+        "edgeColoName",
+        "edgeColoRegion",
+        "edgePopName",
+        "remoteTunnelIPv4",
+        "resultStatus",
+        "siteName",
+        "tunnelName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicTransitTunnelHealthCheckSLOsAdaptiveGroups",
+      "graphqlType": "AccountMagicTransitTunnelHealthCheckSLOsAdaptiveGroups",
+      "dimensions": [
+        "alertType",
+        "policyId",
+        "siteName",
+        "status",
+        "tunnelId",
+        "tunnelName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "magicTransitTunnelTrafficAdaptiveGroups",
+      "graphqlType": "AccountMagicTransitTunnelTrafficAdaptiveGroups",
+      "dimensions": [
+        "direction",
+        "edgeColoCity",
+        "edgeColoCode",
+        "edgeColoCountry",
+        "edgeColoGeohash",
+        "edgeColoName",
+        "edgePopName",
+        "egressTunnelID",
+        "egressTunnelName",
+        "ingressTunnelID",
+        "ingressTunnelName",
+        "offRamp",
+        "onRamp",
+        "tunnelName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "MagicWANConnectorMetricsAdaptiveGroups",
+      "graphqlType": "AccountMagicWANConnectorMetricsAdaptiveGroups",
+      "dimensions": [
+        "mconnConnectorID",
+        "mconnInterfaceName",
+        "mconnInterfaceType",
+        "mconnSiteID"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetryEventsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetryEventsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "kind",
+        "payload"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetryEventsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetryEventsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "kind",
+        "payload"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotDhcpLeasesAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotDhcpLeasesAdaptiveGroups",
+      "dimensions": [
+        "clientId",
+        "connectorId",
+        "hostname",
+        "interfaceName",
+        "ipAddress",
+        "macAddress"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotDhcpLeasesStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotDhcpLeasesStagingAdaptiveGroups",
+      "dimensions": [
+        "clientId",
+        "connectorId",
+        "hostname",
+        "interfaceName",
+        "ipAddress",
+        "macAddress"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotDisksAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotDisksAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotDisksStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotDisksStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotInterfaceAddressesAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotInterfaceAddressesAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "interfaceName",
+        "ipAddress"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotInterfaceAddressesStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotInterfaceAddressesStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "interfaceName",
+        "ipAddress"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotInterfacesAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotInterfacesAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name",
+        "operstate"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotInterfacesStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotInterfacesStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name",
+        "operstate"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotMountsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotMountsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "fileSystem",
+        "kind",
+        "mountPoint",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotMountsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotMountsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "fileSystem",
+        "kind",
+        "mountPoint",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotNetdevsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotNetdevsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotNetdevsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotNetdevsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "name"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "version"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "version"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotThermalsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotThermalsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "label"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotThermalsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotThermalsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "label"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotTunnelsAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotTunnelsAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "interfaceName",
+        "natdResult",
+        "natdTarget",
+        "tunnelId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mconnTelemetrySnapshotTunnelsStagingAdaptiveGroups",
+      "graphqlType": "AccountMconnTelemetrySnapshotTunnelsStagingAdaptiveGroups",
+      "dimensions": [
+        "connectorId",
+        "interfaceName",
+        "natdResult",
+        "natdTarget",
+        "tunnelId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mnmAWSVPCFlowDataAdaptiveGroups",
+      "graphqlType": "AccountMnmAWSVPCFlowDataAdaptiveGroups",
+      "dimensions": [
+        "accountID",
+        "action",
+        "azID",
+        "destinationAddress",
+        "destinationPort",
+        "ecsClusterArn",
+        "ecsClusterName",
+        "ecsContainerID",
+        "ecsContainerInstanceArn",
+        "ecsContainerInstanceID",
+        "ecsSecondContainerID",
+        "ecsServiceName",
+        "ecsTaskArn",
+        "ecsTaskDefinitionArn",
+        "ecsTaskID",
+        "end",
+        "ethertype",
+        "firehoseStream",
+        "flowDirection",
+        "instanceID",
+        "interfaceID",
+        "logStatus",
+        "pktDestinationAddress",
+        "pktDstAwsService",
+        "pktSourceAddress",
+        "pktSrcAwsService",
+        "protocol",
+        "protocolString",
+        "region",
+        "rejectReason",
+        "ruleIDs",
+        "sourceAddress",
+        "sourcePort",
+        "start",
+        "sublocationID",
+        "sublocationType",
+        "subnetID",
+        "tcpFlags",
+        "tcpFlagsString",
+        "trafficPath",
+        "version",
+        "vpcFlowVersion",
+        "vpcID"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "mnmFlowDataAdaptiveGroups",
+      "graphqlType": "AccountMnmFlowDataAdaptiveGroups",
+      "dimensions": [
+        "destinationAS",
+        "destinationAddress",
+        "destinationPort",
+        "deviceID",
+        "ethertype",
+        "ipToS",
+        "ipToSEncap",
+        "protocol",
+        "protocolString",
+        "routerAddress",
+        "ruleIDs",
+        "sourceAS",
+        "sourceAddress",
+        "sourcePort",
+        "tcpFlags",
+        "tcpFlagsString",
+        "version"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "nelReportsAdaptiveGroups",
+      "graphqlType": "AccountNelReportsAdaptiveGroups",
+      "dimensions": [
+        "clientIPASN",
+        "clientIPASNDescription",
+        "clientIPCountry",
+        "clientIPCountryCode",
+        "clientIPVersion",
+        "lastKnownGoodColoCode",
+        "phase",
+        "protocol",
+        "type"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "ohttpMetricsAdaptiveGroups",
+      "graphqlType": "AccountOhttpMetricsAdaptiveGroups",
+      "dimensions": [
+        "colo",
+        "endpoint",
+        "gatewayStatusCode",
+        "relayStatusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "ohttpRelayEgressConnMetricsAdaptiveGroups",
+      "graphqlType": "AccountOhttpRelayEgressConnMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "transport"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "ohttpRelayIngressConnMetricsAdaptiveGroups",
+      "graphqlType": "AccountOhttpRelayIngressConnMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "transport"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "ohttpRelayRequestMetricsAdaptiveGroups",
+      "graphqlType": "AccountOhttpRelayRequestMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "proxyStatus",
+        "relayStatusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pagesFunctionsInvocationsAdaptiveGroups",
+      "graphqlType": "AccountPagesFunctionsInvocationsAdaptiveGroups",
+      "dimensions": [
+        "scriptName",
+        "status",
+        "usageModel"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "pageShieldReportsAdaptiveGroups",
+      "graphqlType": "AccountPageShieldReportsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "cspDirective",
+        "host",
+        "pageURL",
+        "policyID",
+        "resourceType",
+        "url",
+        "urlHost",
+        "zoneTag"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesDeliveryAdaptiveGroups",
+      "graphqlType": "AccountPipelinesDeliveryAdaptiveGroups",
+      "dimensions": [
+        "pipelineId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesIngestionAdaptiveGroups",
+      "graphqlType": "AccountPipelinesIngestionAdaptiveGroups",
+      "dimensions": [
+        "pipelineId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesOperatorAdaptiveGroups",
+      "graphqlType": "AccountPipelinesOperatorAdaptiveGroups",
+      "dimensions": [
+        "pipelineId",
+        "streamId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesOperatorStagingAdaptiveGroups",
+      "graphqlType": "AccountPipelinesOperatorStagingAdaptiveGroups",
+      "dimensions": [
+        "pipelineId",
+        "streamId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesSinkAdaptiveGroups",
+      "graphqlType": "AccountPipelinesSinkAdaptiveGroups",
+      "dimensions": [
+        "pipelineId",
+        "sinkId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesSinkStagingAdaptiveGroups",
+      "graphqlType": "AccountPipelinesSinkStagingAdaptiveGroups",
+      "dimensions": [
+        "pipelineId",
+        "streamId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesUserErrorsAdaptiveGroups",
+      "graphqlType": "AccountPipelinesUserErrorsAdaptiveGroups",
+      "dimensions": [
+        "errorFamily",
+        "errorType",
+        "pipelineId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "pipelinesUserErrorsStagingAdaptiveGroups",
+      "graphqlType": "AccountPipelinesUserErrorsStagingAdaptiveGroups",
+      "dimensions": [
+        "errorFamily",
+        "errorType",
+        "pipelineId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "precursorEventsAdaptiveGroups",
+      "graphqlType": "AccountPrecursorEventsAdaptiveGroups",
+      "dimensions": [
+        "asn",
+        "browserMajor",
+        "browserName",
+        "countryCode",
+        "eventType",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "osMajor",
+        "osName",
+        "userAgent",
+        "zoneId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "privacyProxyAuthMetricsAdaptiveGroups",
+      "graphqlType": "AccountPrivacyProxyAuthMetricsAdaptiveGroups",
+      "dimensions": [
+        "authMethod",
+        "authResult",
+        "coloCode",
+        "endpoint"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "privacyProxyEgressConnMetricsAdaptiveGroups",
+      "graphqlType": "AccountPrivacyProxyEgressConnMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "transport"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "privacyProxyIngressConnMetricsAdaptiveGroups",
+      "graphqlType": "AccountPrivacyProxyIngressConnMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "transport"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "privacyProxyRequestMetricsAdaptiveGroups",
+      "graphqlType": "AccountPrivacyProxyRequestMetricsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "endpoint",
+        "proxyStatus",
+        "statusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "programmableFlowProtectionNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountProgrammableFlowProtectionNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationReason",
+        "mitigationScope",
+        "outcome",
+        "pfpCustomTag",
+        "prefixTag",
+        "programId",
+        "programName",
+        "ruleId",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength",
+        "verdict"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "queueBacklogAdaptiveGroups",
+      "graphqlType": "AccountQueueBacklogAdaptiveGroups",
+      "dimensions": [
+        "queueId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "queueConsumerMetricsAdaptiveGroups",
+      "graphqlType": "AccountQueueConsumerMetricsAdaptiveGroups",
+      "dimensions": [
+        "queueId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "queueDelayedBacklogAdaptiveGroups",
+      "graphqlType": "AccountQueueDelayedBacklogAdaptiveGroups",
+      "dimensions": [
+        "queueId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "queueMessageOperationsAdaptiveGroups",
+      "graphqlType": "AccountQueueMessageOperationsAdaptiveGroups",
+      "dimensions": [
+        "actionType",
+        "consumerType",
+        "outcome",
+        "queueId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "r2CatalogDataOperationsAdaptiveGroups",
+      "graphqlType": "AccountR2CatalogDataOperationsAdaptiveGroups",
+      "dimensions": [
+        "httpStatus",
+        "namespaceName",
+        "operation",
+        "tableName",
+        "warehouseName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "r2CatalogTableMaintenanceAdaptiveGroups",
+      "graphqlType": "AccountR2CatalogTableMaintenanceAdaptiveGroups",
+      "dimensions": [
+        "jobType",
+        "namespaceName",
+        "success",
+        "tableName",
+        "warehouseName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "r2OperationsAdaptiveGroups",
+      "graphqlType": "AccountR2OperationsAdaptiveGroups",
+      "dimensions": [
+        "actionStatus",
+        "actionType",
+        "bucketName",
+        "eyeballRegion",
+        "objectName",
+        "responseStatusCode",
+        "storageClass"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "r2sqlOperationsAdaptiveGroups",
+      "graphqlType": "AccountR2sqlOperationsAdaptiveGroups",
+      "dimensions": [
+        "bucket",
+        "errorCode",
+        "httpStatus",
+        "namespace",
+        "table"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "r2StorageAdaptiveGroups",
+      "graphqlType": "AccountR2StorageAdaptiveGroups",
+      "dimensions": [
+        "bucketName",
+        "storageClass"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "realtimeKitUsageAdaptiveGroups",
+      "graphqlType": "AccountRealtimeKitUsageAdaptiveGroups",
+      "dimensions": [
+        "appId"
+      ],
+      "timeFields": [
+        "avg",
+        "confidence",
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "dimensions",
+        "sum"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "rumPageloadEventsAdaptiveGroups",
+      "graphqlType": "AccountRumPageloadEventsAdaptiveGroups",
+      "dimensions": [
+        "bot",
+        "countryName",
+        "customTagInternalSxg",
+        "deliveryType",
+        "deviceType",
+        "navigationType",
+        "refererHost",
+        "refererPath",
+        "refererScheme",
+        "requestHost",
+        "requestPath",
+        "requestScheme",
+        "siteTag",
+        "userAgentBrowser",
+        "userAgentOS"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "rumPerformanceEventsAdaptiveGroups",
+      "graphqlType": "AccountRumPerformanceEventsAdaptiveGroups",
+      "dimensions": [
+        "bot",
+        "countryName",
+        "customTagInternalSxg",
+        "deliveryType",
+        "deviceType",
+        "navigationType",
+        "refererHost",
+        "refererPath",
+        "refererScheme",
+        "requestHost",
+        "requestPath",
+        "requestScheme",
+        "siteTag",
+        "userAgentBrowser",
+        "userAgentOS"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "rumWebVitalsEventsAdaptiveGroups",
+      "graphqlType": "AccountRumWebVitalsEventsAdaptiveGroups",
+      "dimensions": [
+        "bot",
+        "countryName",
+        "cumulativeLayoutShiftElement",
+        "cumulativeLayoutShiftPath",
+        "customTagInternalSxg",
+        "deliveryType",
+        "deviceType",
+        "firstInputDelayElement",
+        "firstInputDelayName",
+        "firstInputDelayPath",
+        "interactionToNextPaintElement",
+        "interactionToNextPaintName",
+        "interactionToNextPaintPath",
+        "largestContentfulPaintElement",
+        "largestContentfulPaintObjectHost",
+        "largestContentfulPaintObjectPath",
+        "largestContentfulPaintObjectScheme",
+        "largestContentfulPaintPath",
+        "lcpFetchPriority",
+        "lcpInitiatorType",
+        "navigationType",
+        "refererHost",
+        "refererPath",
+        "refererScheme",
+        "requestHost",
+        "requestPath",
+        "requestScheme",
+        "siteTag",
+        "userAgentBrowser",
+        "userAgentOS"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "shadowIt1hGroups",
+      "graphqlType": "AccountShadowIt1hGroups",
+      "dimensions": [
+        "applicationId",
+        "applicationStatus",
+        "applicationTypeId",
+        "country",
+        "deviceId",
+        "email",
+        "httpHost"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "sinkholeRequestLogsAdaptiveGroups",
+      "graphqlType": "AccountSinkholeRequestLogsAdaptiveGroups",
+      "dimensions": [
+        "body",
+        "destinationAddress",
+        "headers",
+        "host",
+        "method",
+        "r2Path",
+        "referrer",
+        "sinkholeId",
+        "sourceAddress",
+        "uri",
+        "url",
+        "userAgent"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "sippyOperationsAdaptiveGroups",
+      "graphqlType": "AccountSippyOperationsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "bucket",
+        "initiator",
+        "object",
+        "size",
+        "status",
+        "target"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "spectrumNetworkAnalyticsAdaptiveGroups",
+      "graphqlType": "AccountSpectrumNetworkAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "applicationTag",
+        "coloCity",
+        "coloCode",
+        "coloCountry",
+        "coloGeohash",
+        "coloName",
+        "destinationAsn",
+        "destinationAsnName",
+        "destinationCountry",
+        "destinationGeohash",
+        "destinationPort",
+        "direction",
+        "ethertype",
+        "greChecksum",
+        "greEthertype",
+        "greHeaderLength",
+        "greKey",
+        "greSequenceNumber",
+        "greVersion",
+        "icmpChecksum",
+        "icmpCode",
+        "icmpType",
+        "ipDestinationAddress",
+        "ipDestinationSubnet",
+        "ipFragmentOffset",
+        "ipHeaderLength",
+        "ipMoreFragments",
+        "ipProtocol",
+        "ipProtocolName",
+        "ipSourceAddress",
+        "ipSourceSubnet",
+        "ipTotalLength",
+        "ipTotalLengthBuckets",
+        "ipTtl",
+        "ipTtlBuckets",
+        "ipv4Checksum",
+        "ipv4DontFragment",
+        "ipv4Dscp",
+        "ipv4Ecn",
+        "ipv4Identification",
+        "ipv4Options",
+        "ipv6Dscp",
+        "ipv6Ecn",
+        "ipv6ExtensionHeaders",
+        "ipv6FlowLabel",
+        "ipv6Identification",
+        "leaseTag",
+        "mitigationSystem",
+        "outcome",
+        "prefixTag",
+        "sampleInterval",
+        "sourceAsn",
+        "sourceAsnName",
+        "sourceCountry",
+        "sourceGeohash",
+        "sourcePort",
+        "tcpAcknowledgementNumber",
+        "tcpChecksum",
+        "tcpDataOffset",
+        "tcpFlags",
+        "tcpFlagsString",
+        "tcpMss",
+        "tcpOptions",
+        "tcpSackBlocks",
+        "tcpSackPermitted",
+        "tcpSequenceNumber",
+        "tcpTimestampEcr",
+        "tcpTimestampValue",
+        "tcpUrgentPointer",
+        "tcpWindowScale",
+        "tcpWindowSize",
+        "udpChecksum",
+        "udpPayloadLength"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenSeconds"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "streamCMCDAdaptiveGroups",
+      "graphqlType": "AccountStreamCMCDAdaptiveGroups",
+      "dimensions": [
+        "bufferLength",
+        "bufferStarvation",
+        "bufferStarvationDuration",
+        "contentId",
+        "country",
+        "creatorId",
+        "encodedBitrate",
+        "hlsType",
+        "initialBufferStarvationDuration",
+        "inputId",
+        "measuredThroughput",
+        "objectDuration",
+        "playbackRate",
+        "resolution",
+        "sessionId",
+        "startup",
+        "streamType",
+        "streamingFormat",
+        "topBitrate",
+        "videoId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "streamMinutesViewedAdaptiveGroups",
+      "graphqlType": "AccountStreamMinutesViewedAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "creator",
+        "mediaType",
+        "uid"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "toMarkdownConversionAdaptiveGroups",
+      "graphqlType": "AccountToMarkdownConversionAdaptiveGroups",
+      "dimensions": [
+        "conversionId",
+        "durationMs",
+        "errorReason",
+        "fileName",
+        "fileSize",
+        "mimeType",
+        "options",
+        "outputSize",
+        "parentConversion",
+        "requestId",
+        "result",
+        "service",
+        "source"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "turnstileAdaptiveGroups",
+      "graphqlType": "AccountTurnstileAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "asn",
+        "browserMajor",
+        "browserName",
+        "countryCode",
+        "eventType",
+        "hostname",
+        "ipv4",
+        "ipv6",
+        "osMajor",
+        "osName",
+        "siteKey",
+        "userAgent"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeQueriesAdaptiveGroups",
+      "graphqlType": "AccountVectorizeQueriesAdaptiveGroups",
+      "dimensions": [
+        "vectorizeIndexId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeStorageAdaptiveGroups",
+      "graphqlType": "AccountVectorizeStorageAdaptiveGroups",
+      "dimensions": [
+        "vectorizeIndexId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeV2OperationsAdaptiveGroups",
+      "graphqlType": "AccountVectorizeV2OperationsAdaptiveGroups",
+      "dimensions": [
+        "indexName",
+        "operation",
+        "requestStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeV2QueriesAdaptiveGroups",
+      "graphqlType": "AccountVectorizeV2QueriesAdaptiveGroups",
+      "dimensions": [
+        "indexName",
+        "operation",
+        "requestStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeV2StorageAdaptiveGroups",
+      "graphqlType": "AccountVectorizeV2StorageAdaptiveGroups",
+      "dimensions": [
+        "indexName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "vectorizeV2WritesAdaptiveGroups",
+      "graphqlType": "AccountVectorizeV2WritesAdaptiveGroups",
+      "dimensions": [
+        "indexName",
+        "operation",
+        "requestStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "videoBufferEventsAdaptiveGroups",
+      "graphqlType": "AccountVideoBufferEventsAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "deviceBrowser",
+        "deviceOs",
+        "deviceType",
+        "uid"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "videoPlaybackEventsAdaptiveGroups",
+      "graphqlType": "AccountVideoPlaybackEventsAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "deviceBrowser",
+        "deviceOs",
+        "deviceType",
+        "uid"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "videoQualityEventsAdaptiveGroups",
+      "graphqlType": "AccountVideoQualityEventsAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "deviceBrowser",
+        "deviceOs",
+        "deviceType",
+        "qualityResolution",
+        "uid"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "warpDeviceAdaptiveGroups",
+      "graphqlType": "AccountWarpDeviceAdaptiveGroups",
+      "dimensions": [
+        "clientPlatform",
+        "clientVersion",
+        "colo",
+        "deviceId",
+        "mode",
+        "status"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinute",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeTenMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "webSearchRequestsAdaptiveGroups",
+      "graphqlType": "AccountWebSearchRequestsAdaptiveGroups",
+      "dimensions": [
+        "billable",
+        "clientCountry",
+        "errorCode",
+        "errorStage",
+        "instanceId",
+        "query",
+        "queryHash",
+        "queryLength",
+        "region",
+        "requestId",
+        "requestedCount",
+        "result",
+        "source",
+        "totalDurationMs",
+        "userAgent"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workerPlacementAdaptiveGroups",
+      "graphqlType": "AccountWorkerPlacementAdaptiveGroups",
+      "dimensions": [
+        "clientColoCode",
+        "coloCode",
+        "httpStatus",
+        "isSample",
+        "placementUsed",
+        "requestDurationBucketMin",
+        "requestDurationBucketMin100ms",
+        "scriptName",
+        "scriptTag",
+        "scriptVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersAnalyticsEngineAdaptiveGroups",
+      "graphqlType": "AccountWorkersAnalyticsEngineAdaptiveGroups",
+      "dimensions": [
+        "dataset"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "workersAssetsRequestsAdaptiveGroups",
+      "graphqlType": "AccountWorkersAssetsRequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheStatus",
+        "coloCode",
+        "hostname",
+        "statusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersBuildsBuildMinutesAdaptiveGroups",
+      "graphqlType": "AccountWorkersBuildsBuildMinutesAdaptiveGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "workersCacheRequestsAdaptiveGroups",
+      "graphqlType": "AccountWorkersCacheRequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheStatus",
+        "coloCode",
+        "dispatchNamespaceName",
+        "environmentName",
+        "isDispatcher",
+        "isPreview",
+        "previewSlug",
+        "scriptName",
+        "scriptTag",
+        "scriptVersion",
+        "status",
+        "usageModel"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersInvocationsByOwnerAndScriptGroups",
+      "graphqlType": "AccountWorkersInvocationsByOwnerAndScriptGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersOverviewDataAdaptiveGroups",
+      "graphqlType": "AccountWorkersOverviewDataAdaptiveGroups",
+      "dimensions": [
+        "usageModel"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersOverviewRequestsAdaptiveGroups",
+      "graphqlType": "AccountWorkersOverviewRequestsAdaptiveGroups",
+      "dimensions": [
+        "scriptName",
+        "status",
+        "usageModel"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersSubrequestsAdaptiveGroups",
+      "graphqlType": "AccountWorkersSubrequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheStatus",
+        "coloCode",
+        "environmentName",
+        "hostname",
+        "httpResponseStatus",
+        "isPreview",
+        "previewSlug",
+        "requestOutcome",
+        "scriptName",
+        "scriptVersion",
+        "usageModel"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workersVpcConnectionAdaptiveGroups",
+      "graphqlType": "AccountWorkersVpcConnectionAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "errorCode",
+        "status",
+        "targetId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "workflowsAdaptiveGroups",
+      "graphqlType": "AccountWorkflowsAdaptiveGroups",
+      "dimensions": [
+        "eventType",
+        "instanceId",
+        "workflowName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "account",
+      "dataset": "zarazTrackAdaptiveGroups",
+      "graphqlType": "AccountZarazTrackAdaptiveGroups",
+      "dimensions": [
+        "trackName",
+        "urlPath"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "zarazTriggersAdaptiveGroups",
+      "graphqlType": "AccountZarazTriggersAdaptiveGroups",
+      "dimensions": [
+        "triggerName"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "account",
+      "dataset": "zeroTrustPrivateNetworkDiscoveryGroups",
+      "graphqlType": "AccountZeroTrustPrivateNetworkDiscoveryGroups",
+      "dimensions": [
+        "destinationIP",
+        "destinationPort",
+        "email",
+        "hostname",
+        "originId",
+        "status",
+        "transport",
+        "userId"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "apiGatewayGraphqlQueryAnalyticsGroups",
+      "graphqlType": "ZoneApiGatewayGraphqlQueryAnalyticsGroups",
+      "dimensions": [
+        "apiGatewayGraphqlQueryDepth",
+        "apiGatewayGraphqlQuerySize"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "apiGatewayMatchedSessionIDsAdaptiveGroups",
+      "graphqlType": "ZoneApiGatewayMatchedSessionIDsAdaptiveGroups",
+      "dimensions": [
+        "apiGatewayMatchedSessionIdentifierName",
+        "apiGatewayMatchedSessionIdentifierType"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "apiGatewayMatchedSessionIDsPerEndpointAdaptiveGroups",
+      "graphqlType": "ZoneApiGatewayMatchedSessionIDsPerEndpointAdaptiveGroups",
+      "dimensions": [
+        "apiGatewayMatchedEndpointId",
+        "apiGatewayMatchedSessionIdentifier",
+        "responseStatusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "apiGatewayMatchedSessionIDsPerEndpointFlattenedAdaptiveGroups",
+      "graphqlType": "ZoneApiGatewayMatchedSessionIDsPerEndpointFlattenedAdaptiveGroups",
+      "dimensions": [
+        "apiGatewayMatchedEndpointId",
+        "apiGatewayMatchedSessionIdentifierName",
+        "apiGatewayMatchedSessionIdentifierType",
+        "responseStatusCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "apiRequestSequencesGroups",
+      "graphqlType": "ZoneApiRequestSequencesGroups",
+      "dimensions": [
+        "apiHost",
+        "clientRequestHTTPHost",
+        "operationsFirstApiEndpoint",
+        "operationsFirstClientRequestHTTPMethod",
+        "operationsLastApiEndpoint",
+        "operationsLastClientRequestHTTPMethod",
+        "operationsLength",
+        "operationsPrefixApiEndpoints",
+        "operationsPrefixClientRequestHTTPMethods",
+        "rank",
+        "sequenceHash"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "cacheReserveOperationsAdaptiveGroups",
+      "graphqlType": "ZoneCacheReserveOperationsAdaptiveGroups",
+      "dimensions": [
+        "actionStatus",
+        "bucketName",
+        "jurisdiction",
+        "operationClass"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "cacheReserveRequestsAdaptiveGroups",
+      "graphqlType": "ZoneCacheReserveRequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheReserveUsed",
+        "cacheStatus",
+        "clientRequestHTTPHost",
+        "clientRequestPath",
+        "clientRequestQuery",
+        "edgeResponseContentTypeName",
+        "edgeResponseStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "cacheReserveStorageAdaptiveGroups",
+      "graphqlType": "ZoneCacheReserveStorageAdaptiveGroups",
+      "dimensions": [
+        "bucketHash",
+        "bucketName",
+        "jurisdiction"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "dmarcReportsSourcesAdaptiveGroups",
+      "graphqlType": "ZoneDmarcReportsSourcesAdaptiveGroups",
+      "dimensions": [
+        "disposition",
+        "dkim",
+        "domain",
+        "envelopeFrom",
+        "envelopeTo",
+        "evaluatedReason",
+        "headerFrom",
+        "orgName",
+        "sampleInterval",
+        "sourceIP",
+        "sourceLocationName",
+        "sourceOrgName",
+        "sourceOrgSlug",
+        "sourcePTR",
+        "spf",
+        "spfMFromDomain"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeLast31Days",
+        "datetimeMinute",
+        "datetimeMonth",
+        "datetimeWeek"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "dnsAnalyticsAdaptiveGroups",
+      "graphqlType": "ZoneDnsAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "coloName",
+        "destinationIP",
+        "ipVersion",
+        "protocol",
+        "queryName",
+        "querySizeBucket",
+        "queryType",
+        "responseCached",
+        "responseCode",
+        "responseSizeBucket",
+        "responseStale",
+        "sourceIP",
+        "upstreamIP"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "emailRoutingAdaptiveGroups",
+      "graphqlType": "ZoneEmailRoutingAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "arc",
+        "dkim",
+        "dmarc",
+        "eventType",
+        "isLastEvent",
+        "isNDR",
+        "isSpam",
+        "ruleMatched",
+        "sampleInterval",
+        "spamScore",
+        "spamThreshold",
+        "spf",
+        "status"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "zone",
+      "dataset": "emailSendingAdaptiveGroups",
+      "graphqlType": "ZoneEmailSendingAdaptiveGroups",
+      "dimensions": [
+        "arc",
+        "dkim",
+        "dmarc",
+        "envelopeTo",
+        "envelopeTos",
+        "errorCause",
+        "eventType",
+        "isLastEvent",
+        "isNDR",
+        "isSpam",
+        "sampleInterval",
+        "sendingDomain",
+        "spamScore",
+        "spamThreshold",
+        "spf",
+        "status"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "zone",
+      "dataset": "firewallEventsAdaptiveByTimeGroups",
+      "graphqlType": "ZoneFirewallEventsAdaptiveByTimeGroups",
+      "dimensions": [
+        "apiGatewayMatchedEndpoint",
+        "apiGatewayMatchedHost",
+        "botDetectionIds",
+        "botDetectionTags",
+        "botScore",
+        "botScoreSrcName",
+        "description",
+        "firewallForAiAnyPiiCategory",
+        "firewallForAiCustomTopicCategoriesScoresMin",
+        "firewallForAiInjectionScore",
+        "firewallForAiPiiCategories",
+        "firewallForAiUnsafeTopicCategories",
+        "fraudAttack",
+        "fraudDetectionIds",
+        "fraudDetectionTags",
+        "fraudEmailRisk",
+        "fraudEventType",
+        "fraudUserId",
+        "httpApplicationVersion",
+        "ja3Hash",
+        "ja4",
+        "jsDetectionPassed",
+        "verifiedBotCategory",
+        "wafAttackScore",
+        "wafAttackScoreClass",
+        "wafMlAttackScore",
+        "wafMlSqliAttackScore",
+        "wafMlXssAttackScore",
+        "wafPathTraversalAttackScore",
+        "wafRceAttackScore",
+        "wafRequestSignatureCategories",
+        "wafRequestSignatureRefs",
+        "wafSqliAttackScore",
+        "wafXssAttackScore",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "avg",
+        "confidence",
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "dimensions",
+        "sum"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "firewallEventsAdaptiveGroups",
+      "graphqlType": "ZoneFirewallEventsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "apiGatewayMatchedEndpoint",
+        "apiGatewayMatchedHost",
+        "botDetectionIds",
+        "botDetectionTags",
+        "botScore",
+        "botScoreSrcName",
+        "clientASNDescription",
+        "clientAsn",
+        "clientCountryName",
+        "clientIP",
+        "clientIPClass",
+        "clientRefererHost",
+        "clientRefererPath",
+        "clientRefererQuery",
+        "clientRefererScheme",
+        "clientRequestHTTPHost",
+        "clientRequestHTTPMethodName",
+        "clientRequestHTTPProtocol",
+        "clientRequestPath",
+        "clientRequestQuery",
+        "clientRequestScheme",
+        "contentScanHasFailed",
+        "contentScanNumMaliciousObj",
+        "contentScanNumObj",
+        "contentScanObjResults",
+        "contentScanObjSizes",
+        "contentScanObjTypes",
+        "description",
+        "edgeColoName",
+        "edgeResponseStatus",
+        "firewallForAiAnyPiiCategory",
+        "firewallForAiCustomTopicCategoriesScoresMin",
+        "firewallForAiInjectionScore",
+        "firewallForAiPiiCategories",
+        "firewallForAiUnsafeTopicCategories",
+        "fraudAttack",
+        "fraudDetectionIds",
+        "fraudDetectionTags",
+        "fraudEmailRisk",
+        "fraudEventType",
+        "fraudUserId",
+        "httpApplicationVersion",
+        "ja3Hash",
+        "ja4",
+        "jsDetectionPassed",
+        "kind",
+        "matchIndex",
+        "originResponseStatus",
+        "originatorRayName",
+        "rayName",
+        "ref",
+        "ruleId",
+        "rulesetId",
+        "sampleInterval",
+        "source",
+        "userAgent",
+        "verifiedBotCategory",
+        "wafAttackScore",
+        "wafAttackScoreClass",
+        "wafMlAttackScore",
+        "wafMlSqliAttackScore",
+        "wafMlXssAttackScore",
+        "wafPathTraversalAttackScore",
+        "wafRceAttackScore",
+        "wafRequestSignatureCategories",
+        "wafRequestSignatureRefs",
+        "wafSqliAttackScore",
+        "wafXssAttackScore",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "healthCheckEventsAdaptiveGroups",
+      "graphqlType": "ZoneHealthCheckEventsAdaptiveGroups",
+      "dimensions": [
+        "failureReason",
+        "fqdn",
+        "healthChanged",
+        "healthCheckId",
+        "healthCheckName",
+        "healthStatus",
+        "originIP",
+        "originResponseStatus",
+        "region",
+        "rttMs",
+        "sampleInterval",
+        "scope",
+        "tcpConnMs",
+        "tlsHandshakeMs"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "timeToFirstByteMs"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequests1dByColoGroups",
+      "graphqlType": "ZoneHttpRequests1dByColoGroups",
+      "dimensions": [
+        "coloCode"
+      ],
+      "timeFields": [
+        "date"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequests1dGroups",
+      "graphqlType": "ZoneHttpRequests1dGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequests1hGroups",
+      "graphqlType": "ZoneHttpRequests1hGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequests1mByColoGroups",
+      "graphqlType": "ZoneHttpRequests1mByColoGroups",
+      "dimensions": [
+        "coloCode"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequests1mGroups",
+      "graphqlType": "ZoneHttpRequests1mGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeDay",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequestsAdaptiveGroups",
+      "graphqlType": "ZoneHttpRequestsAdaptiveGroups",
+      "dimensions": [
+        "apiGatewayMatchedEndpoint",
+        "apiGatewayMatchedHost",
+        "botDetectionIds",
+        "botDetectionTags",
+        "botManagementDecision",
+        "botScore",
+        "botScoreBucketBy10",
+        "botScoreSrcName",
+        "cacheReserveUsed",
+        "cacheStatus",
+        "clientASNDescription",
+        "clientAsn",
+        "clientCountryName",
+        "clientDeviceType",
+        "clientIP",
+        "clientRefererHost",
+        "clientRequestAcceptContentTypeCategories",
+        "clientRequestAcceptContentTypeCategory",
+        "clientRequestAcceptContentTypeNames",
+        "clientRequestAcceptContentTypes",
+        "clientRequestHTTPHost",
+        "clientRequestHTTPMethodName",
+        "clientRequestHTTPProtocol",
+        "clientRequestPath",
+        "clientRequestQuery",
+        "clientRequestQueryParameterNames",
+        "clientRequestReferer",
+        "clientRequestScheme",
+        "clientSSLProtocol",
+        "coloCode",
+        "contentScanHasFailed",
+        "contentScanNumMaliciousObj",
+        "contentScanNumObj",
+        "contentScanObjResults",
+        "contentScanObjSizes",
+        "contentScanObjTypes",
+        "edgeDnsResponseTimeMs",
+        "edgeResponseContentType",
+        "edgeResponseContentTypeMatched",
+        "edgeResponseContentTypeMatchedByWildcard",
+        "edgeResponseContentTypeName",
+        "edgeResponseStatus",
+        "edgeTimeToFirstByteMs",
+        "firewallForAiAnyPiiCategory",
+        "firewallForAiCustomTopicCategoriesScoresMin",
+        "firewallForAiInjectionScore",
+        "firewallForAiPiiCategories",
+        "firewallForAiUnsafeTopicCategories",
+        "fraudAttack",
+        "fraudDetectionIds",
+        "fraudDetectionTags",
+        "fraudEmailRisk",
+        "fraudEventType",
+        "fraudUserId",
+        "httpApplicationVersion",
+        "isCrossZoneSubrequest",
+        "ja3Hash",
+        "ja4",
+        "jsDetectionPassed",
+        "leakedCredentialCheckResult",
+        "originASN",
+        "originASNDescription",
+        "originIP",
+        "originResponseDurationMs",
+        "originResponseHeaderReceiveDurationMs",
+        "originResponseStatus",
+        "originTcpHandshakeDurationMs",
+        "originTlsHandshakeDurationMs",
+        "payPerCrawlStatus",
+        "requestSource",
+        "sampleInterval",
+        "schemaValidationLearnedOutcome",
+        "schemaValidationUploadedOutcome",
+        "securityAction",
+        "securitySource",
+        "sessionIdHash",
+        "threatIntelIpDatasets",
+        "threatIntelIpEventIds",
+        "upperTierColoName",
+        "userAgent",
+        "userAgentBrowser",
+        "userAgentOS",
+        "verifiedBotCategory",
+        "wafAttackScore",
+        "wafAttackScoreClass",
+        "wafPathTraversalAttackScore",
+        "wafRceAttackScore",
+        "wafRequestSignatureCategories",
+        "wafRequestSignatureRefs",
+        "wafSqliAttackScore",
+        "wafXssAttackScore",
+        "webAssetsLabelsManaged",
+        "webAssetsOperationId",
+        "xRequestedWith",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "adapter",
+      "billable": true
+    },
+    {
+      "root": "zone",
+      "dataset": "httpRequestsOverviewAdaptiveGroups",
+      "graphqlType": "ZoneHttpRequestsOverviewAdaptiveGroups",
+      "dimensions": [
+        "clientCountryName",
+        "clientRequestHTTPProtocol",
+        "clientSSLProtocol",
+        "edgeResponseContentTypeName",
+        "edgeResponseStatus",
+        "httpApplicationVersion",
+        "userAgentBrowser",
+        "zoneVersion"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "imageResizingRequests1mGroups",
+      "graphqlType": "ZoneImageResizingRequests1mGroups",
+      "dimensions": [
+        "contentType",
+        "resizeError"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "loadBalancingRequestsAdaptiveGroups",
+      "graphqlType": "ZoneLoadBalancingRequestsAdaptiveGroups",
+      "dimensions": [
+        "coloCode",
+        "errorType",
+        "lbName",
+        "multipleOriginsSelected",
+        "numberOriginsSelected",
+        "proxied",
+        "region",
+        "ruleName",
+        "rulePriority",
+        "sampleInterval",
+        "selectedOriginIndex",
+        "selectedOriginName",
+        "selectedOriginNames",
+        "selectedPoolAvgRttMs",
+        "selectedPoolHealthChecksEnabled",
+        "selectedPoolHealthy",
+        "selectedPoolId",
+        "selectedPoolIndex",
+        "selectedPoolName",
+        "sessionAffinityEnabled",
+        "sessionAffinityStatus",
+        "steeringPolicy"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "logpushHealthAdaptiveGroups",
+      "graphqlType": "ZoneLogpushHealthAdaptiveGroups",
+      "dimensions": [
+        "destinationType",
+        "error",
+        "final",
+        "jobId",
+        "status",
+        "success"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "logpushTransformersAdaptiveGroups",
+      "graphqlType": "ZoneLogpushTransformersAdaptiveGroups",
+      "dimensions": [
+        "errorCode",
+        "jobId",
+        "product",
+        "success",
+        "transformerId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "nelReportsAdaptiveGroups",
+      "graphqlType": "ZoneNelReportsAdaptiveGroups",
+      "dimensions": [
+        "clientIPASN",
+        "clientIPASNDescription",
+        "clientIPCountry",
+        "clientIPCountryCode",
+        "clientIPVersion",
+        "lastKnownGoodColoCode",
+        "phase",
+        "protocol",
+        "type"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "pageShieldReportsAdaptiveGroups",
+      "graphqlType": "ZonePageShieldReportsAdaptiveGroups",
+      "dimensions": [
+        "action",
+        "cspDirective",
+        "host",
+        "pageURL",
+        "policyID",
+        "resourceType",
+        "url",
+        "urlHost"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHalfOfHour",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "userProfilesAdaptiveGroups",
+      "graphqlType": "ZoneUserProfilesAdaptiveGroups",
+      "dimensions": [
+        "eventType",
+        "userId"
+      ],
+      "timeFields": [
+        "date"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "userProfilesPiiGroups",
+      "graphqlType": "ZoneUserProfilesPiiGroups",
+      "dimensions": [
+        "email",
+        "userId"
+      ],
+      "timeFields": [
+        "date"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "userProfilesRawEventsGroups",
+      "graphqlType": "ZoneUserProfilesRawEventsGroups",
+      "dimensions": [],
+      "timeFields": [
+        "date",
+        "eventTimestamp"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "waitingRoomAnalyticsAdaptiveGroups",
+      "graphqlType": "ZoneWaitingRoomAnalyticsAdaptiveGroups",
+      "dimensions": [
+        "sampleInterval",
+        "waitingRoomId"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "workersZoneInvocationsAdaptiveGroups",
+      "graphqlType": "ZoneWorkersZoneInvocationsAdaptiveGroups",
+      "dimensions": [
+        "constantScriptId",
+        "httpResponseStatus",
+        "status"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "workersZoneSubrequestsAdaptiveGroups",
+      "graphqlType": "ZoneWorkersZoneSubrequestsAdaptiveGroups",
+      "dimensions": [
+        "cacheStatus",
+        "hostname",
+        "httpResponseStatus"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "datetimeSixHours"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazActionsAdaptiveGroups",
+      "graphqlType": "ZoneZarazActionsAdaptiveGroups",
+      "dimensions": [
+        "actionName",
+        "toolName"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsIdentitiesAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsIdentitiesAdaptiveGroups",
+      "dimensions": [
+        "clientId",
+        "identity"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsOrderedTrackAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsOrderedTrackAdaptiveGroups",
+      "dimensions": [
+        "browserName",
+        "cityRegion",
+        "clientId",
+        "colors",
+        "country",
+        "deviceModel",
+        "deviceType",
+        "deviceVendor",
+        "ip",
+        "language",
+        "orderInClient",
+        "orderInSession",
+        "osName",
+        "osVersion",
+        "pageTitle",
+        "resolution",
+        "reverseOrderInClient",
+        "reverseOrderInSession",
+        "sessionId",
+        "trackData",
+        "trackName",
+        "trafficSrc",
+        "ua",
+        "uaObj",
+        "urlParams",
+        "urlPath",
+        "viewport"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "timezoneOffset"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsTrackAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsTrackAdaptiveGroups",
+      "dimensions": [
+        "browserName",
+        "cityRegion",
+        "clientId",
+        "colors",
+        "country",
+        "deviceModel",
+        "deviceType",
+        "deviceVendor",
+        "ip",
+        "language",
+        "osName",
+        "osVersion",
+        "pageTitle",
+        "resolution",
+        "sessionId",
+        "trackData",
+        "trackName",
+        "trafficSrc",
+        "ua",
+        "uaObj",
+        "urlParams",
+        "urlPath",
+        "viewport"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "timezoneOffset"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsTrackTrafficSourcesAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsTrackTrafficSourcesAdaptiveGroups",
+      "dimensions": [
+        "cityRegion",
+        "clientId",
+        "country",
+        "duration",
+        "exitPage",
+        "firstTrafficSrc",
+        "landingPage",
+        "sessionEnd",
+        "sessionEndFifteenMinutes",
+        "sessionEndFiveMinutes",
+        "sessionEndHour",
+        "sessionEndMinute",
+        "sessionId",
+        "sessionStart",
+        "sessionStartFifteenMinutes",
+        "sessionStartFiveMinutes",
+        "sessionStartHour",
+        "sessionStartMinute",
+        "tracks"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsTriggersAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsTriggersAdaptiveGroups",
+      "dimensions": [
+        "browserName",
+        "cityRegion",
+        "clientId",
+        "colors",
+        "country",
+        "deviceModel",
+        "deviceType",
+        "deviceVendor",
+        "ip",
+        "language",
+        "osName",
+        "osVersion",
+        "pageTitle",
+        "resolution",
+        "sessionId",
+        "trafficSrc",
+        "triggerName",
+        "ua",
+        "uaObj",
+        "urlParams",
+        "urlPath",
+        "viewport"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute",
+        "timezoneOffset"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazAnalyticsTriggersTrafficSourcesAdaptiveGroups",
+      "graphqlType": "ZoneZarazAnalyticsTriggersTrafficSourcesAdaptiveGroups",
+      "dimensions": [
+        "cityRegion",
+        "clientId",
+        "country",
+        "firstTrafficSrc",
+        "sessionEnd",
+        "sessionEndFifteenMinutes",
+        "sessionEndFiveMinutes",
+        "sessionEndHour",
+        "sessionEndMinute",
+        "sessionId",
+        "sessionStart",
+        "sessionStartFifteenMinutes",
+        "sessionStartFiveMinutes",
+        "sessionStartHour",
+        "sessionStartMinute",
+        "triggers"
+      ],
+      "timeFields": [
+        "datetime"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazFetchAdaptiveGroups",
+      "graphqlType": "ZoneZarazFetchAdaptiveGroups",
+      "dimensions": [
+        "status",
+        "url"
+      ],
+      "timeFields": [
+        "date",
+        "datetime",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazTrackAdaptiveGroups",
+      "graphqlType": "ZoneZarazTrackAdaptiveGroups",
+      "dimensions": [
+        "trackName",
+        "urlPath"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    },
+    {
+      "root": "zone",
+      "dataset": "zarazTriggersAdaptiveGroups",
+      "graphqlType": "ZoneZarazTriggersAdaptiveGroups",
+      "dimensions": [
+        "triggerName"
+      ],
+      "timeFields": [
+        "date",
+        "datetimeFifteenMinutes",
+        "datetimeFiveMinutes",
+        "datetimeHour",
+        "datetimeMinute"
+      ],
+      "coverage": "unclassified",
+      "billable": false
+    }
+  ],
+  "candidateOutcomes": [
+    {
+      "product": "Workers Logs / Observability",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:logExplorerIngestionAdaptiveGroups",
+        "account:logpushHealthAdaptiveGroups",
+        "account:logpushTransformersAdaptiveGroups",
+        "zone:logpushHealthAdaptiveGroups",
+        "zone:logpushTransformersAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Access / Zero Trust seats",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:accessLoginRequestsAdaptiveGroups",
+        "account:cf1AccessLogins1dGroups",
+        "account:cf1AccessLogins1hGroups",
+        "account:cf1AccessLoginsRawGroups",
+        "account:zeroTrustPrivateNetworkDiscoveryGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Load Balancing",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "zone:loadBalancingRequestsAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Argo Smart Routing",
+      "status": "not-observed-in-account",
+      "evidence": "no matching dataset or billing family appeared in the bounded result",
+      "datasetMatches": [],
+      "billingMatches": []
+    },
+    {
+      "product": "Rate Limiting",
+      "status": "not-observed-in-account",
+      "evidence": "no matching dataset or billing family appeared in the bounded result",
+      "datasetMatches": [],
+      "billingMatches": []
+    },
+    {
+      "product": "Bot Management",
+      "status": "not-observed-in-account",
+      "evidence": "no matching dataset or billing family appeared in the bounded result",
+      "datasetMatches": [],
+      "billingMatches": []
+    },
+    {
+      "product": "Waiting Room",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "zone:waitingRoomAnalyticsAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Spectrum",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:spectrumNetworkAnalyticsAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Magic Transit",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:magicTransitNetworkAnalyticsAdaptiveGroups",
+        "account:magicTransitTunnelHealthChecksAdaptiveGroups",
+        "account:magicTransitTunnelHealthCheckSLOsAdaptiveGroups",
+        "account:magicTransitTunnelTrafficAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Calls / RealtimeKit",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:callsTurnUsageAdaptiveGroups",
+        "account:callsUsageAdaptiveGroups",
+        "account:realtimeKitUsageAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Turnstile",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:turnstileAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Web Analytics",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:rumPageloadEventsAdaptiveGroups",
+        "account:rumPerformanceEventsAdaptiveGroups",
+        "account:rumWebVitalsEventsAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Cloudflare Tunnel",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:cloudflareTunnelsAnalyticsAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Pipelines",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:pipelinesDeliveryAdaptiveGroups",
+        "account:pipelinesIngestionAdaptiveGroups",
+        "account:pipelinesOperatorAdaptiveGroups",
+        "account:pipelinesOperatorStagingAdaptiveGroups",
+        "account:pipelinesSinkAdaptiveGroups",
+        "account:pipelinesSinkStagingAdaptiveGroups",
+        "account:pipelinesUserErrorsAdaptiveGroups",
+        "account:pipelinesUserErrorsStagingAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Secrets Store",
+      "status": "not-observed-in-account",
+      "evidence": "no matching dataset or billing family appeared in the bounded result",
+      "datasetMatches": [],
+      "billingMatches": []
+    },
+    {
+      "product": "R2 Data Catalog",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:r2CatalogDataOperationsAdaptiveGroups",
+        "account:r2CatalogTableMaintenanceAdaptiveGroups"
+      ],
+      "billingMatches": []
+    },
+    {
+      "product": "Workers VPC",
+      "status": "dataset-observed-billing-unverified",
+      "evidence": "a dataset matched; billing access was unavailable",
+      "datasetMatches": [
+        "account:workersVpcConnectionAdaptiveGroups"
+      ],
+      "billingMatches": []
+    }
+  ],
+  "billing": {
+    "status": "unavailable",
+    "families": [],
+    "records": 0,
+    "truncated": false
+  }
+}

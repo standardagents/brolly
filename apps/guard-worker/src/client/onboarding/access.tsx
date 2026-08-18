@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { familyControl } from "@standardagents/brolly-core";
 import { api } from "../api";
-import { Button, Icon, InfoTip, Input, Modal, Notice, Spinner } from "../components/ui";
+import { Button, Icon, InfoTip, Input, Modal, Notice, ProductIcon, Spinner } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
 
@@ -363,6 +363,7 @@ function ServiceCoverageGrid({ families, monitored, capped }: { families: Onboar
           const control = familyControl(family.family);
           return (
             <span key={family.family} className="flex min-w-0 items-center gap-2 rounded-field border border-line-soft bg-panel-soft px-2.5 py-2">
+              <ProductIcon family={family.family} size="sm" />
               <i className={`size-2 flex-none rounded-full ${dot}`} />
               <span className="min-w-0 flex-1 truncate text-xs font-semibold">{family.label}</span>
               {control && <Icon name={CONTROL_MARKER[control].icon} className="size-3.5 flex-none text-muted" />}

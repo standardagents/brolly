@@ -20,12 +20,20 @@ official `cloudflare/cloudflare-docs` repository, `production` branch,
 | Vectorize | `vectorize.svg` |
 | Hyperdrive | `hyperdrive.svg` |
 | AI Gateway | `ai-gateway.svg` |
+| Containers | `containers.svg` |
+| Browser Rendering | `browser-run.svg` |
+| Workflows | `workflows.svg` |
+| Worker Builds | `dynamic-workers.svg` |
+| Analytics Engine | `analytics.svg` |
+| Log Explorer | `log-explorer.svg` |
 | Zones | `dns.svg` |
+| Email | `email-routing.svg` |
 
 - Source directory: <https://github.com/cloudflare/cloudflare-docs/tree/production/src/icons>
 - Cloudflare icon guidance: <https://developers.cloudflare.com/style-guide/components/icons/>
-- Retrieved: 2026-08-09
+- Retrieved: 2026-08-18
 
-The vendored files are exact copies of Cloudflare's SVG sources. Brolly renders
-them through a CSS mask so the glyphs can inherit local status colors without
-rewriting the source files.
+The vendored files are copies of Cloudflare's SVG sources. Cloudflare's source
+files use both inherited and fixed black fills; fixed fills are normalized to
+`currentColor` where needed. Brolly renders them through a CSS mask so the
+glyphs inherit local status colors.

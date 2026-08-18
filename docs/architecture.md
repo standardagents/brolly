@@ -157,6 +157,17 @@ the seeded levels. The board permits up to eight levels and keeps one level when
 an operator removes a column. A level's position supplies its priority as
 `position * 10`; the rightmost position supplies the highest display severity.
 
+`LimitsChart` is the reusable threshold input for daily and billing-cycle cost
+or usage limits. It renders UTC daily ledger history, billing-cycle cumulative
+values, and a projection for the current cycle. A symlog axis preserves the
+ordinary range when one day exceeds ten times the nonzero median. Threshold
+lines retain board order and a five-percent visual gap. A drag computes every
+preview from the values at pointer-down, so reversing the drag restores pushed
+neighbors before release. Typed and keyboard changes commit one step at a time.
+Each chart keeps up to 50 in-memory snapshots for its Undo and Redo controls and
+the standard `Cmd/Ctrl+Z` shortcuts. Usage dimensions keep separate histories.
+Read-only charts omit all editing and history controls.
+
 A channel entry names one configured destination and an interval. Action entries
 select Prepare or Auto behavior for the stop/pause and quarantine families.
 Entries accumulate from left to right. A channel entry in a later level can

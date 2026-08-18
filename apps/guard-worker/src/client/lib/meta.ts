@@ -13,7 +13,14 @@ export const PRODUCT_ICON: Record<string, string> = {
   vectorize: "vectorize",
   hyperdrive: "hyperdrive",
   ai_gateway: "ai-gateway",
+  containers: "containers",
+  browser_rendering: "browser-rendering",
+  workflows: "workflows",
+  worker_builds: "worker-builds",
+  analytics_engine: "analytics-engine",
+  log_explorer: "log-explorer",
   zones: "dns",
+  email: "email-routing",
   billing: "billing",
 };
 

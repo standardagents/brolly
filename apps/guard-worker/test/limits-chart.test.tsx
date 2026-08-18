@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LimitsChart, levelColor } from "../src/client/components/limits-chart";
+import { compactValue, parseCompact } from "../src/client/components/limits-chart/LimitsChart";
 
 const LEVELS = [
   { id: "warn", label: "Warn", color: "#e79021" },
@@ -41,9 +42,13 @@ describe("LimitsChart", () => {
 
   it("renders a numeric field per level and hides handles and fields in read-only mode", () => {
     expect((render().match(/inputMode="decimal"/g) ?? []).length).toBe(LEVELS.length);
+    expect((render().match(/aria-label="(?:Undo|Redo)[^"]*"/g) ?? []).length).toBe(2);
+    expect((render().match(/disabled=""/g) ?? []).length).toBe(2);
     const readOnly = render({ readOnly: true });
     expect(readOnly).not.toContain('role="slider"');
     expect(readOnly).not.toContain("inputMode");
+    expect(readOnly).not.toContain("Undo last limit change");
+    expect(readOnly).not.toContain("Redo limit change");
     expect(readOnly).toContain("Emergency");
   });
 
@@ -64,6 +69,26 @@ describe("LimitsChart", () => {
     const low = render({ window: "cycle", value: { warn: 5, critical: 10, emergency: 20 } });
     expect(low).toContain('fill="#561a55" opacity=".82"');
     expect(low).not.toMatch(/band-emergency"><rect[^>]*height="0"/);
+  });
+
+  it("drops switched-off levels from the chart but keeps their field, dimmed", () => {
+    const html = render({ levelEnabled: { critical: false }, onLevelEnabledChange: () => {} });
+    expect((html.match(/role="slider"/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('aria-label="Critical limit"');
+    expect(html).toContain('aria-label="Critical limit in dollars"');
+    expect((html.match(/role="switch"/g) ?? []).length).toBe(3);
+  });
+
+  it("abbreviates large values in fields and parses abbreviations back", () => {
+    expect(compactValue(5_800_000_000, "bytes")).toBe("5.8B");
+    expect(compactValue(2_000, "USD")).toBe("2,000");
+    expect(compactValue(12_500, "USD")).toBe("12.5K");
+    expect(parseCompact("5.8B")).toBe(5_800_000_000);
+    expect(parseCompact("12k")).toBe(12_000);
+    expect(parseCompact("$2,000")).toBe(2_000);
+    expect(parseCompact("nope")).toBeNull();
+    const html = render({ kind: "usage", unit: "bytes", value: { warn: 5_800_000_000, critical: 20_000_000_000, emergency: 50_000_000_000 } });
+    expect(html).toContain('value="5.8B"');
   });
 
   it("assigns an ordered color ramp for any level count", () => {

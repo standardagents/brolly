@@ -7,6 +7,43 @@ while a current alert is open and Cloudflare's completed ingestion watermark
 has advanced. Newest-first backfill consumes only budget left after active
 protection work.
 
+## Product coverage audit
+
+Run `node scripts/audit-product-coverage.mjs` when Cloudflare announces a
+product or changes an Analytics dataset. The command sends one bounded GraphQL
+schema introspection request and reads at most 35 days of billing usage through
+the same v2 endpoint and PayGo fallback used by Billing Read. It prints three
+diff tables: datasets without an adapter, billing families without a catalog
+family, and catalog families absent from both sources. It also prints a
+candidate-outcome table for products that require account-specific evidence.
+
+Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` for an API token audit.
+`CLOUDFLARE_OAUTH_TOKEN` and `BROLLY_ACCOUNT_ID` support the guard's OAuth token
+path. A separate `CLOUDFLARE_BILLING_TOKEN` can authorize the billing export.
+The script never prints token values. It writes the authenticated schema result
+to `docs/cloudflare-datasets.json`, including each dataset's root, dimensions,
+time fields, and generation timestamp.
+
+The checked-in JSON comes from an authenticated schema run. Each row is marked
+`adapter`, `specialized`, or `unclassified`. The first two classifications are
+billable datasets that Brolly collects through a registry adapter or a dedicated
+Workers or Durable Objects collector. `unclassified` means the schema exposes
+analytics data without enough evidence to treat it as a billable meter. The
+audit prints every unclassified row for review. The offline contract test fails
+when a billable snapshot row loses its adapter or when a registered adapter is
+absent from the authenticated schema snapshot. Its small allow-list records a
+reason for representative security and general-analytics datasets.
+
+Candidate outcomes distinguish dataset evidence from billing evidence.
+`billing-observed` identifies a billing-family match.
+`dataset-observed-billing-unverified` identifies a schema match when Billing
+Read was unavailable. `dataset-only` identifies a schema match without a
+billing-family match in a successful billing export. `not-observed-in-account`
+means the bounded result returned no matching name and does not establish that
+Cloudflare lacks the product. `not-audited` means both evidence sources were
+unavailable. Add a catalog entry, dataset adapter, and billing mapping after a
+candidate has sourced aggregate fields and billing evidence.
+
 The first-run **Alert channels** step starts a one-shot 90-day ingestion job in
 the background and shows its progress while the operator connects channels.
 Usage collectors create daily slices within each dataset's available retention,

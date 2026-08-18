@@ -63,7 +63,8 @@ describe("alert level board", () => {
 
     const warning = levelColumn("Warning");
     await click(findButton(warning, "+ Add"));
-    await click(findButton(warning, "Ops server"));
+    // The add menu renders through a portal (it must escape the board's horizontal scroller).
+    await click(findButton(document.querySelector("[role='menu']") as HTMLElement, "Ops server"));
     await waitFor(() => expect(warning.querySelector("select[aria-label^='Repeat interval']")).not.toBeNull());
     expect(calls[0]).toMatchObject({ path: "/api/alert-levels/warning/entries", method: "POST", body: { kind: "channel", targetId: "target-1", repeatIntervalMs: null } });
 
