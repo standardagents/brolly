@@ -146,7 +146,8 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     {board.loading && <Spinner />}
     {board.error && <Notice tone="error">{board.error}</Notice>}
     {!board.loading && (
-      <div ref={scrollerRef} className="-mx-1 w-[calc(100%+8px)] min-w-0 max-w-[calc(100%+8px)] overflow-x-auto px-1 pb-3" aria-label="Alert level board">
+      /* The scroller bleeds to the wizard card's border (its padding is clamp(26px,4vw,48px), 16px below md) so columns scroll to the edge instead of clipping inside the content box. */
+      <div ref={scrollerRef} className="-mx-[clamp(26px,4vw,48px)] min-w-0 overflow-x-auto px-[clamp(26px,4vw,48px)] pb-3 max-md:-mx-4 max-md:px-4" aria-label="Alert level board">
         <div ref={boardRef} className="flex min-w-max items-stretch gap-3">
           {columns.map(({ item: level, leaving }) => {
             const index = visualLevels.findIndex(item => item.id === level.id);
