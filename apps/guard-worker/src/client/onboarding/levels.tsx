@@ -393,7 +393,6 @@ function ActionEntry({ mode, onRemove, onGrab, ghost = false }: { mode: "prepare
     <article ref={ref} data-flip-key={ghost ? undefined : `action:${mode}`} className={`rounded-field border p-2.5 ${ghost ? "pointer-events-none" : "board-in"} ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}>
       <div className="flex items-start gap-2">
         <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 opacity-70 hover:opacity-100 active:cursor-grabbing" aria-label={`Drag ${auto ? "auto" : "prepare"} action to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
-        <Icon name="alert" className="mt-px size-4" />
         <span className="min-w-0 flex-1">
           <strong className="block text-[12.5px]">{auto ? "Automatic Quarantine" : "Present 1-click Quarantine"}</strong>
           <span className="mt-0.5 block text-[11.5px] leading-[1.4]">{auto
