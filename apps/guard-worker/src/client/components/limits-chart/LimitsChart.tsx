@@ -25,10 +25,16 @@ export interface LimitsChartProps {
   levels: LimitsChartLevel[];
   /** levelId → threshold. Missing ids get computed defaults on first render. */
   value: LevelValues;
-  /** levelId → minimum allowed value (cycle limits stay ≥ daily limits). */
+  /** Optional levelId → minimum allowed value. */
   floor?: LevelValues;
   /** levelId → suggested value for levels that have no saved value yet. */
   seed?: LevelValues;
+  /** levelId → tolerance-derived default for levels that have no saved value. */
+  tolerance?: LevelValues;
+  /** Complete tolerance-derived map reapplied by the chart's reset action. */
+  resetToTolerance?: LevelValues;
+  /** Daily values shown as a non-blocking reference on cycle charts. */
+  reference?: LevelValues;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
   /** levelId → active on this chart. Missing ids are active. Inactive levels keep their value but draw no line. */
@@ -71,7 +77,7 @@ export function formatLimitValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unitLabel(unit)}`;
 }
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -105,7 +111,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // Fill in defaults for levels that have no value yet. The defaults are
   // pushed on an axis that already contains the default ladder, so a ladder
   // above today's data does not get clamped to the top of the chart.
-  const complete = useMemo(() => completeWithDefaults(heightValues, observedMax, order, value, floor, seed), [heightValues, order, value, observedMax, floor, seed]);
+  const complete = useMemo(() => completeWithDefaults(heightValues, observedMax, order, value, floor, seed, tolerance), [heightValues, order, value, observedMax, floor, seed, tolerance]);
   // Values this chart itself emitted. Anything else that arrives in `value`
   // (a chip edit in the dimension row, an outside reset) is recorded in the
   // chart's undo history so undo/redo covers every edit of this map.
@@ -216,6 +222,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const next = direction === "undo" ? history.undo() : history.redo();
     if (next) emit(next);
   };
+  const reset = () => {
+    if (readOnly || !resetToTolerance) return;
+    history.seed(complete);
+    history.record(resetToTolerance);
+    emit(resetToTolerance);
+  };
   const historyKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (readOnly || (!event.metaKey && !event.ctrlKey) || event.altKey) return;
     const key = event.key.toLowerCase();
@@ -248,6 +260,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
   const accent = ACCENT[kind];
   const chartLabel = label ?? `${kind === "cost" ? "Cost" : "Usage"} per ${limitWindow === "day" ? "day" : "billing cycle"}`;
+  const belowReference = limitWindow === "cycle" && reference
+    ? activeLevels.find(level => (shown[level.id] ?? Number.POSITIVE_INFINITY) < (reference[level.id] ?? Number.NEGATIVE_INFINITY))
+    : undefined;
 
   return (
     <div ref={containerRef} className="min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
@@ -255,7 +270,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
           {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {!readOnly && <HistoryButtons history={history} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
+            {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance)} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
             {headerContent}
           </div>
         </div>
@@ -392,6 +407,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           ))}
         </div>
       )}
+      {belowReference && <p className="mt-2 text-[11.5px] leading-5 text-muted">
+        {belowReference.label} is below its daily limit ({formatLimitValue(reference![belowReference.id]!, unit)}). A single day can trip this limit.
+      </p>}
     </div>
   );
 }
@@ -493,9 +511,14 @@ export function parseCompact(text: string): number | null {
   return base * (match[2] ? scale[match[2].toLowerCase()]! : 1);
 }
 
-function HistoryButtons({ history, onUndo, onRedo }: { history: LimitHistory; onUndo(): void; onRedo(): void }) {
+function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { history: LimitHistory; canReset: boolean; onReset(): void; onUndo(): void; onRedo(): void }) {
   return (
     <div className="inline-flex items-center gap-1" role="group" aria-label="Chart history">
+      {canReset && <button
+        type="button"
+        className="h-7 cursor-pointer rounded border border-line bg-panel px-2 text-[10.5px] font-bold text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange"
+        onClick={onReset}
+      >Reset to tolerance</button>}
       <button
         type="button"
         className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"

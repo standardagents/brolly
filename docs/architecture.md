@@ -141,14 +141,14 @@ maintained in [usage-ledger.md](usage-ledger.md).
 First-run completion is stored in D1 as `onboarding_complete`. A new browser
 does not bypass setup, and the browser never receives or stores the break-glass
 admin token. The wizard connects Cloudflare, adds alert channels, configures the
-alert level board, collects account limits, collects product limits, collects
-resource limits, and presents the runtime-fuse handoff.
+alert level board, records risk tolerance, collects daily limits, collects
+billing-cycle limits, and presents the runtime-fuse handoff.
 
 The Alert channels step starts the bounded history import. Two progress rows
 remain in the wizard sidebar while the import runs. The import writes ledger
 history and coverage state without creating alert instances, notifications, or
-control actions. The account, product, and resource limit steps remain editable
-while the import continues.
+control actions. Risk tolerance and both limit steps remain editable while the
+import continues.
 
 Each installation has one ordered alert-level board. Warning, Critical, and
 Emergency are seeded as empty levels. A level has a case-insensitive unique
@@ -166,7 +166,29 @@ preview from the values at pointer-down, so reversing the drag restores pushed
 neighbors before release. Typed and keyboard changes commit one step at a time.
 Each chart keeps up to 50 in-memory snapshots for its Undo and Redo controls and
 the standard `Cmd/Ctrl+Z` shortcuts. Usage dimensions keep separate histories.
-Read-only charts omit all editing and history controls.
+A level diamond in a dimension row switches that level for the dimension. The
+diamond stays available while its level is off. Read-only charts omit all
+editing and history controls.
+
+Risk tolerance is one ordered percentage map shared by account cost, product
+and resource cost, and every billable usage dimension. Conservative spans 120%
+through 300%, Balanced spans 150% through 800%, and Growth spans 250% through
+3,000%. Each preset follows a geometric curve across the current alert-level
+board. The control uses a logarithmic percentage axis and the same ordering,
+minimum-gap, pointer, field, and keyboard behavior as a limits chart.
+
+Daily defaults use the median of nonzero days in the 90-day ledger window.
+Billing-cycle defaults use the median of at least two fully covered completed
+cycles. When fewer cycles exist, the cycle baseline is the daily median times
+the current cycle length. A p95 value appears only as the busiest-normal-day
+readout. A single spike therefore does not change the multiplier baseline.
+
+Tolerance seeds missing chart values once. Saved chart values remain detached
+from later tolerance edits. Reset to tolerance reapplies the current
+percentages to one chart and records one undo step. A cycle default also keeps
+the matching daily value times the cycle length as its lower bound. Operators
+may edit a cycle value below its daily counterpart. The chart then shows a
+non-blocking single-day warning.
 
 A channel entry names one configured destination and an interval. Action entries
 select Prepare or Auto behavior for the stop/pause and quarantine families.
@@ -198,7 +220,18 @@ Each policy spend scope stores a map keyed by alert-level ID:
   namespace, keyed by family, scope, and resource ID;
 - metric/window thresholds for individual assets, including Durable Object
   local-day or billing-cycle usage and cost across every billable
-  fast-telemetry meter.
+  fast-telemetry meter;
+- `riskTolerance` for the shared preset, per-level percentages, and baseline
+  audit window;
+- `limits.day` and `limits.cycle` for per-scope cost, usage, dimension switches,
+  and level switches.
+
+Existing policies may omit `riskTolerance` and `limits`. The client applies the
+Balanced curve and derives daily cost maps from the maintained legacy spend
+fields. First-run setup saves the complete onboarding record. Budget settings
+uses the policy PUT endpoint. Policy migration materializes daily and
+billing-cycle cost and usage maps into alert rules with their chart and level
+switches.
 
 Policy materialization reads the ordered level board and writes one alert line
 for each level value that exists in the selected scope. The alert line retains
@@ -212,25 +245,21 @@ firing line drives channel delivery and action creation. Acknowledge marks the
 instance seen, records the operator, and clears its next notification time.
 Resolution and expiry also clear future notification work.
 
-The optional first-run usage check is a separate, read-only path. A 20-second
+The bounded access check is a separate, read-only path. A 20-second
 `RunBudget` caps it at four API calls and 20,000 returned samples, while the
 implementation normally uses exactly the aggregate Durable Objects and Workers
 Analytics requests and optionally a Billing Read request. A D1 lease prevents
 overlap and a 15-minute D1 cache prevents repeated button clicks from repeating
-the Cloudflare queries. Suggested warning, critical, and emergency budgets add
-25%, 75%, and 150% headroom to measurable prior-24-hour cost. Missing or
-zero-cost families keep their existing draft values, and partial account data
-never overwrites the account-wide draft budget.
+the Cloudflare queries. The risk-tolerance step reads the stored daily series
+after this import. It performs no Cloudflare requests.
 
-Access verification and draft mutation are separate client actions. The first
+Access verification and policy mutation are separate client actions. The first
 screen initially presents a single bounded check, then progressively reveals a
 compact result list and only the relevant remediation. Reauthorizing
 OAuth invalidates the 15-minute access cache. A Billing Read token submitted in
 setup is tested against the bound account before its AES-GCM envelope is stored
 under `billing_credentials` in D1; it is never returned to the client. A Worker
-secret with the same purpose takes precedence. Only the explicit historical
-usage action on the later account-budget screen copies suggestions into
-the editable policy draft.
+secret with the same purpose takes precedence.
 
 Scoped budgets take precedence over family defaults. Per-object Durable Object
 cost also inherits its namespace budget when no exact-object budget exists.

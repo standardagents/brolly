@@ -11,6 +11,12 @@ export const DEFAULT_POLICY: Policy = {
   accountDailySpend: { warning: 5, critical: 12.5, emergency: 25 },
   familyDailySpend: DEFAULT_FAMILY_DAILY_SPEND,
   assetDailySpend: {},
+  riskTolerance: {
+    preset: "balanced",
+    percentOfTypical: { warning: 150, critical: 350, emergency: 800 },
+    baseline: { computedAt: 0, windowDays: 90 },
+  },
+  limits: { day: {}, cycle: {} },
   thresholds: [
     { metric: "rows_read", windowMs: 5 * 60_000, warning: 1_000_000, critical: 2_500_000, emergency: 5_000_000, minimumBaselineSamples: 12, anomalyMultiplier: 8 },
     { metric: "rows_written", windowMs: 5 * 60_000, warning: 5_000, critical: 12_500, emergency: 25_000, minimumBaselineSamples: 12, anomalyMultiplier: 8 },

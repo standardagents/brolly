@@ -40,11 +40,11 @@ export function useUsageSeries(token: string, scope: string): UsageSeriesState {
 }
 
 export function costSeries(data: UsageSeriesResponse): DayPoint[] {
-  return data.series.map(point => ({ day: point.day, value: point.costUsd }));
+  return data.series.map(point => ({ day: point.day, value: point.costUsd, sealed: point.sealed }));
 }
 
 export function metricSeries(data: UsageSeriesResponse, metricId: string): DayPoint[] {
-  return data.series.map(point => ({ day: point.day, value: point.metrics[metricId] ?? 0 }));
+  return data.series.map(point => ({ day: point.day, value: point.metrics[metricId] ?? 0, sealed: point.sealed }));
 }
 
 /** Billable metric ids present in the series, most-used first. */

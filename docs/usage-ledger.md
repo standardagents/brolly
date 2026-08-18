@@ -72,6 +72,13 @@ maps keyed by alert-level ID. Materialization iterates the ordered board and
 writes one line for each level with a value. A missing value produces no line.
 Each line keeps its level ID and receives priority `position * 10`.
 
+The onboarding policy also stores one shared risk-tolerance percentage map and
+daily or billing-cycle chart maps for each account, product, and resource
+scope. Empty charts use the median nonzero daily history or the median of at
+least two fully covered completed cycles. Saved chart maps remain independent
+of later tolerance changes. Policy migration writes these maps and their switch
+states to the alert-rule and alert-line tables.
+
 An alert level has a unique case-insensitive label and ordered entries. Warning,
 Critical, and Emergency are seeded levels. Custom levels use the same behavior.
 The board permits eight levels and retains one level when a column is deleted.

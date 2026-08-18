@@ -77,19 +77,19 @@ entered there is verified before
 it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
 the installation's D1. The next step imports Cloudflare's available 90-day
 usage and billing history with exact per-collector progress. Setup can continue
-while that bounded job runs in the background. The account-budget screen then
-offers historical usage suggestions for the editable draft. An operator may
-instead continue supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which
-takes precedence over the D1 credential.
+while that bounded job runs in the background. Risk tolerance uses the imported
+history to seed daily and billing-cycle limits. An operator may continue
+supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which takes precedence
+over the D1 credential.
 
 The setup wizard has seven steps:
 
 1. Connect Cloudflare and verify monitoring access.
 2. Add alert channels. The first Twilio, Cloudflare Email, Resend, or Postmark channel saves its account credentials; later channels reuse that account and ask for a destination and label. Discord, Slack, and generic webhooks use one URL per channel.
 3. Arrange the alert level board. Warning, Critical, and Emergency start as empty columns. Custom columns can be inserted, renamed, reordered, or removed while one column remains. Channel entries carry their own repeat interval. Prepare and Auto entries select reversible controls for eligible Workers, Durable Objects, and Queues.
-4. Set account spend limits.
-5. Set product spend and usage limits.
-6. Set resource spend and usage limits.
+4. Choose Conservative, Balanced, or Growth risk tolerance. The shared percentages apply to every cost and billable usage chart.
+5. Set daily cost and billable usage limits for the account, products, and resources.
+6. Set billing-cycle cost and billable usage limits for the same scopes.
 7. Install the shutdown fuse through the generated coding-agent handoff.
 
 Each level includes entries from the levels before it. A firing level therefore

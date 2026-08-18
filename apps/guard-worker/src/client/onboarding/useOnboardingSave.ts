@@ -8,6 +8,7 @@ export function useOnboardingSave(
   data: OnboardingData,
   policy: Policy,
   integrations: Record<string, RuntimeIntegration>,
+  editing: boolean,
   onSaved: () => Promise<void>,
 ) {
   const [busy, setBusy] = useState(false);
@@ -17,17 +18,18 @@ export function useOnboardingSave(
     setBusy(true);
     setError("");
     try {
-      await api("/api/onboarding", token, {
-        method: "POST",
-        body: JSON.stringify({
-          policy: { ...policy, version: new Date().toISOString() },
-          integrations: data.scopedAssets.map(asset => ({
-            family: asset.family,
-            id: asset.id,
-            workerScript: integrations[asset.key]?.workerScript || undefined,
-            installed: integrations[asset.key]?.installed === true,
-          })),
-        }),
+      const body = {
+        policy: { ...policy, version: new Date().toISOString() },
+        integrations: data.scopedAssets.map(asset => ({
+          family: asset.family,
+          id: asset.id,
+          workerScript: integrations[asset.key]?.workerScript || undefined,
+          installed: integrations[asset.key]?.installed === true,
+        })),
+      };
+      await api(editing ? "/api/policy" : "/api/onboarding", token, {
+        method: editing ? "PUT" : "POST",
+        body: JSON.stringify(body),
       });
       await onSaved();
     } catch (cause) {
@@ -35,7 +37,7 @@ export function useOnboardingSave(
     } finally {
       setBusy(false);
     }
-  }, [data.scopedAssets, integrations, onSaved, policy, token]);
+  }, [data.scopedAssets, editing, integrations, onSaved, policy, token]);
 
   return { busy, error, save };
 }

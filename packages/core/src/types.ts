@@ -46,11 +46,39 @@ export interface Threshold {
 
 export type SpendLimits = Record<string, number>;
 
+export type RiskTolerancePreset = "conservative" | "balanced" | "growth" | "custom";
+
+export interface RiskTolerance {
+  preset: RiskTolerancePreset;
+  /** Alert-level ID to percent of typical usage. A value of 150 means 1.5x. */
+  percentOfTypical: Record<string, number>;
+  /** Historical baseline window captured when the tolerance was configured. */
+  baseline: { computedAt: number; windowDays: number };
+}
+
+export interface ScopeLimits {
+  cost: SpendLimits;
+  usage: Record<string, SpendLimits>;
+  costEnabled?: boolean;
+  usageEnabled?: Record<string, boolean>;
+  costLevelEnabled?: Record<string, boolean>;
+  usageLevelEnabled?: Record<string, Record<string, boolean>>;
+}
+
+export interface PolicyLimits {
+  day: Record<string, ScopeLimits>;
+  cycle: Record<string, ScopeLimits>;
+}
+
 export interface Policy {
   version: string;
   accountDailySpend: SpendLimits;
   familyDailySpend?: Record<string, SpendLimits>;
   assetDailySpend?: Record<string, SpendLimits>;
+  /** Missing on older installations, where the balanced preset applies. */
+  riskTolerance?: RiskTolerance;
+  /** Per-scope cost and billable-usage limits for daily and billing-cycle windows. */
+  limits?: PolicyLimits;
   thresholds: Threshold[];
 }
 

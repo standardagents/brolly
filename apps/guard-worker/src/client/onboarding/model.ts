@@ -1,4 +1,5 @@
-import type { AlertLevel, FixedSpendLimits, OnboardingData, Policy, SpendLimits, Threshold } from "../types";
+import type { AlertLevel, FixedSpendLimits, OnboardingData, Policy, ScopeLimits, SpendLimits, Threshold } from "../types";
+import { normalizeRiskTolerance } from "./risk-tolerance";
 
 export const LIMIT_ROWS = [
   { metric: "projected_daily_cost_usd", windowMs: 86_400_000, label: "Projected cost per Durable Object", unit: "USD / day", defaults: [0.5, 2, 5] },
@@ -44,8 +45,16 @@ export function ensureSpendLimits(value: SpendLimits | undefined, levels: AlertL
   }));
 }
 
-export function preparePolicy(policy: Policy, families: string[], scopedAssets: OnboardingData["scopedAssets"], levels: AlertLevel[] = DEFAULT_ALERT_LEVELS): Policy {
+export function preparePolicy(
+  policy: Policy,
+  families: string[],
+  scopedAssets: OnboardingData["scopedAssets"],
+  levels: AlertLevel[] = DEFAULT_ALERT_LEVELS,
+  preserveLegacyCost = true,
+): Policy {
   const next = structuredClone(policy);
+  const order = levels.map(level => level.id);
+  next.riskTolerance = normalizeRiskTolerance(next.riskTolerance, order);
   next.accountDailySpend = ensureSpendLimits(next.accountDailySpend, levels, { warning: 5, critical: 12.5, emergency: 25 });
   next.familyDailySpend ??= {};
   next.assetDailySpend ??= {};
@@ -55,8 +64,30 @@ export function preparePolicy(policy: Policy, families: string[], scopedAssets: 
   for (const asset of scopedAssets) {
     next.assetDailySpend[asset.key] = ensureSpendLimits(next.assetDailySpend[asset.key], levels, next.familyDailySpend[asset.family]);
   }
+  next.limits ??= { day: {}, cycle: {} };
+  next.limits.day ??= {};
+  next.limits.cycle ??= {};
+  ensureScopeLimits(next.limits.day, "account", preserveLegacyCost ? next.accountDailySpend : {});
+  ensureScopeLimits(next.limits.cycle, "account");
+  for (const family of families) {
+    ensureScopeLimits(next.limits.day, `family:${family}`, preserveLegacyCost ? next.familyDailySpend[family] : {});
+    ensureScopeLimits(next.limits.cycle, `family:${family}`);
+  }
+  for (const asset of scopedAssets) {
+    ensureScopeLimits(next.limits.day, `asset:${asset.key}`, preserveLegacyCost ? next.assetDailySpend[asset.key] : {});
+    ensureScopeLimits(next.limits.cycle, `asset:${asset.key}`);
+  }
   for (const row of LIMIT_ROWS) next.thresholds = replaceThreshold(next.thresholds, findThreshold(next, row.metric, row.windowMs, row.defaults));
   return next;
+}
+
+function ensureScopeLimits(scopes: Record<string, ScopeLimits>, scope: string, legacyCost: SpendLimits = {}): void {
+  const current = scopes[scope];
+  scopes[scope] = {
+    ...current,
+    cost: current?.cost ?? { ...legacyCost },
+    usage: current?.usage ?? {},
+  };
 }
 export function prepareRuntimeIntegrations(assets: OnboardingData["scopedAssets"]): Record<string, RuntimeIntegration> {
   return Object.fromEntries(assets.map(asset => [asset.key, {

@@ -1,4 +1,4 @@
-import { METRIC_CATALOG, resourceId, type Policy, type SpendLimits, type Threshold } from "@standardagents/brolly-core";
+import { METRIC_CATALOG, resourceId, type Policy, type ScopeLimits, type SpendLimits, type Threshold } from "@standardagents/brolly-core";
 import { loadAlertLevels, type AlertLevel } from "./alert-levels.js";
 
 const MAX_BATCH = 100;
@@ -33,7 +33,9 @@ export async function migrateLegacyPolicyRules(
     accountId,
     targetResourceId: rootId,
     metricDefinitionId: "account:estimated_cost_usd",
-    limits: policy.accountDailySpend,
+    limits: chartCost(policy.limits?.day?.account, policy.accountDailySpend),
+    levelEnabled: policy.limits?.day?.account?.costLevelEnabled,
+    enabled: policy.limits?.day?.account?.costEnabled,
     levels,
     now,
   });
@@ -49,6 +51,7 @@ export async function migrateLegacyPolicyRules(
          auto_quarantine_policy,tier,excluded,collector_key,dataset,metadata_json
        ) VALUES(?1,?2,?3,?4,'product',?4,?5,?6,?6,'missing','none','unknown','inherit','unclassified',0,'migration','legacy-policy','{}')`,
     ).bind(productId, accountId, rootId, family, displayFamily(family), now));
+    const scope = policy.limits?.day?.[`family:${family}`];
     const limits = policy.familyDailySpend?.[family];
     if (!limits) continue;
     addSpendRule(db, statements, {
@@ -57,7 +60,9 @@ export async function migrateLegacyPolicyRules(
       accountId,
       targetResourceId: productId,
       metricDefinitionId: `${family}:estimated_cost_usd`,
-      limits,
+      limits: chartCost(scope, limits),
+      levelEnabled: scope?.costLevelEnabled,
+      enabled: scope?.costEnabled,
       levels,
       now,
     });
@@ -73,13 +78,16 @@ export async function migrateLegacyPolicyRules(
          AND resource_type LIKE ?4 ORDER BY last_seen_at DESC LIMIT 1`,
     ).bind(accountId, parsed.family, parsed.id, `%:${parsed.scope}`).first<{ id: string }>();
     if (!row) continue;
+    const scope = policy.limits?.day?.[`asset:${key}`];
     addSpendRule(db, statements, {
       id: legacyId("asset", key),
       key: `asset:${key}`,
       accountId,
       targetResourceId: row.id,
       metricDefinitionId: `${parsed.family}:estimated_cost_usd`,
-      limits,
+      limits: chartCost(scope, limits),
+      levelEnabled: scope?.costLevelEnabled,
+      enabled: scope?.costEnabled,
       levels,
       now,
     });
@@ -90,6 +98,46 @@ export async function migrateLegacyPolicyRules(
     for (const product of METRIC_CATALOG.filter(item => item.metrics.includes(threshold.metric))) {
       addUsageRule(db, statements, accountId, product.family, threshold, levels, now);
       ruleCount += 1;
+    }
+  }
+
+  if (policy.limits) {
+    for (const [period, scopes] of [["day", policy.limits.day], ["billing_cycle", policy.limits.cycle]] as const) {
+      for (const [scopeKey, scope] of Object.entries(scopes)) {
+        const target = await resolvePolicyScope(db, accountId, rootId, scopeKey);
+        if (!target) continue;
+        if (period === "billing_cycle" && Object.keys(scope.cost).length) {
+          addRule(db, statements, {
+            id: chartRuleId(period, scopeKey, "cost"),
+            key: `limits:${period}:${scopeKey}:cost`,
+            accountId,
+            targetResourceId: target.resourceId,
+            metricDefinitionId: `${target.family}:estimated_cost_usd`,
+            measurement: "estimated_cost",
+            period,
+            enabled: scope.costEnabled,
+            lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
+            now,
+          });
+          ruleCount += 1;
+        }
+        for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
+          if (!Object.keys(limits).length) continue;
+          addRule(db, statements, {
+            id: chartRuleId(period, scopeKey, `usage:${metricDefinitionId}`),
+            key: `limits:${period}:${scopeKey}:usage:${metricDefinitionId}`,
+            accountId,
+            targetResourceId: target.resourceId,
+            metricDefinitionId,
+            measurement: "usage",
+            period,
+            enabled: scope.usageEnabled?.[metricDefinitionId],
+            lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
+            now,
+          });
+          ruleCount += 1;
+        }
+      }
     }
   }
 
@@ -107,6 +155,34 @@ export async function migrateLegacyPolicyRules(
   return ruleCount;
 }
 
+function chartCost(scope: ScopeLimits | undefined, fallback: SpendLimits): SpendLimits {
+  return scope && Object.keys(scope.cost).length ? scope.cost : fallback;
+}
+
+async function resolvePolicyScope(
+  db: D1Database,
+  accountId: string,
+  rootId: string,
+  scopeKey: string,
+): Promise<{ resourceId: string; family: string } | null> {
+  if (scopeKey === "account") return { resourceId: rootId, family: "account" };
+  const family = scopeKey.match(/^family:(.+)$/)?.[1];
+  if (family) return { resourceId: resourceId(accountId, family, "product", family), family };
+  const assetKey = scopeKey.match(/^asset:(.+)$/)?.[1];
+  const asset = assetKey ? parseAssetBudgetKey(assetKey) : null;
+  if (!asset) return null;
+  const row = await db.prepare(
+    `SELECT id FROM resources
+     WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+       AND resource_type LIKE ?4 ORDER BY last_seen_at DESC LIMIT 1`,
+  ).bind(accountId, asset.family, asset.id, `%:${asset.scope}`).first<{ id: string }>();
+  return row ? { resourceId: row.id, family: asset.family } : null;
+}
+
+function chartRuleId(period: "day" | "billing_cycle", scope: string, dimension: string): string {
+  return `policy:${period}:${encodeURIComponent(scope)}:${encodeURIComponent(dimension)}`;
+}
+
 function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: {
   id: string;
   key: string;
@@ -114,6 +190,8 @@ function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: 
   targetResourceId: string;
   metricDefinitionId: string;
   limits: SpendLimits;
+  levelEnabled?: Record<string, boolean>;
+  enabled?: boolean;
   levels: AlertLevel[];
   now: number;
 }): void {
@@ -121,7 +199,8 @@ function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: 
     ...input,
     measurement: "estimated_cost",
     period: "day",
-    lines: materializedSpendLines(input.limits, input.levels),
+    enabled: input.enabled,
+    lines: materializedSpendLines(input.limits, input.levels, input.levelEnabled),
   });
 }
 
@@ -164,6 +243,7 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
   metricDefinitionId: string;
   measurement: "usage" | "estimated_cost";
   period: "day" | "billing_cycle";
+  enabled?: boolean;
   lines: Array<{ levelId: string; label: string; color: string; priority: number; value: number; enabled: boolean }>;
   now: number;
 }): void {
@@ -172,15 +252,15 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
        id,account_id,target_resource_id,target_selector_json,metric_definition_id,measurement,period,
        notification_target_ids_json,auto_quarantine,auto_quarantine_contributors,confirmation_window_ms,
        enabled,legacy_policy_key,created_at,updated_at
-     ) VALUES(?1,?2,?3,?4,?5,?6,?7,'[]',0,0,300000,1,?8,?9,?9)
+     ) VALUES(?1,?2,?3,?4,?5,?6,?7,'[]',0,0,300000,?8,?9,?10,?10)
      ON CONFLICT(id) DO UPDATE SET
        target_resource_id=excluded.target_resource_id,target_selector_json=excluded.target_selector_json,
        metric_definition_id=excluded.metric_definition_id,measurement=excluded.measurement,
-       period=excluded.period,enabled=1,retired=0,
+       period=excluded.period,enabled=excluded.enabled,retired=0,
        legacy_policy_key=excluded.legacy_policy_key,updated_at=excluded.updated_at`,
   ).bind(
     input.id, input.accountId, input.targetResourceId, input.targetSelector ? JSON.stringify(input.targetSelector) : null,
-    input.metricDefinitionId, input.measurement, input.period, input.key, input.now,
+    input.metricDefinitionId, input.measurement, input.period, input.enabled === false ? 0 : 1, input.key, input.now,
   ));
   statements.push(db.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE alert_rule_id=?1`).bind(input.id, input.now));
   for (const line of input.lines) {
@@ -199,7 +279,7 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
   }
 }
 
-export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[]): Array<{
+export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[], levelEnabled?: Record<string, boolean>): Array<{
   levelId: string;
   label: string;
   color: string;
@@ -208,7 +288,7 @@ export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[]
   enabled: boolean;
 }> {
   return levels.flatMap((level, index) => finiteLimit(limits[level.id])
-    ? [{ levelId: level.id, label: level.label, color: levelColor(index, levels.length), priority: level.position * 10, value: limits[level.id]!, enabled: true }]
+    ? [{ levelId: level.id, label: level.label, color: levelColor(index, levels.length), priority: level.position * 10, value: limits[level.id]!, enabled: levelEnabled?.[level.id] !== false }]
     : []);
 }
 

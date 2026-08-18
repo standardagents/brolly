@@ -16,6 +16,9 @@ import { notificationApiRoute } from "./notification-api.js";
 import { alertLevelsApiRoute, loadAlertLevels } from "./alert-levels.js";
 import { CloudflareClient } from "./cloudflare.js";
 
+type RuntimeIntegrationInput = { family: "workers" | "durable_objects"; id: string; workerScript?: string; installed: boolean };
+type RuntimeAssetRow = { family: string; asset_id: string; scope: AssetRef["scope"]; metadata_json: string };
+
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
@@ -145,37 +148,20 @@ export default {
     }
 
     if (url.pathname === "/api/onboarding" && request.method === "POST") {
-      const body = await request.json<{ policy: Policy; integrations?: Array<{ family: "workers" | "durable_objects"; id: string; workerScript?: string; installed: boolean }> }>();
+      const body = await request.json<{ policy: Policy; integrations?: RuntimeIntegrationInput[] }>();
       const alertLevels = await loadAlertLevels(env.DB);
-      if (!validPolicy(body.policy, true, alertLevels.map(level => level.id))) return Response.json({ error: "Every account, product, resource, and object limit must be finite, nonnegative, and ordered by alert level" }, { status: 400 });
-      const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<{ family: string; asset_id: string; scope: AssetRef["scope"]; metadata_json: string }>();
+      if (!validPolicy(body.policy, true, alertLevels.map(level => level.id))) return Response.json({ error: "Policy limits and risk tolerance must be finite, in range, and ordered by alert level" }, { status: 400 });
+      const scopedAssets = await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<RuntimeAssetRow>();
       const missingScopedBudgets = scopedAssets.results.filter(asset => !body.policy.assetDailySpend?.[assetBudgetKey({ family: asset.family, scope: asset.scope, id: asset.asset_id })]);
       if (missingScopedBudgets.length) return Response.json({ error: `Set limits for every discovered Worker and Durable Object namespace (${missingScopedBudgets.length} missing)` }, { status: 400 });
       const now = Date.now();
-      const knownAssets = new Map(scopedAssets.results.map(asset => [`${asset.family}:${asset.asset_id}`, asset]));
-      const integrationStatements: D1PreparedStatement[] = [];
-      for (const integration of body.integrations ?? []) {
-        const asset = knownAssets.get(`${integration.family}:${integration.id}`);
-        if (!asset) return Response.json({ error: `Unknown runtime integration target ${integration.family}/${integration.id}` }, { status: 400 });
-        const workerScript = integration.workerScript?.trim();
-        if (workerScript && !/^[A-Za-z0-9_-]+$/.test(workerScript)) return Response.json({ error: `Invalid Worker script name for ${integration.id}` }, { status: 400 });
-        let tags: Record<string, string>;
-        try { tags = JSON.parse(asset.metadata_json || "{}") as Record<string, string>; } catch { tags = {}; }
-        const discoveredWorker = integration.family === "workers" ? integration.id : tags.cloudflareWorkerScript;
-        if (workerScript && discoveredWorker && workerScript !== discoveredWorker) return Response.json({ error: `Cloudflare maps ${integration.id} to ${discoveredWorker}, not ${workerScript}` }, { status: 409 });
-        delete tags.workerScript;
-        if (integration.installed && discoveredWorker) {
-          tags.brollyFuse = "true";
-        } else {
-          delete tags.brollyFuse;
-        }
-        integrationStatements.push(env.DB.prepare(`UPDATE assets SET metadata_json=?3,seen_at=?4 WHERE family=?1 AND asset_id=?2 AND account_id=?5`).bind(integration.family, integration.id, JSON.stringify(tags), now, env.BROLLY_ACCOUNT_ID));
-      }
+      const integrationUpdates = prepareRuntimeIntegrationUpdates(env, scopedAssets.results, body.integrations ?? [], now);
+      if ("error" in integrationUpdates) return Response.json({ error: integrationUpdates.error }, { status: integrationUpdates.status });
       await env.DB.batch([
         env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(body.policy), now),
         env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('onboarding_complete','true',?1) ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at`).bind(now),
       ]);
-      for (let index = 0; index < integrationStatements.length; index += 100) await env.DB.batch(integrationStatements.slice(index, index + 100));
+      for (let index = 0; index < integrationUpdates.statements.length; index += 100) await env.DB.batch(integrationUpdates.statements.slice(index, index + 100));
       const ledger = new LedgerStore(env.DB);
       await ledger.syncMetricCatalog();
       await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, body.policy, true);
@@ -250,15 +236,24 @@ export default {
     }
 
     if (url.pathname === "/api/policy" && request.method === "PUT") {
-      const policy = await request.json<Policy>();
+      const body = await request.json<Policy | { policy: Policy; integrations?: RuntimeIntegrationInput[] }>();
+      const policy = "policy" in body ? body.policy : body;
+      const integrations = "policy" in body ? body.integrations ?? [] : [];
       const alertLevels = await loadAlertLevels(env.DB);
       if (!validPolicy(policy, false, alertLevels.map(level => level.id))) {
         return Response.json({ error: "Invalid policy" }, { status: 400 });
       }
-      await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(policy), Date.now()).run();
+      const now = Date.now();
+      const scopedAssets = integrations.length
+        ? await env.DB.prepare(`SELECT family,asset_id,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') LIMIT 2500`).all<RuntimeAssetRow>()
+        : { results: [] as RuntimeAssetRow[] };
+      const integrationUpdates = prepareRuntimeIntegrationUpdates(env, scopedAssets.results, integrations, now);
+      if ("error" in integrationUpdates) return Response.json({ error: integrationUpdates.error }, { status: integrationUpdates.status });
+      await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('policy',?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(JSON.stringify(policy), now).run();
+      for (let index = 0; index < integrationUpdates.statements.length; index += 100) await env.DB.batch(integrationUpdates.statements.slice(index, index + 100));
       await new LedgerStore(env.DB).syncMetricCatalog();
       await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, policy, true);
-      await audit(env.DB, "admin", "policy.update", policy.version, { levels: alertLevels.length, thresholds: policy.thresholds.length });
+      await audit(env.DB, "admin", "policy.update", policy.version, { levels: alertLevels.length, thresholds: policy.thresholds.length, runtimeIntegrations: integrations.filter(item => item.installed).length });
       return Response.json({ ok: true, policy });
     }
 
@@ -511,11 +506,39 @@ function isBrollyWorker(env: Env, family: string, id: string): boolean {
   return id === (env.BROLLY_SELF_WORKER_NAME ?? "brolly-guard") || id === "brolly-guard" || id.startsWith("brolly-guard-");
 }
 
+function prepareRuntimeIntegrationUpdates(
+  env: Env,
+  assets: RuntimeAssetRow[],
+  integrations: RuntimeIntegrationInput[],
+  now: number,
+): { statements: D1PreparedStatement[] } | { error: string; status: number } {
+  const knownAssets = new Map(assets.map(asset => [`${asset.family}:${asset.asset_id}`, asset]));
+  const statements: D1PreparedStatement[] = [];
+  for (const integration of integrations) {
+    const asset = knownAssets.get(`${integration.family}:${integration.id}`);
+    if (!asset) return { error: `Unknown runtime integration target ${integration.family}/${integration.id}`, status: 400 };
+    const workerScript = integration.workerScript?.trim();
+    if (workerScript && !/^[A-Za-z0-9_-]+$/.test(workerScript)) return { error: `Invalid Worker script name for ${integration.id}`, status: 400 };
+    let tags: Record<string, string>;
+    try { tags = JSON.parse(asset.metadata_json || "{}") as Record<string, string>; } catch { tags = {}; }
+    const discoveredWorker = integration.family === "workers" ? integration.id : tags.cloudflareWorkerScript;
+    if (workerScript && discoveredWorker && workerScript !== discoveredWorker) {
+      return { error: `Cloudflare maps ${integration.id} to ${discoveredWorker}, not ${workerScript}`, status: 409 };
+    }
+    delete tags.workerScript;
+    if (integration.installed && discoveredWorker) tags.brollyFuse = "true";
+    else delete tags.brollyFuse;
+    statements.push(env.DB.prepare(`UPDATE assets SET metadata_json=?3,seen_at=?4 WHERE family=?1 AND asset_id=?2 AND account_id=?5`)
+      .bind(integration.family, integration.id, JSON.stringify(tags), now, env.BROLLY_ACCOUNT_ID));
+  }
+  return { statements };
+}
+
 async function audit(db: D1Database, actor: string, action: string, target: string, detail: unknown): Promise<void> {
   await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?1,?2,?3,?4,?5,?6)`).bind(crypto.randomUUID(), actor, action, target, JSON.stringify(detail), Date.now()).run();
 }
 
-function validPolicy(policy: Policy, requireEveryFamily = false, levelIds: string[] = ["warning", "critical", "emergency"]): boolean {
+export function validPolicy(policy: Policy, requireEveryFamily = false, levelIds: string[] = ["warning", "critical", "emergency"]): boolean {
   const finiteNonnegative = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const validSpend = (spend: Record<string, number> | undefined) => Boolean(spend)
     && levelIds.every(levelId => finiteNonnegative(spend?.[levelId]))
@@ -526,6 +549,31 @@ function validPolicy(policy: Policy, requireEveryFamily = false, levelIds: strin
   if (requireEveryFamily && METRIC_CATALOG.some(definition => !familySpend[definition.family])) return false;
   if (Object.values(familySpend).some(limit => !validSpend(limit))) return false;
   if (Object.values(policy.assetDailySpend ?? {}).some(limit => !validSpend(limit))) return false;
+  if (policy.riskTolerance) {
+    const tolerance = policy.riskTolerance;
+    if (!["conservative", "balanced", "growth", "custom"].includes(tolerance.preset)) return false;
+    if (!tolerance.percentOfTypical || !levelIds.every(levelId => {
+      const value = tolerance.percentOfTypical[levelId];
+      return typeof value === "number" && Number.isFinite(value) && value >= 100 && value <= 100_000;
+    })) return false;
+    if (!levelIds.every((levelId, index) => index === 0 || tolerance.percentOfTypical[levelIds[index - 1]!]! < tolerance.percentOfTypical[levelId]!)) return false;
+    if (!tolerance.baseline || !finiteNonnegative(tolerance.baseline.computedAt)
+      || !finiteNonnegative(tolerance.baseline.windowDays) || tolerance.baseline.windowDays <= 0) return false;
+  }
+  if (policy.limits) {
+    if (!policy.limits.day || !policy.limits.cycle) return false;
+    const validOptionalSpend = (spend: Record<string, number> | undefined) => !spend || Object.keys(spend).length === 0 || validSpend(spend);
+    const validBooleanMap = (values: Record<string, boolean> | undefined) => !values || Object.values(values).every(value => typeof value === "boolean");
+    for (const scopes of [policy.limits.day, policy.limits.cycle]) {
+      if (!scopes || typeof scopes !== "object") return false;
+      for (const scope of Object.values(scopes)) {
+        if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some(value => !validOptionalSpend(value))) return false;
+        if (scope.costEnabled !== undefined && typeof scope.costEnabled !== "boolean") return false;
+        if (!validBooleanMap(scope.usageEnabled) || !validBooleanMap(scope.costLevelEnabled)) return false;
+        if (scope.usageLevelEnabled && Object.values(scope.usageLevelEnabled).some(value => !validBooleanMap(value))) return false;
+      }
+    }
+  }
   return policy.thresholds.every(threshold => typeof threshold.metric === "string" && !!threshold.metric
     && finiteNonnegative(threshold.windowMs) && threshold.windowMs > 0
     && [threshold.warning, threshold.critical, threshold.emergency, threshold.minimumBaselineSamples, threshold.anomalyMultiplier]

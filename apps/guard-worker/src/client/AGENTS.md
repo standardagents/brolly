@@ -15,6 +15,16 @@ directory.
   History is per chart, remains in memory, and holds at most 50 snapshots.
 - Usage dimensions require separate chart histories. Preserve the metric key on
   the `LimitsChart` instance when tabs switch.
+- Risk tolerance seeds missing values from the median nonzero history. Saved
+  values remain detached. Reset to tolerance records one undoable chart change.
+- Billing-cycle defaults keep daily limits times the cycle length as a default
+  lower bound. Cycle edits have no hard daily floor. A lower cycle value shows a
+  non-blocking reference note.
+- A dimension-row diamond is the level switch for that dimension. Disabled
+  diamonds remain keyboard and pointer accessible.
+- First-run setup saves through the onboarding route. The reopened Budget
+  settings flow saves through the policy PUT route. Both paths materialize
+  chart maps into ledger alert rules.
 - Read-only charts expose labels and lines without handles, fields, history
   controls, or history keyboard shortcuts.
 

@@ -57,7 +57,7 @@ export function summarizeCost(data: UsageSeriesResponse): DimensionSummary {
  */
 const ROW_GRID = "grid grid-cols-[minmax(0,1fr)_72px_80px_212px_36px] items-center gap-3";
 
-export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled, onValueChange, window = "day", cycles, today }: {
+export function DimensionRows({ dimensions, levels, values, selected, onSelect, renderChart, accent = "#1a9c8c", label = "Usage dimensions", enabled, onToggle, levelEnabled, onToggleLevel, onValueChange, window = "day", cycles, today }: {
   dimensions: DimensionSummary[];
   levels: LimitsChartLevel[];
   values: Record<string, LevelValues>;
@@ -72,6 +72,8 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
   onToggle?(id: string, next: boolean): void;
   /** id → levelId → active. Inactive levels render as dimmed chips. */
   levelEnabled?: Record<string, Record<string, boolean>>;
+  /** Toggle one alert level for one dimension through its diamond. */
+  onToggleLevel?(id: string, levelId: string, next: boolean): void;
   /** Click-to-edit for the level chips. Omit to render them read-only. */
   onValueChange?(id: string, levelId: string, next: number): void;
   /** Mini chart mode: daily bars, or the running total per billing cycle. */
@@ -106,6 +108,7 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
                   const value = values[dimension.id]?.[level.id];
                   return (
                     <LevelChip key={level.id} level={level} value={value} on={levelOn} unit={dimension.unit}
+                      onToggle={onToggleLevel && on ? next => onToggleLevel(dimension.id, level.id, next) : undefined}
                       onCommit={onValueChange && on && levelOn && value !== undefined ? next => onValueChange(dimension.id, level.id, next) : undefined} />
                   );
                 })}
@@ -158,7 +161,7 @@ function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; on
 }
 
 /** One level value in a row: click to edit in place, Enter/blur commits, Escape cancels. */
-function LevelChip({ level, value, on, unit, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onCommit?(next: number): void }) {
+function LevelChip({ level, value, on, unit, onToggle, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onToggle?(next: boolean): void; onCommit?(next: number): void }) {
   const [draft, setDraft] = useState<string | null>(null);
   const shown = value === undefined ? "–" : compactValue(value, unit);
   const commit = () => {
@@ -169,7 +172,15 @@ function LevelChip({ level, value, on, unit, onCommit }: { level: LimitsChartLev
   };
   return (
     <span className={`inline-flex items-center gap-1 text-[10.5px] tabular-nums text-muted ${on ? "" : "opacity-40 line-through"}`} title={`${level.label} limit${on ? "" : " (off)"}${onCommit ? " · click to edit" : ""}`}>
-      <i className="size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" />
+      {onToggle ? <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={`${on ? "Disable" : "Enable"} ${level.label} for this dimension`}
+        className="size-3 flex-none cursor-pointer rounded-[2px] p-[3px] outline-none focus-visible:ring-2 focus-visible:ring-orange focus-visible:ring-offset-1"
+        onClick={event => { event.stopPropagation(); onToggle(!on); }}
+      ><i className="block size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" /></button>
+        : <i className="size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" />}
       {onCommit ? (
         <input
           className="w-[5ch] rounded-[3px] border border-transparent bg-transparent px-0.5 text-[10.5px] tabular-nums text-muted outline-none hover:border-line focus:border-orange focus:bg-field focus:text-ink"

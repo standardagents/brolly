@@ -4,7 +4,7 @@
  * `[startsAt, endsAt)` epoch milliseconds.
  */
 
-export interface DayPoint { day: string; value: number }
+export interface DayPoint { day: string; value: number; sealed?: boolean }
 export interface CycleBounds { startsAt: number; endsAt: number }
 
 export interface CumulativePoint extends DayPoint {

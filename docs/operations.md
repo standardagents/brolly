@@ -240,14 +240,20 @@ The setup sequence is:
 1. **Connect Cloudflare.** Verify monitoring access for the bound account.
 2. **Alert channels.** Add labeled destinations. A provider account is saved once for Twilio, Cloudflare Email, Resend, or Postmark. Later channels of that kind reuse the saved account. Discord, Slack, and generic webhooks use one URL per channel.
 3. **Alert levels.** Arrange the Warning, Critical, and Emergency columns. Add, rename, reorder, or delete columns within the eight-level limit. Add channels with per-entry intervals and add Prepare or Auto action entries.
-4. **Account spend.** Set one limit for each current alert level.
-5. **Product spend and usage.** Set one limit for each current alert level.
-6. **Resource spend and usage.** Set one limit for each current alert level.
+4. **Risk tolerance.** Choose the shared percentage curve for every current alert level.
+5. **Daily limits.** Set cost and billable usage limits for the account, products, and resources.
+6. **Billing-cycle limits.** Set cost and billable usage limits for the same scopes.
 7. **Shutdown fuse.** Review the resource-aware coding-agent handoff and install the runtime integration through the normal application release process.
 
 The history import starts when Alert channels opens. The sidebar shows two
 bounded progress rows until the import completes. Channel and level edits remain
 available while ingestion runs.
+
+Balanced is the default for existing installations. New values use the median
+nonzero daily history or the median of complete billing cycles. Saved chart
+values stay fixed when risk tolerance changes. Reset to tolerance affects one
+chart and can be undone. A cycle limit may sit below its daily counterpart. The
+chart displays a single-day warning in that state.
 
 Cloudflare Email requires a dedicated API token with Email Sending permission.
 Brolly verifies token activity through `GET /user/tokens/verify` without sending

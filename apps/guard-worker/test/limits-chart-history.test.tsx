@@ -20,14 +20,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function renderChart(onChange: (value: Record<string, number>) => void, readOnly = false) {
+async function renderChart(onChange: (value: Record<string, number>) => void, readOnly = false, resetToTolerance?: Record<string, number>) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
     root!.render(
       <LimitsChart kind="cost" unit="USD" window="day" series={series} today="2026-08-18"
-        levels={levels} value={initial} onChange={onChange} readOnly={readOnly} />,
+        levels={levels} value={initial} onChange={onChange} readOnly={readOnly} resetToTolerance={resetToTolerance} />,
     );
   });
   return container;
@@ -57,5 +57,22 @@ describe("LimitsChart history shortcuts", () => {
     const chart = container.querySelector("[data-limits-chart]") as HTMLDivElement;
     await act(async () => chart.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true })));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("records Reset to tolerance as one undoable chart change", async () => {
+    const onChange = vi.fn();
+    const reset = { warning: 15, critical: 35 };
+    const container = await renderChart(onChange, false, reset);
+    const chart = container.querySelector("[data-limits-chart]") as HTMLDivElement;
+    const button = [...container.querySelectorAll("button")].find(element => element.textContent === "Reset to tolerance")!;
+
+    await act(async () => button.click());
+    expect(onChange).toHaveBeenLastCalledWith(reset);
+
+    await act(async () => chart.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true })));
+    expect(onChange).toHaveBeenLastCalledWith(initial);
+
+    await act(async () => chart.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true })));
+    expect(onChange).toHaveBeenLastCalledWith(reset);
   });
 });

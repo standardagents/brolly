@@ -71,6 +71,11 @@ describe("LimitsChart", () => {
     expect(low).not.toMatch(/band-emergency"><rect[^>]*height="0"/);
   });
 
+  it("shows a non-blocking note when a cycle level is below its daily reference", () => {
+    const html = render({ window: "cycle", value: { warn: 10, critical: 40, emergency: 80 }, reference: { warn: 20, critical: 30, emergency: 60 } });
+    expect(html).toContain("Warn is below its daily limit ($20.00). A single day can trip this limit.");
+  });
+
   it("drops switched-off levels from the chart but keeps their field, dimmed", () => {
     const html = render({ levelEnabled: { critical: false }, onLevelEnabledChange: () => {} });
     expect((html.match(/role="slider"/g) ?? []).length).toBe(2);

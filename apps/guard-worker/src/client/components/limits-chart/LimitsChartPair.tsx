@@ -4,7 +4,7 @@ import { billableMetricIds, costSeries, metricSeries, useUsageSeries } from "./a
 import type { LevelValues } from "./levels";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
 import { DimensionRows, summarizeCost, summarizeDimensions } from "./UsageDimensions";
-import { defaultLevelValues, pushLevelValue } from "./defaults";
+import { defaultLevelValues, pushLevelValue, toleranceDefaults } from "./defaults";
 import { useLimitHistories } from "./use-limit-history";
 import { ProductIcon } from "../ui";
 
@@ -22,10 +22,12 @@ export interface LimitsChartPairProps {
   onCostChange(next: LevelValues): void;
   usage: UsageLimitValues;
   onUsageChange(next: UsageLimitValues): void;
-  /** Minimums per level for the cost chart (cycle ≥ daily). */
+  /** Daily values used to seed and annotate the cycle cost chart. */
   costFloor?: LevelValues;
-  /** Minimums per level and metric for the usage chart. */
+  /** Daily values used to seed and annotate cycle usage charts. */
   usageFloor?: UsageLimitValues;
+  /** levelId → percent of typical usage. */
+  tolerance?: LevelValues;
   readOnly?: boolean;
   /** metricId → monitored. Missing ids are monitored. Omit both to hide the switches. */
   usageEnabled?: Record<string, boolean>;
@@ -45,7 +47,7 @@ export interface LimitsChartPairProps {
  * the selected row expands into its chart, and each usage dimension has its
  * own limit map and an on/off switch. Below `md` the pair stacks.
  */
-export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: LimitsChartPairProps) {
+export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: LimitsChartPairProps) {
   const { data, loading, error } = useUsageSeries(token, scope);
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   // `undefined` = nothing chosen yet (first row opens); `null` = user collapsed everything.
@@ -86,11 +88,13 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
     if (!missing.length) return;
     const next = { ...usageRef.current };
     for (const id of missing) {
-      next[id] = defaultLevelValues(metricSeries(data, id), data.cycles, data.today, order, usageRef.current[id] ?? {}, usageFloor?.[id], scaleFloor(usageFloor?.[id]));
+      const series = metricSeries(data, id);
+      const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
+      next[id] = defaultLevelValues(series, data.cycles, data.today, order, usageRef.current[id] ?? {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance);
     }
     publishUsage(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when data or the level order changes
-  }, [data, metricIds, order, usageFloor]);
+  }, [data, metricIds, order, usageFloor, tolerance, window]);
 
   if (loading) {
     return <div className="grid h-[290px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>;
@@ -104,18 +108,27 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
   // and then ignore the real seed, so hold the chart until the floor is whole.
   const floorReady = (floor?: LevelValues) => window !== "cycle" || (!!floor && order.every(id => Number.isFinite(floor[id])));
   const waitingNote = <div className="grid h-[120px] place-content-center text-center text-[13px] text-faint">Set the daily limits first. Billing-cycle limits start from them.</div>;
+  const costHistory = costSeries(data);
+  const costTolerance = tolerance ? toleranceDefaults(costHistory, data.cycles, data.today, order, tolerance, window) : undefined;
+  const costReset = costTolerance ? defaultLevelValues(costHistory, data.cycles, data.today, order, {}, undefined, scaleFloor(costFloor), costTolerance) : undefined;
   const costChart = !floorReady(costFloor) ? waitingNote : (
-    <LimitsChart kind="cost" unit="USD" window={window} series={costSeries(data)} cycles={data.cycles} today={data.today}
-      levels={levels} value={cost} floor={costFloor} seed={scaleFloor(costFloor)} onChange={onCostChange} readOnly={readOnly}
+    <LimitsChart kind="cost" unit="USD" window={window} series={costHistory} cycles={data.cycles} today={data.today}
+      levels={levels} value={cost} seed={scaleFloor(costFloor)} tolerance={costTolerance} resetToTolerance={costReset}
+      reference={window === "cycle" ? costFloor : undefined} onChange={onCostChange} readOnly={readOnly}
       levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} history={histories("cost")} />
   );
-  const usageChart = (id: string) => !floorReady(usageFloor?.[id]) ? waitingNote : (
-    <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={metricSeries(data, id)}
-      cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} floor={usageFloor?.[id]} seed={scaleFloor(usageFloor?.[id])}
+  const usageChart = (id: string) => {
+    if (!floorReady(usageFloor?.[id])) return waitingNote;
+    const series = metricSeries(data, id);
+    const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
+    const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance) : undefined;
+    return <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={series}
+      cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id])}
+      tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined}
-      history={histories(id)} />
-  );
+      history={histories(id)} />;
+  };
   return (
     <div className="grid grid-cols-2 gap-5 max-md:grid-cols-1">
       <section className="min-w-0">
@@ -123,8 +136,9 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
         <DimensionRows dimensions={costDimension} levels={levels} values={{ cost }} selected={costOpen ? "cost" : null} onSelect={() => setCostOpen(open => !open)} renderChart={() => costChart} accent="#2f6fd6" label="Cost"
           enabled={{ cost: costEnabled }} onToggle={onCostEnabledChange && !readOnly ? (_, next) => onCostEnabledChange(next) : undefined}
           levelEnabled={{ cost: costLevelEnabled ?? {} }} window={window} cycles={data.cycles} today={data.today}
+          onToggleLevel={onCostLevelEnabledChange && !readOnly ? (_, levelId, next) => onCostLevelEnabledChange({ ...costLevelEnabled, [levelId]: next }) : undefined}
           onValueChange={readOnly ? undefined : (_, levelId, next) => {
-            const pushed = pushLevelValue(costSeries(data), data.cycles, data.today, order, cost, levelId, next, costFloor);
+            const pushed = pushLevelValue(costHistory, data.cycles, data.today, order, cost, levelId, next, window === "cycle" ? undefined : costFloor);
             histories("cost").seed(cost);
             histories("cost").record(pushed);
             onCostChange(pushed);
@@ -136,9 +150,10 @@ export function LimitsChartPair({ token, scope, family, window, levels, cost, on
           <DimensionRows dimensions={dimensions} levels={levels} values={usage} selected={metricId} onSelect={toggleMetric} renderChart={usageChart}
             enabled={usageEnabled} onToggle={onUsageEnabledChange && !readOnly ? (id, next) => onUsageEnabledChange({ ...usageEnabled, [id]: next }) : undefined}
             levelEnabled={usageLevelEnabled} window={window} cycles={data.cycles} today={data.today}
+            onToggleLevel={onUsageLevelEnabledChange && !readOnly ? (id, levelId, next) => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: { ...usageLevelEnabled?.[id], [levelId]: next } }) : undefined}
             onValueChange={readOnly ? undefined : (id, levelId, next) => {
               const current = usageRef.current[id] ?? {};
-              const pushed = pushLevelValue(metricSeries(data, id), data.cycles, data.today, order, current, levelId, next, usageFloor?.[id]);
+              const pushed = pushLevelValue(metricSeries(data, id), data.cycles, data.today, order, current, levelId, next, window === "cycle" ? undefined : usageFloor?.[id]);
               histories(id).seed(current);
               histories(id).record(pushed);
               changeUsage(id, pushed);

@@ -3,14 +3,13 @@ import { Brand, Button, Eyebrow, Icon, Notice } from "../components/ui";
 import type { OnboardingData } from "../types";
 import {
   AccessStep,
-  AccountBudgetStep,
-  ProductBudgetStep,
-  ResourceBudgetStep,
   RuntimeStep,
   StepActions,
 } from "./BudgetSteps";
 import { AlertsStep } from "./alerts";
 import { AlertLevelsStep, useAlertLevels } from "./levels";
+import { RiskToleranceStep } from "./RiskToleranceStep";
+import { LimitStep } from "./LimitSteps";
 import { GrantBillingAccessButton } from "./access";
 import { ImportProgress } from "./ingest";
 import { useNotificationTargets } from "../components/notifications";
@@ -21,16 +20,16 @@ import { useWizardNavigation } from "./useWizardNavigation";
 
 /**
  * Setup order. The first three steps establish access, alert channels, and
- * alert-level behavior. The spend and usage steps add threshold fidelity.
- * Their limits must descend (resource <= product <= account).
+ * alert-level behavior. Risk tolerance seeds the daily and billing-cycle
+ * charts that follow it.
  */
 const STEPS = [
   { key: "access", label: "Connect Cloudflare", preview: "Confirm the usage and billing APIs Brolly can read." },
   { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
   { key: "levels", label: "Alert levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
-  { key: "account", label: "Account spend", preview: "One dollar limit for the whole account." },
-  { key: "product", label: "Product spend & usage", preview: "Spend and usage limits for each Cloudflare product." },
-  { key: "resource", label: "Resource spend & usage", preview: "Limits for any single Worker or Durable Object." },
+  { key: "tolerance", label: "Risk tolerance", preview: "How far above typical usage each alert level starts." },
+  { key: "daily", label: "Daily limits", preview: "Cost and billable usage limits for each calendar day." },
+  { key: "cycle", label: "Billing-cycle limits", preview: "Cost and billable usage limits for each billing cycle." },
   { key: "runtime", label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
 ] as const;
 type StepKey = typeof STEPS[number]["key"];
@@ -62,7 +61,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   onLogout: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets));
+  const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets, undefined, data.complete));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   const board = useAlertLevels(token);
@@ -70,12 +69,12 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const channelReady = targets.targets.length > 0;
   const navigation = useWizardNavigation(STEPS.length, initialStep, editing);
   const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels);
-  const save = useOnboardingSave(token, data, policy, integrations, onSaved);
+  const save = useOnboardingSave(token, data, policy, integrations, editing, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
   const billingConnected = estimates.estimates?.access.billing.state === "connected";
 
   useEffect(() => {
-    if (board.levels.length) setPolicy(current => preparePolicy(current, data.families.map(item => item.family), data.scopedAssets, board.levels));
+    if (board.levels.length) setPolicy(current => preparePolicy(current, data.families.map(item => item.family), data.scopedAssets, board.levels, data.complete));
   }, [board.levels, data.families, data.scopedAssets]);
 
   const bodies: ReactNode[] = [
@@ -94,18 +93,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     />,
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
-    <AccountBudgetStep
-      data={data}
-      estimates={estimates.estimates}
-      policy={policy}
-      levels={board.levels}
-      setPolicy={setPolicy}
-      busy={estimates.busy}
-      notice={estimates.suggestionNotice}
-      onSuggest={() => void estimates.suggestLimits()}
-    />,
-    <ProductBudgetStep data={data} estimates={estimates.estimates} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
-    <ResourceBudgetStep data={data} estimates={estimates.estimates} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <LimitStep window="day" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <LimitStep window="cycle" token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
   ];
 
@@ -134,7 +124,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
-                {index === navigation.unlocked && index === stepIndex("account") && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
+                {index === navigation.unlocked && index === stepIndex("daily") && estimates.suggestionError && <Notice tone="error">{estimates.suggestionError}</Notice>}
                 {index === navigation.unlocked && index < STEPS.length - 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}
