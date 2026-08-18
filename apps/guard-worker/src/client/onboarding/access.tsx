@@ -334,18 +334,18 @@ function CapabilityPill({ status }: { status: CapabilityStatus }) {
 
 /**
  * Every cataloged service with a status light and, where it applies, a
- * control marker. The light says what Brolly can see: off until usage
+ * quarantine marker. The light says what Brolly can see: off until usage
  * monitoring is confirmed, yellow for usage triggers, green once billing access
- * adds dollar alerts. The marker says what Brolly can do: a shield where the
- * fuse can quarantine (Workers, Durable Objects), a pause glyph where the
- * consumer can be paused (Queues). Billing access changes the lights, never
- * the markers.
+ * adds dollar alerts. The shield says Brolly can quarantine the product
+ * (Workers, Durable Objects, Queues). Billing access changes the lights,
+ * never the markers.
  */
 // Bright status-light hues, deliberately hotter than the muted --good/--warn
 // text tokens so the dots read as lights in both themes.
 const LIGHT_GREEN = "bg-[#2fd05e] shadow-[0_0_6px_#2fd05e66]";
 const LIGHT_YELLOW = "bg-[#ffc53d] shadow-[0_0_6px_#ffc53d66]";
-const CONTROL_MARKER = { quarantine: { icon: "shield" as const, label: "Quarantine" }, pause: { icon: "pause" as const, label: "Pause" } };
+/** One marker for every product Brolly can quarantine (Workers, Durable Objects, Queues). */
+const QUARANTINE_MARKER = { icon: "shield" as const, label: "Quarantine available" };
 
 function ServiceCoverageGrid({ families, monitored, capped }: { families: OnboardingData["families"]; monitored: boolean; capped: boolean }) {
   const dot = capped ? LIGHT_GREEN : monitored ? LIGHT_YELLOW : "bg-faint opacity-40";
@@ -355,7 +355,7 @@ function ServiceCoverageGrid({ families, monitored, capped }: { families: Onboar
         <strong className="text-sm">Service coverage</strong>
         <span className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted [&_svg]:size-3.5">
           <span className="flex items-center gap-1.5"><i className={`size-2 rounded-full ${dot}`} /> {capped ? "Usage & billing triggers" : monitored ? "Usage triggers" : "Checking"}</span>
-          {Object.values(CONTROL_MARKER).map(marker => <span key={marker.icon} className="flex items-center gap-1.5"><Icon name={marker.icon} /> {marker.label}</span>)}
+          <span className="flex items-center gap-1.5"><Icon name={QUARANTINE_MARKER.icon} /> {QUARANTINE_MARKER.label}</span>
         </span>
       </header>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -366,7 +366,7 @@ function ServiceCoverageGrid({ families, monitored, capped }: { families: Onboar
               <ProductIcon family={family.family} size="sm" />
               <i className={`size-2 flex-none rounded-full ${dot}`} />
               <span className="min-w-0 flex-1 truncate text-xs font-semibold">{family.label}</span>
-              {control && <Icon name={CONTROL_MARKER[control].icon} className="size-3.5 flex-none text-muted" />}
+              {control && <Icon name={QUARANTINE_MARKER.icon} className="size-3.5 flex-none text-muted" aria-label={QUARANTINE_MARKER.label} />}
             </span>
           );
         })}

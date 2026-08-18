@@ -9,7 +9,8 @@ import {
 import { AlertsStep } from "./alerts";
 import { AlertLevelsStep, useAlertLevels } from "./levels";
 import { RiskToleranceStep } from "./RiskToleranceStep";
-import { AccountLimitStep, LimitStep } from "./LimitSteps";
+import { AccountLimitStep } from "./LimitSteps";
+import { ProductLimitsStep } from "./ProductLimitsStep";
 import { GrantBillingAccessButton } from "./access";
 import { ImportProgress } from "./ingest";
 import { useNotificationTargets } from "../components/notifications";
@@ -95,7 +96,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <AlertLevelsStep token={token} targets={targets} board={board} />,
     <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
-    <LimitStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <ProductLimitsStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
   ];
 

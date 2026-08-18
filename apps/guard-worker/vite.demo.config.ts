@@ -624,7 +624,7 @@ function demoUsageSeries(scope: string): UsageSeriesResponse {
         "durable_objects.incoming_websocket_messages": Math.round(costUsd * 120_000 * (0.8 + random(index + 13) * 0.4)),
         "durable_objects.sql_storage_bytes": Math.round(2_000_000_000 + index * 18_000_000),
       }
-      : { "workers.requests": Math.round(costUsd * 3_300_000), "workers.cpu_ms": Math.round(costUsd * 41_000) };
+      : Object.fromEntries(demoFamilyMetrics(scope).map(([id, , , perDollar], position) => [id, Math.round(costUsd * perDollar * (0.8 + random(index + position * 3) * 0.4))]));
     return { day: new Date(at).toISOString().slice(0, 10), costUsd, sealed: index < 89, metrics };
   });
   const cycles = [-2, -1, 0, 1].map(offset => {
@@ -642,12 +642,26 @@ function demoUsageSeries(scope: string): UsageSeriesResponse {
         "durable_objects.incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", billable: true },
         "durable_objects.sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", billable: true },
       }
-      : {
-        "workers.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
-        "workers.cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "ms", billable: true },
-      },
+      : Object.fromEntries(demoFamilyMetrics(scope).map(([id, label, unit]) => [id, { key: id.split(".")[1]!, label, unit, billable: true }])),
     series, cycles,
   };
+}
+
+/** Billable dimensions per demo product: id, label, unit, units per dollar. */
+function demoFamilyMetrics(scope: string): Array<[string, string, string, number]> {
+  const family = scope.replace(/^family:/, "");
+  const table: Record<string, Array<[string, string, string, number]>> = {
+    workers: [["workers.requests", "Requests", "requests", 3_300_000], ["workers.cpu_ms", "CPU time", "ms", 41_000]],
+    kv: [["kv.reads", "Reads", "requests", 2_000_000], ["kv.writes", "Writes", "requests", 200_000], ["kv.storage_bytes", "Storage", "bytes", 900_000_000]],
+    d1: [["d1.rows_read", "Rows read", "rows", 1_000_000_000], ["d1.rows_written", "Rows written", "rows", 1_000_000], ["d1.storage_bytes", "Storage", "bytes", 1_300_000_000]],
+    r2: [["r2.class_a", "Class A operations", "operations", 220_000], ["r2.class_b", "Class B operations", "operations", 2_700_000], ["r2.storage_bytes", "Storage", "bytes", 66_000_000_000]],
+    queues: [["queues.operations", "Operations", "operations", 2_500_000]],
+    workers_ai: [["workers_ai.neurons", "Neurons", "neurons", 90_000]],
+    email: [["email.sent", "Messages sent", "messages", 100_000], ["email.routed", "Messages routed", "messages", 400_000]],
+    pages: [["pages.builds", "Builds", "builds", 400]],
+    images: [["images.transformations", "Transformations", "transformations", 2_000]],
+  };
+  return table[family] ?? [[`${family}.requests`, "Requests", "requests", 3_300_000]];
 }
 
 const demoUsagePoints = Array.from({ length: 20 }, (_, index) => {

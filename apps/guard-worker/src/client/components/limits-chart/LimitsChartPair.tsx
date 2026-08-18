@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../ui";
-import { billableMetricIds, costSeries, metricSeries, useUsageSeries } from "./api";
+import { billableMetricIds, costSeries, metricSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
 import type { LevelValues } from "./levels";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
 import { DimensionRows, summarizeCost, summarizeDimensions } from "./UsageDimensions";
@@ -31,6 +31,15 @@ export interface LimitsChartPairProps {
   readOnly?: boolean;
   /** Cost column only (the whole-account scope: usage units do not sum across products). */
   costOnly?: boolean;
+  /** Preloaded series for `scope`; when given, the pair does not fetch. */
+  data?: UsageSeriesResponse;
+  /**
+   * Controlled open state, so two pairs (per day, per cycle) can open and
+   * close together. `usage` is the open metric id, null for none,
+   * undefined for "first". Omit for local state.
+   */
+  open?: { cost: boolean; usage: string | null | undefined };
+  onOpenChange?(next: { cost: boolean; usage: string | null | undefined }): void;
   /** metricId → monitored. Missing ids are monitored. Omit both to hide the switches. */
   usageEnabled?: Record<string, boolean>;
   onUsageEnabledChange?(next: Record<string, boolean>): void;
@@ -49,15 +58,22 @@ export interface LimitsChartPairProps {
  * the selected row expands into its chart, and each usage dimension has its
  * own limit map and an on/off switch. Below `md` the pair stacks.
  */
-export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, costOnly = false }: LimitsChartPairProps) {
-  const { data, loading, error } = useUsageSeries(token, scope);
+export function LimitsChartPair({ token, scope, family, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, usageEnabled, onUsageEnabledChange, costEnabled = true, onCostEnabledChange, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, costOnly = false, data: dataProp, open, onOpenChange }: LimitsChartPairProps) {
+  const fetched = useUsageSeries(token, dataProp ? "" : scope);
+  const data = dataProp ?? fetched.data;
+  const loading = dataProp ? false : fetched.loading;
+  const error = dataProp ? "" : fetched.error;
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   // `undefined` = nothing chosen yet (first row opens); `null` = user collapsed everything.
-  const [selected, setSelected] = useState<string | null | undefined>(undefined);
-  const [costOpen, setCostOpen] = useState(true);
+  const [localOpen, setLocalOpen] = useState<{ cost: boolean; usage: string | null | undefined }>({ cost: true, usage: undefined });
+  const openState = open ?? localOpen;
+  const setOpen = (next: { cost: boolean; usage: string | null | undefined }) => { if (onOpenChange) onOpenChange(next); else setLocalOpen(next); };
+  const selected = openState.usage;
+  const costOpen = openState.cost;
+  const setCostOpen = (update: (current: boolean) => boolean) => setOpen({ ...openState, cost: update(openState.cost) });
   const firstMetric = metricIds[0] ?? null;
   const metricId = selected === undefined ? firstMetric : selected && metricIds.includes(selected) ? selected : null;
-  const toggleMetric = (id: string) => setSelected(current => ((current === undefined ? firstMetric : current) === id ? null : id));
+  const toggleMetric = (id: string) => setOpen({ ...openState, usage: (selected === undefined ? firstMetric : selected) === id ? null : id });
   const dimensions = useMemo(() => (data ? summarizeDimensions(data, metricIds) : []), [data, metricIds]);
   const costDimension = useMemo(() => (data ? [summarizeCost(data)] : []), [data]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);

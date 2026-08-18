@@ -79,7 +79,7 @@ describe("BudgetWizard", () => {
       "Install shutdown fuse",
     ]);
     expect(container.textContent).toContain("How far above your daily historical average each alert should sit.");
-    expect(container.textContent).toContain("Cost and billable usage limits for each product and resource");
+    expect(container.textContent).toContain("Cost and billable usage limits for each product");
   });
 
   it("saves the balanced risk tolerance for an existing policy", async () => {

@@ -29,6 +29,7 @@ export function scopeKey(target: { kind: "account" } | { kind: "family"; family:
 export function useUsageSeries(token: string, scope: string): UsageSeriesState {
   const [state, setState] = useState<UsageSeriesState>({ data: null, loading: true, error: "" });
   useEffect(() => {
+    if (!scope) return;
     let cancelled = false;
     setState(current => ({ ...current, loading: true, error: "" }));
     api<UsageSeriesResponse>(`/api/usage-series?scope=${encodeURIComponent(scope)}`, token)
