@@ -760,7 +760,7 @@ function buildRequest(target, incident) {
 			url: "https://api.resend.com/emails",
 			init: json({
 				from: required(target.from, "Resend from"),
-				to: [required(target.to, "Resend to")],
+				to: recipients(target.to, "Resend to"),
 				subject: summary.slice(0, 150),
 				text: summary
 			}, { authorization: `Bearer ${required(target.token, "Resend token")}` })
@@ -769,7 +769,7 @@ function buildRequest(target, incident) {
 			url: "https://api.postmarkapp.com/email",
 			init: json({
 				From: required(target.from, "Postmark from"),
-				To: required(target.to, "Postmark to"),
+				To: recipients(target.to, "Postmark to").join(","),
 				Subject: summary.slice(0, 150),
 				TextBody: summary
 			}, { "x-postmark-server-token": required(target.token, "Postmark token") })
@@ -778,7 +778,7 @@ function buildRequest(target, incident) {
 			url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(required(target.accountId, "Cloudflare Email account ID"))}/email/sending/send`,
 			init: json({
 				from: required(target.from, "Cloudflare Email from"),
-				to: [required(target.to, "Cloudflare Email to")],
+				to: recipients(target.to, "Cloudflare Email to"),
 				subject: summary.slice(0, 150),
 				text: summary
 			}, { authorization: `Bearer ${required(target.token, "Cloudflare Email token")}` })
@@ -787,7 +787,7 @@ function buildRequest(target, incident) {
 			const sid = required(target.accountSid, "Twilio account SID");
 			const form = new URLSearchParams({
 				From: required(target.from, "Twilio from"),
-				To: required(target.to, "Twilio to"),
+				To: singleRecipient(target.to, "Twilio to"),
 				Body: summary
 			});
 			return {
@@ -807,7 +807,8 @@ function buildRequest(target, incident) {
 	}
 }
 async function cloudflareEmailResult(target, response) {
-	const recipient = required(target.to, "Cloudflare Email to").trim().toLowerCase();
+	const expected = recipients(target.to, "Cloudflare Email to");
+	const expectedKeys = expected.map((recipient) => recipient.toLowerCase());
 	let payload;
 	try {
 		payload = await response.json();
@@ -820,15 +821,18 @@ async function cloudflareEmailResult(target, response) {
 		};
 	}
 	const result = isRecord(payload) && isRecord(payload.result) ? payload.result : payload;
-	if (stringArray(isRecord(result) ? result.permanent_bounces : void 0).some((address) => address.trim().toLowerCase() === recipient)) return {
+	const bounced = stringArray(isRecord(result) ? result.permanent_bounces : void 0).filter((address) => expectedKeys.includes(address.trim().toLowerCase()));
+	if (bounced.length) return {
 		targetId: target.id,
 		ok: false,
 		status: response.status,
-		error: `Cloudflare Email permanently bounced ${target.to}`
+		error: `Cloudflare Email permanently bounced ${bounced.join(", ")}`
 	};
 	const delivered = stringArray(isRecord(result) ? result.delivered : void 0);
 	const queued = stringArray(isRecord(result) ? result.queued : void 0);
-	if (delivered.some((address) => address.trim().toLowerCase() === recipient) || queued.some((address) => address.trim().toLowerCase() === recipient)) return {
+	const accepted = new Set([...delivered, ...queued].map((address) => address.trim().toLowerCase()));
+	const missing = expected.filter((_, index) => !accepted.has(expectedKeys[index]));
+	if (!missing.length) return {
 		targetId: target.id,
 		ok: true,
 		status: response.status
@@ -837,7 +841,7 @@ async function cloudflareEmailResult(target, response) {
 		targetId: target.id,
 		ok: false,
 		status: response.status,
-		error: `Cloudflare Email did not deliver or queue ${target.to}`
+		error: `Cloudflare Email did not deliver or queue ${missing.join(", ")}`
 	};
 }
 function isRecord(value) {
@@ -875,6 +879,15 @@ function blockedWebhookHost(hostname) {
 function required(value, label) {
 	if (!value) throw new Error(`${label} is required`);
 	return value;
+}
+function singleRecipient(value, label) {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`${label} is required`);
+	return value.trim();
+}
+function recipients(value, label) {
+	const normalized = (Array.isArray(value) ? value : typeof value === "string" ? [value] : []).map((recipient) => recipient.trim()).filter(Boolean);
+	if (!normalized.length) throw new Error(`${label} is required`);
+	return [...new Map(normalized.map((recipient) => [recipient.toLowerCase(), recipient])).values()];
 }
 //#endregion
 //#region src/oauth-config.ts
@@ -6390,8 +6403,9 @@ async function dashboardData(env) {
 	};
 }
 async function onboardingData(env) {
-	const [completeRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
+	const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
 		env.DB.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first(),
+		env.DB.prepare(`SELECT value FROM settings WHERE key='account_name' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT family,metric,state FROM metric_coverage`).all(),
 		env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all()
@@ -6400,6 +6414,7 @@ async function onboardingData(env) {
 	const coverage = coverageResult.results;
 	return {
 		accountId: env.BROLLY_ACCOUNT_ID,
+		accountName: accountNameRow?.value ?? null,
 		complete: completeRow?.value === "true",
 		policy: {
 			...policy,
@@ -7548,7 +7563,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "91d4487709dff285b0f1e13a847209a89f51384d";
+var BROLLY_RELEASE = "6ca28d2366e440f18cdadb3e94e9ab0f3a784388";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -8604,6 +8619,12 @@ var TARGET_KINDS = [
 	"twilio",
 	"webhook"
 ];
+var EMAIL_KINDS = [
+	"cloudflare_email",
+	"postmark",
+	"resend"
+];
+var MAX_EMAIL_RECIPIENTS = 50;
 async function notificationApiRoute(request, env, actor, fetcher = fetch) {
 	const url = new URL(request.url);
 	if (url.pathname === "/api/providers" && request.method === "GET") return Response.json({ providers: await listProviders(env) }, { headers: { "cache-control": "no-store" } });
@@ -8678,7 +8699,7 @@ async function saveTarget(request, env, actor, fetcher) {
 	let config;
 	const now = Date.now();
 	if (isProviderKind(body.kind)) {
-		const destination = { to: body.destination?.to };
+		const destination = { to: normalizeDestination(body.kind, body.destination?.to) };
 		let providerConfig;
 		if (body.provider) {
 			providerConfig = body.provider.config ?? {};
@@ -8813,18 +8834,34 @@ function validateNotificationConfig(kind, config) {
 		"from",
 		"to"
 	].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
-	if ((kind === "resend" || kind === "postmark") && ![
-		"token",
-		"from",
-		"to"
-	].every(present)) return `${displayKind(kind)} API token, from address, and destination address are required`;
-	if (kind === "cloudflare_email" && ![
-		"accountId",
-		"token",
-		"from",
-		"to"
-	].every(present)) return "Cloudflare account, API token, from address, and destination address are required";
+	if (isEmailKind(kind)) {
+		if (!validEmailRecipients(config.to)) return `Email channels require between 1 and ${MAX_EMAIL_RECIPIENTS} recipient addresses`;
+		if ((kind === "resend" || kind === "postmark") && !["token", "from"].every(present)) return `${displayKind(kind)} API token and from address are required`;
+		if (kind === "cloudflare_email" && ![
+			"accountId",
+			"token",
+			"from"
+		].every(present)) return "Cloudflare account, API token, and from address are required";
+	}
 	return null;
+}
+function isEmailKind(kind) {
+	return EMAIL_KINDS.includes(kind);
+}
+function normalizeDestination(kind, value) {
+	if (!isEmailKind(kind)) return typeof value === "string" ? value.trim() : value;
+	const source = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+	const seen = /* @__PURE__ */ new Set();
+	return source.map((recipient) => recipient.trim()).filter((recipient) => {
+		const key = recipient.toLowerCase();
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+function validEmailRecipients(value) {
+	const recipients = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+	return recipients.length >= 1 && recipients.length <= MAX_EMAIL_RECIPIENTS && recipients.every((recipient) => typeof recipient === "string" && recipient.trim().length > 0);
 }
 async function verifyCloudflareEmailToken(token, fetcher = fetch) {
 	const response = await fetcher("https://api.cloudflare.com/client/v4/user/tokens/verify", {
@@ -9414,7 +9451,7 @@ function validPolicy(policy, requireEveryFamily = false, levelIds = [
 		].includes(tolerance.preset)) return false;
 		if (!tolerance.percentOfTypical || !levelIds.every((levelId) => {
 			const value = tolerance.percentOfTypical[levelId];
-			return typeof value === "number" && Number.isFinite(value) && value >= 100 && value <= 1e5;
+			return typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 1e4;
 		})) return false;
 		if (!levelIds.every((levelId, index) => index === 0 || tolerance.percentOfTypical[levelIds[index - 1]] < tolerance.percentOfTypical[levelId])) return false;
 		if (!tolerance.baseline || !finiteNonnegative(tolerance.baseline.computedAt) || !finiteNonnegative(tolerance.baseline.windowDays) || tolerance.baseline.windowDays <= 0) return false;
@@ -9428,6 +9465,7 @@ function validPolicy(policy, requireEveryFamily = false, levelIds = [
 			for (const scope of Object.values(scopes)) {
 				if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some((value) => !validOptionalSpend(value))) return false;
 				if (scope.costEnabled !== void 0 && typeof scope.costEnabled !== "boolean") return false;
+				if (scope.enabled !== void 0 && typeof scope.enabled !== "boolean") return false;
 				if (!validBooleanMap(scope.usageEnabled) || !validBooleanMap(scope.costLevelEnabled)) return false;
 				if (scope.usageLevelEnabled && Object.values(scope.usageLevelEnabled).some((value) => !validBooleanMap(value))) return false;
 			}

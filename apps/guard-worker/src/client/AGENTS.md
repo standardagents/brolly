@@ -20,13 +20,25 @@ directory.
 - Billing-cycle defaults keep daily limits times the cycle length as a default
   lower bound. Cycle edits have no hard daily floor. A lower cycle value shows a
   non-blocking reference note.
-- A dimension-row diamond is the level switch for that dimension. Disabled
-  diamonds remain keyboard and pointer accessible.
+- Compact row values contain one level swatch and one value. Level labels and
+  per-level switches belong in the expanded chart fields.
 - First-run setup saves through the onboarding route. The reopened Budget
   settings flow saves through the policy PUT route. Both paths materialize
   chart maps into ledger alert rules.
 - Read-only charts expose labels and lines without handles, fields, history
   controls, or history keyboard shortcuts.
+
+## Limits UI
+
+- `components/ui.tsx` owns `Switch`.
+- `components/limits-chart/LevelValueField.tsx` owns every editable level
+  value. Use `chip` for compact row values, `bare` below expanded charts, and
+  `boxed` when a standalone chart needs cards.
+- `components/limits-chart/LimitsChartDual.tsx` owns the daily and billing-cycle
+  shell for one policy scope. Account limits use its `costOnly` mode.
+- `onboarding/limits-policy.ts` owns scope updates and the daily legacy-map
+  mirroring required by server and dashboard readers.
+- New limit editors must compose these components and helpers.
 
 ## Product icons
 

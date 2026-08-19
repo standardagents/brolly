@@ -1,8 +1,9 @@
 import { useRef, useState, type KeyboardEvent } from "react";
 import { Switch } from "../ui";
 import { compactValue, editableValue, parseCompact, selectNumber, unitLabel } from "./format";
-import type { LimitsChartLevel } from "./LimitsChart";
 import { snapStep } from "./scale";
+
+export interface LimitsChartLevel { id: string; label: string; color: string }
 
 export interface LevelValueFieldProps {
   level: LimitsChartLevel;

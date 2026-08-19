@@ -5,12 +5,12 @@ import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults } from "./defaults";
 import { formatLimitValue } from "./format";
-import { LevelValueField } from "./LevelValueField";
+import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
 import { type Axis, chooseAxis, snapStep, snapToNice } from "./scale";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
 
-export interface LimitsChartLevel { id: string; label: string; color: string }
+export type { LimitsChartLevel } from "./LevelValueField";
 
 export interface LimitsChartProps {
   kind: "cost" | "usage";
