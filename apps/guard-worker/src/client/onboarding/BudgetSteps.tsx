@@ -19,7 +19,7 @@ export function StepActions({ children }: { children: ReactNode }) {
   return <footer className="mt-6 flex justify-between max-md:flex-wrap max-md:gap-2.5">{children}</footer>;
 }
 
-export function AccessStep({ data, token, busy, result, notice, error, billingDialogOpen, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
+export function AccessStep({ data, token, busy, result, notice, error, billingDialogOpen, onCheckComplete, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
   data: OnboardingData;
   token: string;
   busy: boolean;
@@ -27,6 +27,7 @@ export function AccessStep({ data, token, busy, result, notice, error, billingDi
   notice: string;
   error: string;
   billingDialogOpen: boolean;
+  onCheckComplete: (complete: boolean) => void;
   onCloseBilling: () => void;
   onOpenBilling: () => void;
   onVerify: () => void;
@@ -34,7 +35,7 @@ export function AccessStep({ data, token, busy, result, notice, error, billingDi
 }) {
   return <>
     <StepIntro title="Confirm account access" />
-    <AccessActions accountId={data.accountId} families={data.families} busy={busy} result={result} notice={notice} error={error} token={token} billingDialogOpen={billingDialogOpen} onCloseBilling={onCloseBilling} onOpenBilling={onOpenBilling} onVerify={onVerify} onVerified={onVerified} />
+    <AccessActions accountId={data.accountId} families={data.families} busy={busy} result={result} notice={notice} error={error} token={token} billingDialogOpen={billingDialogOpen} onCheckComplete={onCheckComplete} onCloseBilling={onCloseBilling} onOpenBilling={onOpenBilling} onVerify={onVerify} onVerified={onVerified} />
   </>;
 }
 

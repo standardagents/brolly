@@ -65,6 +65,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [policy, setPolicy] = useState(() => preparePolicy(data.policy, data.families.map(item => item.family), data.scopedAssets, undefined, data.complete));
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
+  const [accessCheckComplete, setAccessCheckComplete] = useState(false);
   const board = useAlertLevels(token);
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
@@ -87,6 +88,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       notice={estimates.accessNotice}
       error={estimates.accessError}
       billingDialogOpen={billingDialogOpen}
+      onCheckComplete={setAccessCheckComplete}
       onCloseBilling={() => setBillingDialogOpen(false)}
       onOpenBilling={() => setBillingDialogOpen(true)}
       onVerify={() => void estimates.verifyAccess()}
@@ -132,6 +134,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     busy={save.busy || (index === 0 && estimates.busy)}
                     blocked={index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue." : ""}
                     firstStep={index === 0}
+                    accessCheckComplete={accessCheckComplete}
                     onOpenBilling={() => setBillingDialogOpen(true)}
                     onContinue={navigation.advance}
                   />
@@ -208,7 +211,8 @@ function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number
   );
 }
 
-function ContinueFooter({ billingConnected, blocked = "", busy, firstStep, onContinue, onOpenBilling }: {
+export function ContinueFooter({ accessCheckComplete = true, billingConnected, blocked = "", busy, firstStep, onContinue, onOpenBilling }: {
+  accessCheckComplete?: boolean;
   billingConnected: boolean;
   blocked?: string;
   busy: boolean;
@@ -222,7 +226,7 @@ function ContinueFooter({ billingConnected, blocked = "", busy, firstStep, onCon
         <span className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 max-lg:grid-cols-1 max-lg:items-stretch">
           <small className="max-w-[52ch] text-left leading-5 text-muted"><strong className="text-ink">Billing access is highly recommended.</strong> It lets Brolly trigger events from actual billable charges. This gives you more understandable thresholds and greater protection for your account.</small>
           <Button variant="secondary" className="shrink-0" disabled={busy} onClick={onContinue}>Continue without billing</Button>
-          <GrantBillingAccessButton disabled={busy} onClick={onOpenBilling} />
+          <GrantBillingAccessButton disabled={busy || !accessCheckComplete} onClick={onOpenBilling} />
         </span>
       </StepActions>
     );

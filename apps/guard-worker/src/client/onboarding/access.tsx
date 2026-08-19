@@ -23,7 +23,7 @@ function ButtonLink({ variant, className = "", ...rest }: AnchorHTMLAttributes<H
   );
 }
 
-export function AccessActions({ accountId, families, busy, result, notice, error, token, billingDialogOpen, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
+export function AccessActions({ accountId, families, busy, result, notice, error, token, billingDialogOpen, onCheckComplete, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
   accountId: string;
   families: OnboardingData["families"];
   busy: boolean;
@@ -32,6 +32,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   error: string;
   token: string;
   billingDialogOpen: boolean;
+  onCheckComplete?: (complete: boolean) => void;
   onCloseBilling: () => void;
   onOpenBilling: () => void;
   onVerify: () => void;
@@ -46,6 +47,8 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   }) : false;
   const revealed = useStaggeredReveal(busy, result);
   useInitialAccessCheck(busy, result, error, onVerify);
+  const checkComplete = !busy && result !== null && revealed >= ACCESS_CAPABILITIES.length;
+  useEffect(() => { onCheckComplete?.(checkComplete); }, [checkComplete, onCheckComplete]);
   const monitoringDetected = !busy && result !== null && revealed >= 1 && capabilityStatus("monitoring", result).state === "ready";
   const billingDetected = !busy && result !== null && revealed >= 2 && capabilityStatus("billing", result).state === "ready";
 
@@ -286,7 +289,7 @@ function UsageAccessResults({ result, checking, revealed, onConnectBilling }: {
   onConnectBilling: () => void;
 }) {
   return (
-    <div className="grid gap-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
+    <div className="grid gap-2 xl:grid-cols-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
       {ACCESS_CAPABILITIES.map((row, index) => {
         const status: CapabilityStatus = !checking && result && index < revealed ? capabilityStatus(row.key, result) : { state: "checking" };
         return (
