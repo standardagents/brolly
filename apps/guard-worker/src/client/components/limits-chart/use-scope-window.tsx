@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
 import { defaultLevelValues, pushLevelValue, toleranceDefaults } from "./defaults";
 import type { LevelValues } from "./levels";
+import { LevelTrack } from "./LevelTrack";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
 import { useLimitHistories } from "./use-limit-history";
 
@@ -110,9 +111,13 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   }, [tolerance]);
 
   const waitingNote = <div className="grid h-[120px] place-content-center text-center text-[13px] text-faint">Set the daily limits first. Billing-cycle limits start from them.</div>;
+  // A scope with no recorded usage has nothing to plot; its levels are set on
+  // a plain track in absolute units instead of a chart.
+  const hasUsage = !!data && data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
   const costChart = (() => {
     if (!data) return null;
     if (!floorReady(costFloor)) return waitingNote;
+    if (!hasUsage) return <LevelTrack levels={levels} unit="USD" value={cost} onChange={onCostChange} readOnly={readOnly} levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} />;
     const series = costSeries(data);
     const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
     const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(costFloor), fromTolerance) : undefined;
@@ -126,6 +131,8 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   const usageChart = (id: string): ReactNode => {
     if (!data) return null;
     if (!floorReady(usageFloor?.[id])) return waitingNote;
+    if (!hasUsage) return <LevelTrack levels={levels} unit={data.metrics[id]?.unit ?? ""} value={usage[id] ?? {}} onChange={next => changeUsage(id, next)} readOnly={readOnly}
+      levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined} />;
     const series = metricSeries(data, id);
     const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
     const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance) : undefined;
