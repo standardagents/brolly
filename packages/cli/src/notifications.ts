@@ -18,7 +18,7 @@ export interface NotificationTargetPayload {
   label: string;
   config?: Record<string, unknown>;
   provider?: { config: Record<string, unknown> };
-  destination?: { to: string };
+  destination?: { to: string | string[] };
 }
 
 /**
@@ -44,7 +44,7 @@ function createAccountTargetPayload(
   label: string,
   document: Record<string, unknown>,
 ): NotificationTargetPayload {
-  const destination = readDestination(document.destination);
+  const destination = readDestination(kind, document.destination);
   if (document.provider !== undefined) {
     if (!isRecord(document.provider) || !isRecord(document.provider.config)) {
       throw new Error("An account change requires a provider config object");
@@ -54,11 +54,32 @@ function createAccountTargetPayload(
   return { kind, label, destination };
 }
 
-function readDestination(value: unknown): { to: string } {
-  if (!isRecord(value) || typeof value.to !== "string" || !value.to.trim()) {
-    throw new Error("Provider-backed channels require a destination.to value");
+function readDestination(kind: NotificationAccountKind, value: unknown): { to: string | string[] } {
+  if (!isRecord(value)) throw new Error("Provider-backed channels require a destination.to value");
+  if (typeof value.to === "string") {
+    const to = value.to.trim();
+    if (to) return { to };
+  } else if (isEmailKind(kind) && Array.isArray(value.to)) {
+    const to = normalizeEmailRecipients(value.to);
+    if (to.length) return { to };
   }
-  return { to: value.to.trim() };
+  throw new Error("Provider-backed channels require a non-empty destination.to value");
+}
+
+function normalizeEmailRecipients(values: unknown[]): string[] {
+  if (!values.length || values.some(value => typeof value !== "string")) return [];
+
+  const seen = new Set<string>();
+  const recipients: string[] = [];
+  for (const value of values as string[]) {
+    const recipient = value.trim();
+    if (!recipient) continue;
+    const key = recipient.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recipients.push(recipient);
+  }
+  return recipients;
 }
 
 function requiredLabel(value: unknown): string {
@@ -74,6 +95,10 @@ function isTargetKind(value: string): value is NotificationTargetKind {
 
 function isAccountKind(value: NotificationTargetKind): value is NotificationAccountKind {
   return (NOTIFICATION_ACCOUNT_KINDS as readonly string[]).includes(value);
+}
+
+function isEmailKind(value: NotificationAccountKind): value is "cloudflare_email" | "postmark" | "resend" {
+  return value === "cloudflare_email" || value === "postmark" || value === "resend";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

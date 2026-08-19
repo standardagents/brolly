@@ -26,6 +26,10 @@ for the complete Worker and Durable Object example and recovery semantics.
 
 The `target` command reads one JSON document and sends it to the notification-channel API. Every document needs a non-empty `label`.
 
+For Twilio, `destination.to` is one non-empty string. Cloudflare Email, Resend,
+and Postmark accept either one string or a non-empty string array. Array entries
+are trimmed, blank entries are ignored, and duplicate entries are removed before submission.
+
 The first channel for Twilio, Cloudflare Email, Resend, or Postmark includes account credentials and a destination:
 
 ```json
@@ -50,5 +54,18 @@ Later channels for the same account use only a destination and label:
   "destination": { "to": "+15552222222" }
 }
 ```
+
+Email channels can send to multiple recipients in one channel:
+
+```json
+{
+  "label": "Finance and operations",
+  "destination": {
+    "to": ["finance@example.com", "ops@example.com"]
+  }
+}
+```
+
+Each `brolly target` invocation creates one channel instance. Repeat the command with a distinct label to keep multiple channels for the same provider account.
 
 Discord, Slack, and Webhook channels use a labeled `config` object with their URL. The connected guard validates account credentials, destination values, and duplicate labels.

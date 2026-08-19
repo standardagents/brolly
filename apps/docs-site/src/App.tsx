@@ -185,11 +185,11 @@ export function App() {
 
             <section className="py-[70px] first:border-t-0 border-t border-line max-[680px]:py-[55px]" id="notifications">
               <h2 className={DOCS_H2}>Wake the people who can respond</h2>
-              <p className={DOCS_P}>Configure Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, or a generic HTTPS webhook with labeled destinations, reusable provider accounts, encryption, and delivery-rate limits.</p>
+              <p className={DOCS_P}>Configure Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, or a generic HTTPS webhook with labeled channels and reusable provider accounts. Cloudflare Email, Resend, and Postmark channels can group multiple recipients under one label. Channels sharing a provider account remain distinct groups. Twilio uses one destination number per channel.</p>
               <div className="my-7 grid grid-cols-3 gap-2.5 max-[680px]:grid-cols-1">
                 <Channel image="discord" title="Discord">Structured incident webhooks</Channel>
                 <Channel image="slack" title="Slack">Incoming webhook summaries</Channel>
-                <Channel image="twilio" title="Email, SMS, and webhooks">Cloudflare Email, Resend, Postmark, Twilio, and generic HTTPS delivery</Channel>
+                <Channel image="twilio" title="Email, SMS, and webhooks">Cloudflare Email, Resend, and Postmark support recipient groups. Twilio uses one destination number per channel. Generic HTTPS delivery uses an endpoint.</Channel>
               </div>
             </section>
 

@@ -97,14 +97,17 @@ evaluation.
 
 Notification destinations support Cloudflare Email, Discord, Postmark, Resend,
 Slack, Twilio SMS, and generic HTTPS webhooks. Channel labels are required and
-unique without regard to letter case. Credentials remain AES-GCM encrypted. A
-generic webhook refuses redirects and local or private-network destinations.
+unique without regard to letter case. Cloudflare Email, Resend, and Postmark
+channels may contain multiple recipients as one group. Multiple channels can
+use the same provider account while remaining distinct groups. Twilio channels
+use one destination number. Credentials remain AES-GCM encrypted. A generic
+webhook refuses redirects and local or private-network destinations.
 
 Provider records hold one reusable account for each Twilio, Cloudflare Email,
 Resend, or Postmark kind. Target rows retain sealed full configurations so the
-notifier receives provider values and destination together. Provider updates
-reseal every target attached to that provider. Removing a channel removes its
-level entries and leaves its provider account for explicit removal.
+notifier receives provider values and its destination group together. Provider
+updates reseal every target attached to that provider. Removing a channel
+removes its level entries and leaves its provider account for explicit removal.
 
 Cloudflare Email token setup verifies activity with `GET
 /user/tokens/verify`. The from-address form lists zones from the connected

@@ -6,6 +6,8 @@ export const PROVIDER_KINDS = ["twilio", "cloudflare_email", "resend", "postmark
 export type ProviderKind = typeof PROVIDER_KINDS[number];
 
 const TARGET_KINDS = ["cloudflare_email", "discord", "postmark", "resend", "slack", "twilio", "webhook"] as const;
+const EMAIL_KINDS = ["cloudflare_email", "postmark", "resend"] as const;
+const MAX_EMAIL_RECIPIENTS = 50;
 
 interface StoredProviderRow {
   id: string;
@@ -20,7 +22,7 @@ interface TargetWrite {
   label?: string | null;
   config?: Record<string, unknown>;
   provider?: { config?: Record<string, unknown> };
-  destination?: { to?: string };
+  destination?: { to?: string | string[] };
 }
 
 export async function notificationApiRoute(
@@ -112,7 +114,7 @@ async function saveTarget(request: Request, env: Env, actor: string, fetcher: ty
   let config: Record<string, unknown>;
   const now = Date.now();
   if (isProviderKind(body.kind)) {
-    const destination = { to: body.destination?.to };
+    const destination = { to: normalizeDestination(body.kind, body.destination?.to) };
     let providerConfig: Record<string, unknown>;
     if (body.provider) {
       providerConfig = body.provider.config ?? {};
@@ -233,9 +235,34 @@ export function validateNotificationConfig(kind: string, config: Record<string, 
     catch (error) { return errorMessage(error); }
   }
   if (kind === "twilio" && !["accountSid", "token", "from", "to"].every(present)) return "Twilio account SID, auth token, from number, and destination number are required";
-  if ((kind === "resend" || kind === "postmark") && !["token", "from", "to"].every(present)) return `${displayKind(kind)} API token, from address, and destination address are required`;
-  if (kind === "cloudflare_email" && !["accountId", "token", "from", "to"].every(present)) return "Cloudflare account, API token, from address, and destination address are required";
+  if (isEmailKind(kind)) {
+    if (!validEmailRecipients(config.to)) return `Email channels require between 1 and ${MAX_EMAIL_RECIPIENTS} recipient addresses`;
+    if ((kind === "resend" || kind === "postmark") && !["token", "from"].every(present)) return `${displayKind(kind)} API token and from address are required`;
+    if (kind === "cloudflare_email" && !["accountId", "token", "from"].every(present)) return "Cloudflare account, API token, and from address are required";
+  }
   return null;
+}
+
+function isEmailKind(kind: string): kind is typeof EMAIL_KINDS[number] {
+  return EMAIL_KINDS.includes(kind as typeof EMAIL_KINDS[number]);
+}
+
+function normalizeDestination(kind: string, value: string | string[] | undefined): string | string[] | undefined {
+  if (!isEmailKind(kind)) return typeof value === "string" ? value.trim() : value;
+  const source = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const seen = new Set<string>();
+  return source.map(recipient => recipient.trim()).filter(recipient => {
+    const key = recipient.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function validEmailRecipients(value: unknown): boolean {
+  const recipients = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return recipients.length >= 1 && recipients.length <= MAX_EMAIL_RECIPIENTS
+    && recipients.every(recipient => typeof recipient === "string" && recipient.trim().length > 0);
 }
 
 export async function verifyCloudflareEmailToken(token: string, fetcher: typeof fetch = fetch): Promise<void> {

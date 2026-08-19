@@ -85,7 +85,7 @@ over the D1 credential.
 The setup wizard has seven steps:
 
 1. Connect Cloudflare and verify monitoring access.
-2. Add alert channels. The first Twilio, Cloudflare Email, Resend, or Postmark channel saves its account credentials; later channels reuse that account and ask for a destination and label. Discord, Slack, and generic webhooks use one URL per channel.
+2. Add alert channels. The first Twilio, Cloudflare Email, Resend, or Postmark channel saves its account credentials; later channels reuse that account. Cloudflare Email, Resend, and Postmark channels may group multiple recipients, while each Twilio channel uses one destination number. Discord, Slack, and generic webhooks use one URL per channel.
 3. Arrange the alert level board. Warning, Critical, and Emergency start as empty columns. Custom columns can be inserted, renamed, reordered, or removed while one column remains. Channel entries carry their own repeat interval. Prepare and Auto entries select reversible controls for eligible Workers, Durable Objects, and Queues.
 4. Choose Conservative, Balanced, or Growth risk tolerance. The shared percentages apply to every cost and billable usage chart.
 5. Set daily cost and billable usage limits for the account, products, and resources.
@@ -172,12 +172,14 @@ Durable Object storage operation on the hot path.
 
 ## Alert channels and levels
 
-Channel labels are required and unique without regard to letter case. The
-channel list stores each destination separately. A provider account stores the
-shared credentials for one Twilio, Cloudflare Email, Resend, or Postmark kind.
-Removing a channel leaves its provider account until an operator removes that
-account from Notifications settings. Changing a provider account reseals every
-channel that uses it.
+Channel labels are required and unique without regard to letter case. Each
+labeled channel remains a separate group. Cloudflare Email, Resend, and
+Postmark channels may group multiple recipients. Multiple channels can use the
+same provider account while remaining distinct groups. Twilio channels use one
+destination number. A provider account stores the shared credentials for one
+Twilio, Cloudflare Email, Resend, or Postmark kind. Removing a channel leaves
+its provider account until an operator removes that account from Notifications
+settings. Changing a provider account reseals every channel that uses it.
 
 Cloudflare Email uses a dedicated API token with Email Sending permission. Brolly
 verifies that the token is active through Cloudflare's token endpoint, lists the

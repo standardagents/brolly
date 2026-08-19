@@ -47,17 +47,17 @@ describe("notification requests", () => {
     const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
       requestUrl = input;
       captured = init;
-      return new Response(JSON.stringify({ result: { delivered: [], queued: ["owner@example.com"], permanent_bounces: [] } }), { status: 200 });
+      return new Response(JSON.stringify({ result: { delivered: ["finance@example.com"], queued: ["owner@example.com"], permanent_bounces: [] } }), { status: 200 });
     };
     await expect(notify({
       id: "cloudflare", kind: "cloudflare_email", enabled: true,
-      accountId: "account/123", token: "email-token", from: "alerts@example.com", to: "owner@example.com",
+      accountId: "account/123", token: "email-token", from: "alerts@example.com", to: ["owner@example.com", "finance@example.com"],
     }, incident, fetcher as typeof fetch)).resolves.toMatchObject({ ok: true, status: 200 });
     expect(String(requestUrl)).toBe("https://api.cloudflare.com/client/v4/accounts/account%2F123/email/sending/send");
     expect(new Headers(captured?.headers).get("authorization")).toBe("Bearer email-token");
     expect(captured?.redirect).toBe("error");
     expect(JSON.parse(String(captured?.body))).toMatchObject({
-      from: "alerts@example.com", to: ["owner@example.com"], text: expect.stringContaining("limit crossed"),
+      from: "alerts@example.com", to: ["owner@example.com", "finance@example.com"], text: expect.stringContaining("limit crossed"),
     });
   });
 
@@ -67,10 +67,22 @@ describe("notification requests", () => {
     } }), { status: 200 });
     await expect(notify({
       id: "cloudflare", kind: "cloudflare_email", enabled: true,
-      accountId: "account", token: "email-token", from: "alerts@example.com", to: "owner@example.com",
+      accountId: "account", token: "email-token", from: "alerts@example.com", to: ["owner@example.com", "finance@example.com"],
     }, incident, fetcher as typeof fetch)).resolves.toMatchObject({
       ok: false, status: 200, error: expect.stringContaining("permanently bounced"),
     });
+  });
+
+  it("sends recipient groups through Resend and Postmark", async () => {
+    const bodies: unknown[] = [];
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("ok", { status: 200 });
+    };
+    await notify({ id: "resend", kind: "resend", enabled: true, token: "token", from: "alerts@example.com", to: ["ops@example.com", "finance@example.com"] }, incident, fetcher as typeof fetch);
+    await notify({ id: "postmark", kind: "postmark", enabled: true, token: "token", from: "alerts@example.com", to: ["ops@example.com", "finance@example.com"] }, incident, fetcher as typeof fetch);
+    expect(bodies[0]).toMatchObject({ to: ["ops@example.com", "finance@example.com"] });
+    expect(bodies[1]).toMatchObject({ To: "ops@example.com,finance@example.com" });
   });
 
   it("refuses generic webhook delivery to private and local addresses", async () => {

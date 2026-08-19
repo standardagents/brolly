@@ -238,7 +238,7 @@ in the dashboard header.
 The setup sequence is:
 
 1. **Connect Cloudflare.** Verify monitoring access for the bound account.
-2. **Alert channels.** Add labeled destinations. A provider account is saved once for Twilio, Cloudflare Email, Resend, or Postmark. Later channels of that kind reuse the saved account. Discord, Slack, and generic webhooks use one URL per channel.
+2. **Alert channels.** Add labeled channels. A provider account is saved once for Twilio, Cloudflare Email, Resend, or Postmark. Later channels reuse that account. Cloudflare Email, Resend, and Postmark channels may group multiple recipients. Twilio channels use one destination number. Channels sharing a provider account remain distinct groups. Discord, Slack, and generic webhooks use one URL per channel.
 3. **Alert levels.** Arrange the Warning, Critical, and Emergency columns. Add, rename, reorder, or delete columns within the eight-level limit. Add channels with per-entry intervals and add Prepare or Auto action entries.
 4. **Risk tolerance.** Choose the shared percentage curve for every current alert level.
 5. **Daily limits.** Set cost and billable usage limits for the account, products, and resources.
@@ -343,9 +343,11 @@ credentials are AES-GCM encrypted with a Worker-secret key.
 Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS, and generic
 HTTPS webhooks are configured on **Notifications**. The read API returns target
 status, provider linkage, label, and last-delivery metadata. It never decrypts
-a destination credential. Operators can configure several targets of one kind
-and identify each target with a label. Generic webhooks refuse redirects and
-local or private-network addresses.
+a destination credential. Cloudflare Email, Resend, and Postmark channels may
+contain multiple recipients as one labeled group. Multiple channels can use the
+same provider account while remaining distinct groups. Twilio uses one
+destination number per channel. Generic webhooks refuse redirects and local or
+private-network addresses.
 
 The **Accounts** block lists one saved account for each provider kind. Changing
 an account reseals every channel that uses it. Removing an account requires

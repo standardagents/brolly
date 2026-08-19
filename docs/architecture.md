@@ -190,8 +190,11 @@ the matching daily value times the cycle length as its lower bound. Operators
 may edit a cycle value below its daily counterpart. The chart then shows a
 non-blocking single-day warning.
 
-A channel entry names one configured destination and an interval. Action entries
-select Prepare or Auto behavior for the stop/pause and quarantine families.
+A channel entry names one configured recipient group and an interval. Cloudflare
+Email, Resend, and Postmark groups may contain multiple recipients. Multiple
+channels can use the same provider account while remaining distinct groups.
+Twilio channels use one destination number. Action entries select Prepare or
+Auto behavior for the stop/pause and quarantine families.
 Entries accumulate from left to right. A channel entry in a later level can
 replace the interval for the same target. Empty levels remain valid. Deleting a
 channel cascades its entries. Deleting a level cascades its entries and retires
@@ -199,10 +202,10 @@ its materialized alert lines so existing history retains its references.
 
 Channel credentials use encrypted provider records. Twilio, Cloudflare Email,
 Resend, and Postmark each have one reusable account record. A channel stores a
-sealed full configuration containing its provider values and destination. A
-provider update reseals every channel attached to that provider. Discord, Slack,
-and generic webhooks store one URL per channel. Labels remain required and
-unique without regard to letter case.
+sealed full configuration containing its provider values and destination group.
+A provider update reseals every channel attached to that provider. Discord,
+Slack, and generic webhooks store one URL per channel. Labels remain required
+and unique without regard to letter case.
 
 Cloudflare Email uses the REST Email Sending API with a dedicated token. Brolly
 verifies token activity through `GET /user/tokens/verify`, lists the connected

@@ -49,6 +49,12 @@ describe("notification configuration", () => {
     expect(validateNotificationConfig("twilio", { accountSid: "AC1", token: "secret", from: "+15550000000", to: "+15551111111" })).toBeNull();
   });
 
+  it("accepts email recipient groups while keeping Twilio single-recipient", () => {
+    expect(validateNotificationConfig("resend", { token: "secret", from: "alerts@example.com", to: ["ops@example.com", "finance@example.com"] })).toBeNull();
+    expect(validateNotificationConfig("postmark", { token: "secret", from: "alerts@example.com", to: [] })).toContain("recipient");
+    expect(validateNotificationConfig("twilio", { accountSid: "AC1", token: "secret", from: "+15550000000", to: ["+15551111111"] })).toContain("destination number");
+  });
+
   it("refuses private generic webhook destinations", () => {
     expect(validateNotificationConfig("webhook", { url: "https://192.168.1.2/hook" })).toContain("private network");
     expect(validateNotificationConfig("webhook", { url: "https://alerts.example.com/hook" })).toBeNull();
@@ -112,6 +118,33 @@ describe("notification configuration", () => {
       });
       const provider = await testD1.db.prepare("SELECT COUNT(*) AS count FROM notification_providers WHERE kind='twilio'").first<{ count: number }>();
       expect(provider?.count).toBe(1);
+    } finally {
+      testD1.close();
+    }
+  });
+
+  it("stores separate email groups against one reusable provider", async () => {
+    const testD1 = createTestD1();
+    try {
+      const env = testEnv(testD1);
+      const first = await notificationApiRoute(request("/api/targets", "POST", {
+        kind: "resend", label: "Operations", provider: { config: {
+          token: "secret", from: "alerts@example.com",
+        } }, destination: { to: [" ops@example.com ", "finance@example.com", "OPS@example.com"] },
+      }), env, "test-actor");
+      expect(first?.status).toBe(200);
+      const firstId = (await first!.json() as { id: string }).id;
+
+      const second = await notificationApiRoute(request("/api/targets", "POST", {
+        kind: "resend", label: "Security", destination: { to: ["security@example.com", "owner@example.com"] },
+      }), env, "test-actor");
+      expect(second?.status).toBe(200);
+      const secondId = (await second!.json() as { id: string }).id;
+
+      await expect(targetConfig(testD1, firstId)).resolves.toMatchObject({ to: ["ops@example.com", "finance@example.com"] });
+      await expect(targetConfig(testD1, secondId)).resolves.toMatchObject({ to: ["security@example.com", "owner@example.com"] });
+      await expect(testD1.db.prepare("SELECT COUNT(*) AS count FROM notification_providers WHERE kind='resend'").first<{ count: number }>())
+        .resolves.toMatchObject({ count: 1 });
     } finally {
       testD1.close();
     }

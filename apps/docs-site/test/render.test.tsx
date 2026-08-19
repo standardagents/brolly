@@ -22,6 +22,7 @@ describe("universal Brolly docs site", () => {
     expect(html).toContain("exact object IDs");
     expect(html).toContain("Choose one shared risk tolerance curve for every alert level");
     expect(html).toContain("Configure Cloudflare Email, Discord, Postmark, Resend, Slack, Twilio SMS");
+    expect(html).toContain("Cloudflare Email, Resend, and Postmark channels can group multiple recipients under one label");
     expect(html).toContain("300 GraphQL dataset queries");
     // The dollar amount is wrapped in a highlight element mid-sentence.
     expect(html).toContain("Woke up to a");
