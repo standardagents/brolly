@@ -2,9 +2,10 @@ import type { Dispatch, SetStateAction } from "react";
 import { LimitsChartPair, levelColor } from "../components/limits-chart";
 import type { AlertLevel, Policy, PolicyLimits, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
+import { emptyScope, updateScope, type LimitsScope } from "./limits-policy";
 
 type Window = keyof PolicyLimits;
-type ScopeOption = { key: string; label: string; family?: string; kind: "account" | "family" | "asset"; legacyKey?: string };
+type ScopeOption = LimitsScope & { label: string };
 
 const ACCOUNT_SCOPE: ScopeOption = { key: "account", label: "Whole account", kind: "account" };
 
@@ -49,23 +50,4 @@ export function AccountLimitStep({ token, policy, levels, setPolicy }: {
       {pair("cycle", cycleScope)}
     </div>
   </>;
-}
-
-function updateScope(policy: Policy, window: Window, selected: ScopeOption, change: (scope: ScopeLimits) => ScopeLimits): Policy {
-  const limits: PolicyLimits = policy.limits
-    ? { day: { ...policy.limits.day }, cycle: { ...policy.limits.cycle } }
-    : { day: {}, cycle: {} };
-  const next = change(limits[window][selected.key] ?? emptyScope());
-  limits[window][selected.key] = next;
-  const result: Policy = { ...policy, limits };
-  if (window === "day") {
-    if (selected.kind === "account") result.accountDailySpend = next.cost;
-    if (selected.kind === "family" && selected.legacyKey) result.familyDailySpend = { ...result.familyDailySpend, [selected.legacyKey]: next.cost };
-    if (selected.kind === "asset" && selected.legacyKey) result.assetDailySpend = { ...result.assetDailySpend, [selected.legacyKey]: next.cost };
-  }
-  return result;
-}
-
-function emptyScope(): ScopeLimits {
-  return { cost: {}, usage: {} };
 }

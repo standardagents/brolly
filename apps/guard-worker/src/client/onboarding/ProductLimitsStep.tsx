@@ -1,13 +1,13 @@
 import { familyControl } from "@standardagents/brolly-core";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { LimitsChartDual, levelColor, useUsageSeries, type WindowLimits } from "../components/limits-chart";
+import { LimitsChartDual, levelColor, useUsageSeries } from "../components/limits-chart";
 import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
 import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
 import { Icon, ProductIcon, Spinner, Switch } from "../components/ui";
-import type { AlertLevel, OnboardingData, Policy, PolicyLimits, ScopeLimits } from "../types";
+import type { AlertLevel, OnboardingData, Policy } from "../types";
 import { StepIntro } from "./BudgetSteps";
+import { emptyScope, updateScope } from "./limits-policy";
 
-type Window = keyof PolicyLimits;
 type OpenState = string | null;
 type SidebarItem = { id: string; label: string };
 type SectionInfo = { items: SidebarItem[]; hasUsage: boolean; deviated: string[] };
@@ -196,8 +196,9 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
   const dayLimits = policy.limits?.day?.[scope];
   const cycleLimits = policy.limits?.cycle?.[scope];
   const familyEnabled = dayLimits?.enabled ?? true;
+  const policyScope = { key: scope, kind: "family", family } as const;
   const setFamilyEnabled = (next: boolean) => {
-    for (const window of ["day", "cycle"] as const) setPolicy(previous => updateScope(previous, window, scope, family, current => ({ ...current, enabled: next })));
+    for (const window of ["day", "cycle"] as const) setPolicy(previous => updateScope(previous, window, policyScope, current => ({ ...current, enabled: next })));
   };
   useEffect(() => {
     if (!usage.data) return;
@@ -246,7 +247,7 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
           levels={levels}
           day={dayLimits ?? emptyScope()}
           cycle={cycleLimits ?? emptyScope()}
-          onChange={(window, change) => setPolicy(previous => updateScope(previous, window, scope, family, change))}
+          onChange={(window, change) => setPolicy(previous => updateScope(previous, window, policyScope, change))}
           tolerance={tolerance}
           open={familyEnabled ? open : null}
           onOpenChange={onOpenChange}
@@ -255,21 +256,6 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
       )}
     </section>
   );
-}
-
-function updateScope(policy: Policy, window: Window, scope: string, family: string, change: (limits: WindowLimits) => WindowLimits): Policy {
-  const limits: PolicyLimits = policy.limits
-    ? { day: { ...policy.limits.day }, cycle: { ...policy.limits.cycle } }
-    : { day: {}, cycle: {} };
-  const next = change(limits[window][scope] ?? emptyScope()) as ScopeLimits;
-  limits[window][scope] = next;
-  const result: Policy = { ...policy, limits };
-  if (window === "day") result.familyDailySpend = { ...result.familyDailySpend, [family]: next.cost };
-  return result;
-}
-
-function emptyScope(): ScopeLimits {
-  return { cost: {}, usage: {} };
 }
 
 function sameItems(left: SidebarItem[] | undefined, right: SidebarItem[]): boolean {
