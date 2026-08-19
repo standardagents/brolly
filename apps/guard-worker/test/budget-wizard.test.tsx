@@ -78,7 +78,8 @@ describe("BudgetWizard", () => {
       "Product limits",
       "Install shutdown fuse",
     ]);
-    expect(container.textContent).toContain("How far above your daily historical average each alert should sit.");
+    expect(container.textContent).toContain("Set how far above your usual daily spend each alert level starts.");
+    expect(container.textContent).toContain("Your Cloudflare accounttest-account");
     expect(container.textContent).toContain("Cost and billable usage limits for each product");
   });
 

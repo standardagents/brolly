@@ -258,6 +258,8 @@ const estimates = {
 };
 
 const onboarding = {
+  accountId: "placeholder-demo-account",
+  accountName: "Demo Account (local preview)",
   complete: !freshInstall,
   policy: freshInstall ? defaultPolicy : policy,
   families: freshInstall

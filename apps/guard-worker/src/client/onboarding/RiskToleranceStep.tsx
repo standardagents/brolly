@@ -4,7 +4,7 @@ import { cycleIndexFor, daysBetween } from "../components/limits-chart/cycles";
 import { levelColor } from "../components/limits-chart/LimitsChart";
 import { snapStep, snapToNice } from "../components/limits-chart/scale";
 import { useElementWidth } from "../components/limits-chart/use-element-width";
-import { Spinner } from "../components/ui";
+import { Icon, Spinner } from "../components/ui";
 import type { AlertLevel, Policy, RiskTolerancePreset } from "../types";
 import { StepIntro } from "./BudgetSteps";
 import {
@@ -24,11 +24,13 @@ const PRESETS: Array<{ id: Exclude<RiskTolerancePreset, "custom">; label: string
   { id: "growth", label: "Growth" },
 ];
 
-export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
+export function RiskToleranceStep({ token, policy, levels, setPolicy, accountName = null, accountId = "" }: {
   token: string;
   policy: Policy;
   levels: AlertLevel[];
   setPolicy: Dispatch<SetStateAction<Policy>>;
+  accountName?: string | null;
+  accountId?: string;
 }) {
   const usage = useUsageSeries(token, "account");
   const order = useMemo(() => levels.map(level => level.id), [levels]);
@@ -69,23 +71,27 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
 
   return <>
     <StepIntro title="Risk tolerance">
-      Each alert level starts at a multiple of your own daily spend. This sets every starting limit. You can fine-tune each limit on the next steps.
+      Set how far above your usual daily spend each alert level starts. These become the starting limits for the next two steps, where you can adjust any of them.
     </StepIntro>
-    <BaselinePanel state={usage} series={series} typical={typical} windowDays={tolerance.baseline.windowDays} />
-    <div className="mb-5 flex flex-wrap items-center gap-2" role="group" aria-label="Risk tolerance preset">
-      <span className="mr-1 text-[12px] font-[650] text-muted">Preset</span>
-      {PRESETS.map(preset => (
-        <button
-          key={preset.id}
-          type="button"
-          aria-pressed={tolerance.preset === preset.id}
-          className={`rounded-field border px-3.5 py-2 text-[12.5px] font-bold transition-colors ${tolerance.preset === preset.id ? "border-orange bg-orange-soft text-orange-deep" : "border-line bg-panel-soft text-muted hover:border-orange hover:text-ink"}`}
-          onClick={() => commit(preset.id, tolerancePresetValues(preset.id, order))}
-        >{preset.label}</button>
-      ))}
-      {tolerance.preset === "custom" && <span className="ml-1 rounded-full bg-chip px-2.5 py-1 text-[11.5px] font-bold text-chip-ink">Custom</span>}
+    <div className="grid grid-cols-[340px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
+      <BaselinePanel state={usage} series={series} typical={typical} windowDays={tolerance.baseline.windowDays} accountName={accountName} accountId={accountId} />
+      <div className="min-w-0">
+        <div className="mb-5 flex flex-wrap items-center gap-2" role="group" aria-label="Risk tolerance preset">
+          <span className="mr-1 text-[12px] font-[650] text-muted">Preset</span>
+          {PRESETS.map(preset => (
+            <button
+              key={preset.id}
+              type="button"
+              aria-pressed={tolerance.preset === preset.id}
+              className={`rounded-field border px-3.5 py-2 text-[12.5px] font-bold transition-colors ${tolerance.preset === preset.id ? "border-orange bg-orange-soft text-orange-deep" : "border-line bg-panel-soft text-muted hover:border-orange hover:text-ink"}`}
+              onClick={() => commit(preset.id, tolerancePresetValues(preset.id, order))}
+            >{preset.label}</button>
+          ))}
+          {tolerance.preset === "custom" && <span className="ml-1 rounded-full bg-chip px-2.5 py-1 text-[11.5px] font-bold text-chip-ink">Custom</span>}
+        </div>
+        <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
+      </div>
     </div>
-    <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
   </>;
 }
 
@@ -93,12 +99,15 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
  * The number every level is measured against: the median of this account's
  * own daily spend over the window, with the days that produced it.
  */
-function BaselinePanel({ state, series, typical, windowDays }: {
+function BaselinePanel({ state, series, typical, windowDays, accountName, accountId }: {
   state: { loading: boolean; error: string; data: { today: string } | null };
   series: Array<{ day: string; value: number }>;
   typical: number;
   windowDays: number;
+  accountName: string | null;
+  accountId: string;
 }) {
+  const account = accountName ?? (accountId ? shortId(accountId) : "");
   const today = state.data?.today;
   const windowed = useMemo(() => {
     if (!today) return [];
@@ -110,26 +119,25 @@ function BaselinePanel({ state, series, typical, windowDays }: {
   const first = windowed[0]?.day;
   const last = windowed.at(-1)?.day;
   return (
-    <section className="mb-5 rounded-panel border border-line bg-panel-soft p-4" aria-label="Your baseline">
-      <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
-        <div className="w-[340px] max-w-full flex-none">
-          <p className="text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Your daily spend baseline</p>
-          {state.loading && <p className="mt-2 inline-flex items-center gap-2 text-[12.5px] text-muted"><Spinner /> Reading your account history…</p>}
-          {!state.loading && state.error && <p className="mt-2 text-[12.5px] text-muted">Brolly could not read your account history. You can still set the percentages.</p>}
-          {!state.loading && !state.error && typical > 0 && (
-            <>
-              <p className="mt-1 text-[26px] font-[760] leading-none tracking-[-0.01em] text-ink tabular-nums">{money(typical)} <span className="text-[13px] font-[600] text-muted">per day</span></p>
-              <p className="mt-2 max-w-[46ch] text-[12px] leading-[1.5] text-muted">
-                Median of your account's daily spend from {shortDate(first)} to {shortDate(last)}, across {daysWithSpend} {daysWithSpend === 1 ? "day" : "days"} with spend. Every level below is a multiple of this amount.
-              </p>
-            </>
-          )}
-          {!state.loading && !state.error && typical === 0 && (
-            <p className="mt-2 max-w-[46ch] text-[12.5px] leading-[1.5] text-muted">Your account has no daily spend in the last {windowDays} days, so there is no baseline yet. Levels are saved as percentages and take effect once spend appears.</p>
-          )}
-        </div>
-        {typical > 0 && <Sparkline points={windowed} median={typical} />}
-      </div>
+    <section className="self-start rounded-panel border border-line bg-panel-soft p-4" aria-label="Your baseline">
+      <p className="text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Your Cloudflare account</p>
+      {account && <p className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[12.5px] font-[650] text-ink" title={accountName ?? accountId}><Icon name="layers" className="size-3.5 flex-none text-faint" /><span className="truncate">{account}</span></p>}
+      {state.loading && <p className="mt-2 inline-flex items-center gap-2 text-[12.5px] text-muted"><Spinner /> Reading your account history…</p>}
+      {!state.loading && state.error && <p className="mt-2 text-[12.5px] leading-[1.5] text-muted">Brolly could not read your account history. You can still set the percentages.</p>}
+      {!state.loading && !state.error && typical > 0 && (
+        <>
+          <p className="mt-4 text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Usual daily spend</p>
+          <p className="mt-1 text-[28px] font-[760] leading-none tracking-[-0.01em] text-ink tabular-nums">{money(typical)} <span className="text-[13px] font-[600] text-muted">per day</span></p>
+          <p className="mt-3 text-[12.5px] leading-[1.55] text-muted">
+            Brolly read {daysWithSpend} {daysWithSpend === 1 ? "day" : "days"} of spend from this account, {shortDate(first)} to {shortDate(last)}, and took the median.
+          </p>
+          <Sparkline points={windowed} median={typical} />
+          <p className="mt-3 border-t border-line-soft pt-3 text-[12.5px] leading-[1.55] text-ink">Each alert level is a multiple of this number.</p>
+        </>
+      )}
+      {!state.loading && !state.error && typical === 0 && (
+        <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">Your account has no daily spend in the last {windowDays} days, so there is no baseline yet. Levels are saved as percentages and take effect once spend appears.</p>
+      )}
     </section>
   );
 }
@@ -149,7 +157,7 @@ function Sparkline({ points, median }: { points: Array<{ day: string; value: num
   const barWidth = Math.max(1, slot - 1);
   const y = (value: number) => height - (Math.min(value, max) / max) * (height - 14);
   return (
-    <figure ref={ref} className="m-0 min-w-[280px] flex-1" aria-label={`Your daily spend for the last ${points.length} days`}>
+    <figure ref={ref} className="m-0 mt-4 w-full" aria-label={`Your daily spend for the last ${points.length} days`}>
       {width > 0 && (
         <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="block overflow-visible">
           {points.map((point, index) => (
@@ -162,11 +170,15 @@ function Sparkline({ points, median }: { points: Array<{ day: string; value: num
       )}
       <figcaption className="mt-1 flex justify-between gap-3 text-[10px] text-faint">
         <span>{shortDate(points[0]?.day)}</span>
-        <span className="truncate">{clipped > 0 ? `Your daily spend · ${clipped} ${clipped === 1 ? "day" : "days"} above ${money(max)} shown clipped` : "Your daily spend"}</span>
+        <span className="truncate">{clipped > 0 ? `${clipped} ${clipped === 1 ? "day" : "days"} above ${money(max)} clipped` : "Daily spend"}</span>
         <span>{shortDate(points.at(-1)?.day)}</span>
       </figcaption>
     </figure>
   );
+}
+
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
 }
 
 function shortDate(day: string | undefined): string {

@@ -92,8 +92,9 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
 }
 
 export async function onboardingData(env: Env): Promise<Record<string, unknown>> {
-  const [completeRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
+  const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
     env.DB.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first<{ value: string }>(),
+    env.DB.prepare(`SELECT value FROM settings WHERE key='account_name' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT family,metric,state FROM metric_coverage`).all<{ family: string; metric: string; state: string }>(),
     env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all<{ family: "workers" | "durable_objects"; asset_id: string; name: string | null; scope: "resource" | "namespace"; metadata_json: string }>(),
@@ -102,6 +103,7 @@ export async function onboardingData(env: Env): Promise<Record<string, unknown>>
   const coverage = coverageResult.results;
   return {
     accountId: env.BROLLY_ACCOUNT_ID,
+    accountName: accountNameRow?.value ?? null,
     complete: completeRow?.value === "true",
     policy: { ...policy, familyDailySpend: { ...DEFAULT_FAMILY_DAILY_SPEND, ...policy.familyDailySpend }, assetDailySpend: policy.assetDailySpend ?? {} },
     families: METRIC_CATALOG.map(definition => ({

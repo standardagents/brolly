@@ -87,6 +87,8 @@ export interface Policy {
 
 export interface OnboardingData {
   accountId: string;
+  /** Cloudflare account name captured at sign-in; null before the first OAuth session. */
+  accountName?: string | null;
   complete: boolean;
   policy: Policy;
   families: Array<{ family: string; label: string; metrics: string[]; protection: "active" | "coverage_gap" }>;
