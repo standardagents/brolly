@@ -114,9 +114,18 @@ export function Popover({ anchor, open, side = "bottom", align = "start", classN
     window.addEventListener("resize", update);
     return () => { window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update); };
   }, [anchor, open, side, align]);
+  // Keep the panel inside the viewport when it is wider than its anchor.
+  const panel = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!box || !panel.current) { setShift(0); return; }
+    const rect = panel.current.getBoundingClientRect();
+    const overflow = rect.right - (window.innerWidth - 8);
+    setShift(overflow > 0 ? -overflow : 0);
+  }, [box, children]);
   if (!open || !box) return null;
   return createPortal(
-    <div className={cx("fixed z-50", className)} style={box}>{children}</div>,
+    <div ref={panel} className={cx("fixed z-50", className)} style={{ ...box, transform: shift ? `translateX(${shift}px)` : undefined }}>{children}</div>,
     document.body,
   );
 }
@@ -266,7 +275,7 @@ export function Modal({ header, onClose, children, labelledBy }: {
 }) {
   const panelRef = useDialogFocus(onClose);
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#14171b66] p-4 backdrop-blur-[2px] dark:bg-[#050608aa]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <section
         className="my-auto flex max-h-[calc(100vh-32px)] w-[min(680px,100%)] flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-drawer outline-none"
@@ -282,7 +291,8 @@ export function Modal({ header, onClose, children, labelledBy }: {
         </header>
         <div className="overflow-y-auto p-6">{children}</div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

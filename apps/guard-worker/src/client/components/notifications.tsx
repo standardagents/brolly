@@ -4,7 +4,7 @@ import { relativeTime } from "../format";
 import { emailSendingTokenTemplateUrl, emailServiceOnboardingUrl } from "../lib/email";
 import { useOutsideClose } from "../lib/outside-close";
 import type { NotificationKind, NotificationProvider, NotificationTarget, ProviderKind, ProvidersResponse } from "../types";
-import { Button, ChannelLogo, CountBadge, Icon, InfoTip, Notice, Panel, PanelHead } from "./ui";
+import { Button, ChannelLogo, CountBadge, Icon, InfoTip, Modal, Notice, Panel, PanelHead } from "./ui";
 
 export const NOTIFICATION_CHANNELS: Array<{ kind: NotificationKind; label: string; description: string }> = [
   { kind: "cloudflare_email", label: "Cloudflare Email", description: "Send email through Cloudflare Email Service." },
@@ -17,6 +17,7 @@ export const NOTIFICATION_CHANNELS: Array<{ kind: NotificationKind; label: strin
 ];
 
 const PROVIDER_KINDS: ProviderKind[] = ["cloudflare_email", "postmark", "resend", "twilio"];
+const MAX_EMAIL_RECIPIENTS = 50;
 
 export interface TargetsResponse {
   targets: NotificationTarget[];
@@ -102,10 +103,12 @@ export function NotificationSection({ token }: { token: string }) {
   );
 }
 
-export function ChannelList({ token, state }: { token: string; state: NotificationTargetsState }) {
+export function ChannelList({ token, state, layout = "list" }: { token: string; state: NotificationTargetsState; layout?: "list" | "grid" }) {
   const { targets, credentialStorageReady, loading, error, setError, load } = state;
   const [adding, setAdding] = useState<NotificationChannel | null>(null);
   const [saved, setSaved] = useState("");
+  const grid = layout === "grid";
+  const fullWidth = grid ? "lg:col-span-2 2xl:col-span-3" : "";
 
   async function patchLabel(target: NotificationTarget, label: string) {
     setError("");
@@ -124,26 +127,14 @@ export function ChannelList({ token, state }: { token: string; state: Notificati
   }
 
   return (
-    <div className="grid gap-2.5">
-      {!credentialStorageReady && !loading && <CredentialWarning />}
-      {error && <Notice tone="error">{error}</Notice>}
-      {saved && <Notice tone="success" role="status">{saved}</Notice>}
-      {loading && <p className="py-2.5 text-[13px] text-muted">Loading alert channels…</p>}
+    <div className={`grid gap-2.5 ${grid ? "lg:grid-cols-2 2xl:grid-cols-3" : ""}`} data-channel-grid={grid || undefined}>
+      {!credentialStorageReady && !loading && <div className={fullWidth}><CredentialWarning /></div>}
+      {error && <div className={fullWidth}><Notice tone="error">{error}</Notice></div>}
+      {saved && <p className="sr-only" role="status">{saved}</p>}
+      {loading && <p className={`${fullWidth} py-2.5 text-[13px] text-muted`}>Loading alert channels…</p>}
       {targets.map(target => <ChannelRow key={target.id} target={target} onLabel={label => void patchLabel(target, label)} onRemove={() => void remove(target)} />)}
-      {adding ? (
-        <div className="rounded-panel border border-line p-3.5">
-          <header className="mb-3 flex items-center gap-2.5">
-            <ChannelLogo kind={adding.kind} />
-            <div className="min-w-0 flex-1"><strong className="block text-[13.5px]">{adding.label}</strong><p className="mt-0.5 text-[12px] text-muted">{adding.description}</p></div>
-          </header>
-          <ChannelCredentialsForm
-            channel={adding}
-            token={token}
-            onCancel={() => setAdding(null)}
-            onSaved={async () => { setSaved(`${adding.label} channel saved.`); setAdding(null); await load(); }}
-          />
-        </div>
-      ) : <AddChannelRow disabled={!credentialStorageReady} onPick={channel => { setSaved(""); setAdding(channel); }} />}
+      <AddChannelRow disabled={!credentialStorageReady} onPick={channel => { setSaved(""); setAdding(channel); }} />
+      {adding && <ChannelSetupModal channel={adding} token={token} onClose={() => setAdding(null)} onSaved={async () => { setSaved(`${adding.label} channel saved.`); setAdding(null); await load(); }} />}
     </div>
   );
 }
@@ -157,14 +148,18 @@ function CredentialWarning() {
   );
 }
 
-export function AddChannelRow({ disabled = false, label = "Add alert channel", onPick }: { disabled?: boolean; label?: string; onPick: (channel: NotificationChannel) => void }) {
+export function AddChannelRow({ disabled = false, label = "Add alert channel", compact = false, onPick }: { disabled?: boolean; label?: string; compact?: boolean; onPick: (channel: NotificationChannel) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useOutsideClose(ref, open, () => setOpen(false));
   return (
-    <div ref={ref} className="relative">
-      <button type="button" disabled={disabled} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(current => !current)} className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-panel border border-dashed border-line bg-transparent px-4 py-4 text-[13.5px] font-[650] text-muted hover:border-orange hover:text-ink disabled:cursor-not-allowed disabled:opacity-55">
-        <span aria-hidden="true" className="text-[18px] leading-none">+</span> {label}
+    <div ref={ref} className="relative h-full" data-channel-add-cell>
+      <button type="button" disabled={disabled} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(current => !current)} className={compact
+        ? "group flex min-h-12 w-full cursor-pointer items-center gap-2.5 rounded-field border border-dashed border-line bg-panel px-2 py-1.5 text-left text-[12.5px] font-[650] text-muted transition-colors hover:border-orange hover:bg-orange-soft/30 hover:text-ink disabled:cursor-not-allowed disabled:opacity-55"
+        : "flex min-h-[74px] w-full cursor-pointer items-center justify-center gap-2 rounded-panel border border-dashed border-line bg-transparent px-4 py-4 text-[13.5px] font-[650] text-muted hover:border-orange hover:text-ink disabled:cursor-not-allowed disabled:opacity-55"}>
+        {compact
+          ? <span aria-hidden="true" className="grid size-[38px] flex-none place-items-center rounded-lg border border-dashed border-line text-[18px] leading-none group-hover:border-orange group-hover:text-orange">+</span>
+          : <span aria-hidden="true" className="text-[18px] leading-none">+</span>} {label}
       </button>
       {open && (
         <ul role="menu" className="absolute left-0 right-0 top-full z-30 mt-1.5 grid min-w-[280px] list-none gap-0.5 rounded-panel border border-line bg-panel p-1.5 shadow-panel">
@@ -177,12 +172,36 @@ export function AddChannelRow({ disabled = false, label = "Add alert channel", o
   );
 }
 
+/** Shared channel-creation surface used by setup and alert-level assignment. */
+export function ChannelSetupModal({ channel, token, onClose, onSaved }: {
+  channel: NotificationChannel;
+  token: string;
+  onClose: () => void;
+  onSaved: (targetId: string) => Promise<void>;
+}) {
+  const titleId = `add-${channel.kind}-channel-title`;
+  return (
+    <Modal
+      labelledBy={titleId}
+      onClose={onClose}
+      header={(
+        <div className="flex items-start gap-3">
+          <ChannelLogo kind={channel.kind} />
+          <div><h2 id={titleId}>Add {channel.label}</h2><p>{channel.description}</p></div>
+        </div>
+      )}
+    >
+      <ChannelCredentialsForm channel={channel} token={token} onCancel={onClose} onSaved={onSaved} />
+    </Modal>
+  );
+}
+
 function ChannelRow({ target, onLabel, onRemove }: { target: NotificationTarget; onLabel: (label: string) => void; onRemove: () => void }) {
   const [label, setLabel] = useState(target.label ?? "");
   useEffect(() => setLabel(target.label ?? ""), [target.label]);
   const commit = () => { const value = label.trim(); if (value && value !== target.label) onLabel(value); else setLabel(target.label ?? ""); };
   return (
-    <article className="flex flex-wrap items-center gap-3 rounded-panel border border-line p-3.5">
+    <article className="flex min-h-[74px] flex-wrap items-center gap-3 rounded-panel border border-line p-3.5" data-channel-card>
       <ChannelLogo kind={target.kind} />
       <div className="min-w-0 flex-1">
         <input aria-label={`Label for ${channelLabel(target.kind)} channel`} className="w-full max-w-[32ch] rounded-field border border-transparent bg-transparent px-1.5 py-0.5 text-[13.5px] font-[680] text-ink hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
@@ -201,9 +220,11 @@ export function ChannelCredentialsForm({ channel, token, onCancel, onSaved }: { 
   const [changeAccount, setChangeAccount] = useState(false);
   const [label, setLabel] = useState("");
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [recipients, setRecipients] = useState([""]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const set = useCallback((key: string, value: string) => setFields(current => ({ ...current, [key]: value })), []);
+  const emailChannel = channel.kind === "cloudflare_email" || channel.kind === "postmark" || channel.kind === "resend";
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -212,7 +233,7 @@ export function ChannelCredentialsForm({ channel, token, onCancel, onSaved }: { 
     try {
       const body: Record<string, unknown> = { kind: channel.kind, label: label.trim() };
       if (providerKind) {
-        body.destination = { to: fields.to };
+        body.destination = { to: emailChannel ? recipients.map(recipient => recipient.trim()) : fields.to };
         if (!existing || changeAccount) body.provider = { config: providerConfig(providerKind, fields) };
       } else {
         body.config = channel.kind === "webhook" ? { url: fields.url, token: fields.token || undefined } : { url: fields.url };
@@ -232,12 +253,37 @@ export function ChannelCredentialsForm({ channel, token, onCancel, onSaved }: { 
       )}
       {providerKind === "cloudflare_email" && accountFieldsVisible && <CloudflareEmailAccountFields token={token} fields={fields} set={set} />}
       {providerKind && providerKind !== "cloudflare_email" && accountFieldsVisible && <ProviderCredentialFields kind={providerKind} fields={fields} set={set} />}
-      {providerKind ? <TextField label={providerKind === "twilio" ? "Destination number" : "Destination address"} required type={providerKind === "twilio" ? "tel" : "email"} value={fields.to ?? ""} onChange={event => set("to", event.target.value)} /> : <WebhookFields channel={channel} fields={fields} set={set} />}
+      {emailChannel
+        ? <RecipientFields values={recipients} onChange={setRecipients} />
+        : providerKind
+          ? <TextField label="Destination number" required type="tel" value={fields.to ?? ""} onChange={event => set("to", event.target.value)} />
+          : <WebhookFields channel={channel} fields={fields} set={set} />}
       <p className="m-0 flex items-center gap-[7px] text-[12px] text-muted"><Icon name="shield" className="size-3.5" /> Brolly stores credentials in encrypted form.</p>
       {providers.error && <Notice tone="error">{providers.error}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       <div className="flex justify-end gap-2">{onCancel && <Button variant="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>}<Button type="submit" variant="primary" disabled={busy || providers.loading}>{busy ? "Saving…" : "Save alert channel"}</Button></div>
     </form>
+  );
+}
+
+function RecipientFields({ values, onChange }: { values: string[]; onChange: (values: string[]) => void }) {
+  const update = (index: number, value: string) => onChange(values.map((recipient, position) => position === index ? value : recipient));
+  const remove = (index: number) => onChange(values.filter((_, position) => position !== index));
+  return (
+    <fieldset className="grid gap-2">
+      <legend className="mb-1 text-[12.5px] font-[680]">Recipients</legend>
+      {values.map((recipient, index) => (
+        <div key={index} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <label className="sr-only" htmlFor={`notification-recipient-${index}`}>Recipient {index + 1}</label>
+          <input id={`notification-recipient-${index}`} aria-label={`Recipient ${index + 1}`} className="min-h-[38px] w-full rounded-field border border-field-line bg-field px-2.5 text-[13px] text-ink focus:border-orange focus:outline-none" required type="email" value={recipient} onChange={event => update(index, event.target.value)} />
+          {values.length > 1 && <Button variant="quiet" onClick={() => remove(index)} aria-label={`Remove recipient ${index + 1}`}><Icon name="x" /> Remove</Button>}
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <small className="text-[12px] text-muted">Every address in this channel receives the same alert.</small>
+        <Button variant="secondary" size="small" disabled={values.length >= MAX_EMAIL_RECIPIENTS} onClick={() => onChange([...values, ""])}><span aria-hidden="true">+</span> Add recipient</Button>
+      </div>
+    </fieldset>
   );
 }
 

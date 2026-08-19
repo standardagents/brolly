@@ -91,6 +91,7 @@ describe("alert level board drag and drop", () => {
       const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
       if (method !== "GET") calls.push({ path, method, body });
       if (path === "/api/targets") return json({ credentialStorageReady: true, targets: [{ id: "target-1", kind: "discord", label: "Ops server", providerId: null, enabled: true, createdAt: 1, updatedAt: 1, lastDeliveryAt: null, lastDeliveryOk: null, lastDeliveryError: null }] });
+      if (path === "/api/providers") return json({ providers: [] });
       if (path === "/api/alert-levels" && method === "GET") return json({ levels });
       return json({ ok: true });
     }));
@@ -105,7 +106,22 @@ describe("alert level board drag and drop", () => {
     await click(findButton(levelColumn("Critical"), "+ Add"));
     const menu = document.querySelector("[role='menu']") as HTMLElement;
     expect([...menu.querySelectorAll("button")].some(button => button.textContent?.trim() === "Ops server")).toBe(false);
-    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    const prepare = findButton(menu, "1-click QuarantineBrolly asks you before it quarantines anything.");
+    const automatic = findButton(menu, "Automatic QuarantineBrolly quarantines without asking.");
+    expect(prepare.querySelector("svg")).not.toBeNull();
+    expect(automatic.querySelector("svg")).not.toBeNull();
+    // The quarantinable products are listed once, under both action options.
+    expect(menu.textContent).toContain("WorkersDurable ObjectsQueuesOnly the resources that are driving the overspend are affected. Quarantines are reversible.");
+    expect(menu.querySelectorAll(".product-glyph")).toHaveLength(3);
+
+    await click(findButton(menu, "+ Add new channel"));
+    const resend = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Resend"));
+    if (!resend) throw new Error("Resend channel option was not rendered");
+    await click(resend);
+    await waitFor(() => expect(document.querySelector("[role='dialog']")?.textContent).toContain("Add Resend"));
+    expect(document.querySelector("[role='dialog']")?.parentElement?.parentElement).toBe(document.body);
+    await click(document.querySelector("[role='dialog'] button[aria-label='Close']") as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelector("[role='dialog']")).toBeNull());
 
     // Drag Critical's handle left of Warning: every slot rect is 0×0 in this DOM, so the pointer lands at index 0.
     const handle = levelColumn("Critical").querySelector("button[aria-label='Drag Critical to reorder']") as HTMLButtonElement;

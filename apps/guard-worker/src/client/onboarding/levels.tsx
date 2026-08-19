@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
-import { AddChannelRow, ChannelCredentialsForm, targetName, type NotificationChannel, type NotificationTargetsState } from "../components/notifications";
-import { Button, ChannelLogo, Icon, IconButton, Notice, Popover, Spinner } from "../components/ui";
+import { AddChannelRow, ChannelSetupModal, targetName, type NotificationChannel, type NotificationTargetsState } from "../components/notifications";
+import { Button, ChannelLogo, Icon, IconButton, Notice, Popover, ProductIcon, Spinner } from "../components/ui";
 import { useOutsideClose } from "../lib/outside-close";
 import type { AlertEntryKind, AlertLevel, AlertLevelEntry, AlertLevelsResponse } from "../types";
 import { slotIndexAt, useDragSession, useFlip, useLeaving, type DragSession } from "./board-motion";
@@ -354,10 +354,9 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, usedAct
         {actionEntries.prepare.length > 0 && actionDragHere !== "prepare" && <ActionEntry mode="prepare" onRemove={() => void removeEntries(actionEntries.prepare)} onGrab={(event, element) => onGrabAction(event, "prepare", element)} />}
         {actionEntries.auto.length > 0 && actionDragHere !== "auto" && <ActionEntry mode="auto" onRemove={() => void removeEntries(actionEntries.auto)} onGrab={(event, element) => onGrabAction(event, "auto", element)} />}
         {actionSlotHere && <div data-flip-key={`slot:action:${actionSlotHere}`} className="rounded-field border-2 border-dashed border-orange/60 bg-orange-soft/30" style={{ height: entryDrag?.height ?? 74 }} aria-hidden="true" />}
-        {newChannel ? (
-          <div className="rounded-field border border-line-soft p-2.5"><ChannelCredentialsForm channel={newChannel} token={token} onCancel={() => setNewChannel(null)} onSaved={async targetId => { await targets.load(); await addEntry("channel", targetId); setNewChannel(null); }} /></div>
-        ) : <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} usedTargets={usedTargets} usedActions={usedActions} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />}
+        <LevelAddMenu open={addOpen} setOpen={setAddOpen} level={level} targets={targets} usedTargets={usedTargets} usedActions={usedActions} onChannel={targetId => void addEntry("channel", targetId)} onNewChannel={setNewChannel} onAction={mode => void addAction(mode)} />
       </div>
+      {newChannel && <ChannelSetupModal channel={newChannel} token={token} onClose={() => setNewChannel(null)} onSaved={async targetId => { await targets.load(); await addEntry("channel", targetId); setNewChannel(null); }} />}
     </section>
   );
 }
@@ -390,21 +389,30 @@ function ActionEntry({ mode, onRemove, onGrab, ghost = false }: { mode: "prepare
   const auto = mode === "auto";
   const ref = useRef<HTMLElement>(null);
   return (
-    <article ref={ref} data-flip-key={ghost ? undefined : `action:${mode}`} className={`rounded-field border p-2.5 ${ghost ? "pointer-events-none" : "board-in"} ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`}>
-      <div className="flex items-start gap-2">
-        <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 opacity-70 hover:opacity-100 active:cursor-grabbing" aria-label={`Drag ${auto ? "auto" : "prepare"} action to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
-        <span className="min-w-0 flex-1">
-          <strong className="block text-[12.5px]">{auto ? "Automatic Quarantine" : "Present 1-click Quarantine"}</strong>
-          <span className="mt-0.5 block text-[11.5px] leading-[1.4]">{auto
-            ? "Brolly finds the biggest contributors and automatically quarantines them without waiting for approval. Quarantines are reversible."
-            : "Brolly finds the biggest contributors and prepares a quarantine action for your approval. Quarantines are reversible."}</span>
-          <span className="mt-1 block text-[11px] font-semibold opacity-80">Workers, Durable Objects, and Queues only.</span>
-        </span>
-        <button type="button" aria-label={`Remove ${mode} action`} onClick={onRemove}><Icon name="x" className="size-4" /></button>
+    <article ref={ref} data-flip-key={ghost ? undefined : `action:${mode}`} className={`rounded-field border bg-panel-soft p-2.5 ${ghost ? "pointer-events-none border-orange" : "board-in border-line-soft"}`}>
+      <div className="flex items-center gap-2">
+        <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 text-faint hover:text-ink active:cursor-grabbing" aria-label={`Drag ${auto ? "auto" : "prepare"} action to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
+        <ActionGlyph mode={mode} />
+        <strong className="min-w-0 flex-1 truncate text-[12.5px]">{auto ? "Automatic Quarantine" : "1-click Quarantine"}</strong>
+        <button type="button" aria-label={`Remove ${mode} action`} className="text-faint hover:text-danger" onClick={onRemove}><Icon name="x" className="size-4" /></button>
       </div>
+      <p className="mt-2 text-[11.5px] leading-[1.45] text-muted">{ACTION_COPY[mode]}</p>
+      <QuarantineScope />
     </article>
   );
 }
+
+function ActionGlyph({ mode }: { mode: "prepare" | "auto" }) {
+  const auto = mode === "auto";
+  return (
+    <span className={`grid size-7 flex-none place-items-center rounded-md ${auto ? "bg-danger-bg text-danger" : "bg-warn-bg text-warn"}`} aria-hidden="true">
+      <Icon name="shield" className="size-4" />
+    </span>
+  );
+}
+
+const ADD_ROW = "group flex min-h-12 w-full min-w-0 cursor-pointer items-center gap-2.5 rounded-field border border-line-soft bg-panel px-2 py-1.5 text-left transition-colors hover:border-orange hover:bg-orange-soft/30";
+const ADD_MARK = <span aria-hidden="true" className="flex-none text-[16px] leading-none text-faint before:content-['+'] group-hover:text-orange" />;
 
 function LevelAddMenu({ open, setOpen, level, targets, usedTargets, usedActions, onChannel, onNewChannel, onAction }: { open: boolean; setOpen: (open: boolean) => void; level: AlertLevel; targets: NotificationTargetsState; usedTargets: Set<string | null>; usedActions: { prepare: boolean; auto: boolean }; onChannel: (targetId: string) => void; onNewChannel: (channel: NotificationChannel) => void; onAction: (mode: "prepare" | "auto") => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -414,8 +422,86 @@ function LevelAddMenu({ open, setOpen, level, targets, usedTargets, usedActions,
   const available = targets.targets.filter(target => !usedTargets.has(target.id));
   // Actions, like channels, sit in one level and apply to every level to the right.
   const grouped = { prepare: usedActions.prepare ? [level] : [], auto: usedActions.auto ? [level] : [] };
-  return <div ref={ref} className="relative"><button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button><Popover anchor={ref} open={open} side="top" align="stretch"><div ref={panel} role="menu" className="grid gap-1 rounded-panel border border-line bg-panel p-1.5 shadow-panel">{available.map(target => <button key={target.id} type="button" role="menuitem" className="flex items-center gap-2 rounded-field px-2 py-1.5 text-left text-[12px] hover:bg-panel-soft" onClick={() => { setOpen(false); onChannel(target.id); }}><ChannelLogo kind={target.kind} />{targetName(target)}</button>)}<AddChannelRow label="Add new channel" onPick={channel => { setOpen(false); onNewChannel(channel); }} />{grouped.prepare.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-warn hover:bg-warn-bg" onClick={() => { setOpen(false); onAction("prepare"); }}>Present 1-click Quarantine</button>}{grouped.auto.length === 0 && <button type="button" role="menuitem" className="rounded-field px-2 py-2 text-left text-[12px] text-danger hover:bg-danger-bg" onClick={() => { setOpen(false); onAction("auto"); }}>Automatic Quarantine</button>}</div></Popover></div>;
+  const showActions = grouped.prepare.length === 0 || grouped.auto.length === 0;
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button>
+      <Popover anchor={ref} open={open} side="top" align="start">
+        <div ref={panel} role="menu" className={`flex rounded-panel border border-line bg-panel p-1.5 shadow-panel ${showActions ? "w-[480px]" : "w-[240px]"}`}>
+          <div className={`grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1 p-1 ${showActions ? "w-[200px] flex-none" : "flex-1"}`}>
+            <h4 className="m-0 px-2 pt-1.5 pb-1 text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Your channels</h4>
+            {available.map(target => (
+              <button key={target.id} type="button" role="menuitem" className={ADD_ROW} onClick={() => { setOpen(false); onChannel(target.id); }}>
+                <ChannelLogo kind={target.kind} />
+                <strong className="min-w-0 flex-1 truncate text-[12.5px]">{targetName(target)}</strong>
+                {ADD_MARK}
+              </button>
+            ))}
+            <AddChannelRow label="Add new channel" compact onPick={channel => { setOpen(false); onNewChannel(channel); }} />
+          </div>
+          {showActions && (
+            <section className="ml-1.5 grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-1 rounded-field bg-panel-soft p-1" aria-label="Quarantine actions">
+              <h4 className="m-0 px-2 pt-1.5 pb-1 text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Brolly actions</h4>
+              {grouped.prepare.length === 0 && <ActionOption mode="prepare" onClick={() => { setOpen(false); onAction("prepare"); }} />}
+              {grouped.auto.length === 0 && <ActionOption mode="auto" onClick={() => { setOpen(false); onAction("auto"); }} />}
+              <QuarantineScope inMenu />
+            </section>
+          )}
+        </div>
+      </Popover>
+    </div>
+  );
 }
+
+function ActionOption({ mode, onClick }: { mode: "prepare" | "auto"; onClick: () => void }) {
+  const auto = mode === "auto";
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={ADD_ROW}
+      onClick={onClick}
+    >
+      <span className={`grid size-[38px] flex-none place-items-center rounded-lg border ${auto ? "border-danger-line bg-danger-bg text-danger" : "border-warn-line bg-warn-bg text-warn"}`} aria-hidden="true">
+        <Icon name="shield" className="size-[18px]" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <strong className="block text-[12.5px] leading-[1.3] text-ink">{auto ? "Automatic Quarantine" : "1-click Quarantine"}</strong>
+        <span className="block text-[11.5px] leading-[1.4] text-muted">{ACTION_COPY[mode]}</span>
+      </span>
+      {ADD_MARK}
+    </button>
+  );
+}
+
+const ACTION_COPY = {
+  prepare: "Brolly asks you before it quarantines anything.",
+  auto: "Brolly quarantines without asking.",
+} as const;
+
+/** Which products quarantine can touch, and that it only touches the ones behind the overspend. */
+function QuarantineScope({ inMenu = false }: { inMenu?: boolean }) {
+  return (
+    <div className={inMenu ? "mx-1 mt-1 mb-1 border-t border-line-soft px-1 pt-2" : "mt-2.5 border-t border-line-soft pt-2.5"}>
+      <p className="mb-1.5 text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Applies to</p>
+      <ul className="m-0 grid list-none gap-1 p-0" aria-label="Products quarantine can affect">
+        {ACTION_PRODUCTS.map(product => (
+          <li key={product.family} className="flex items-center gap-2 text-[11.5px] font-[650] leading-none text-ink">
+            <ProductIcon family={product.family} size="sm" />
+            {product.label}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-[11px] leading-[1.45] text-muted">Only the resources that are driving the overspend are affected. Quarantines are reversible.</p>
+    </div>
+  );
+}
+
+const ACTION_PRODUCTS = [
+  { family: "workers", label: "Workers" },
+  { family: "durable_objects", label: "Durable Objects" },
+  { family: "queues", label: "Queues" },
+] as const;
 
 function LevelMenu({ index, count, canAdd, canDelete, onMove, onAddBefore, onAddAfter, onDelete }: { index: number; count: number; canAdd: boolean; canDelete: boolean; onMove: (position: number) => void; onAddBefore: () => void; onAddAfter: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false);
