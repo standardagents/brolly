@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Switch } from "../ui";
 import { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel, type LimitsChartLevel } from "./LimitsChart";
 import { type LevelValues, pushLevels } from "./levels";
 import { chooseAxis, niceCeil, snapStep, snapToNice } from "./scale";
@@ -147,10 +148,7 @@ function TrackField({ level, unit, value, enabled, onCommit, onToggle }: { level
         <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
         <span className="truncate">{level.label}</span>
         {onToggle && (
-          <span className="ml-3 inline-flex flex-none cursor-pointer items-center" title={enabled ? `${level.label} is active. Switch off to skip it.` : `${level.label} is off.`}>
-            <input type="checkbox" role="switch" checked={enabled} aria-checked={enabled} aria-label={`Use ${level.label} level`} className="peer sr-only" onChange={event => onToggle(event.target.checked)} />
-            <span className="relative inline-block h-[14px] w-[24px] rounded-full bg-[#c3cad2] transition-colors peer-checked:bg-[#1a9c8c] peer-focus-visible:shadow-[0_0_0_3px_#f6821f33] dark:bg-[#505862] after:absolute after:top-[2px] after:left-[2px] after:size-[10px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[10px]" aria-hidden="true" />
-          </span>
+          <span className="ml-3 flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active. Switch off to skip it.` : `${level.label} is off.`} /></span>
         )}
       </span>
       <span className="-ml-1 flex w-max items-baseline gap-[3px] rounded-[4px] border border-transparent px-1 text-ink hover:border-line focus-within:border-orange focus-within:bg-field">

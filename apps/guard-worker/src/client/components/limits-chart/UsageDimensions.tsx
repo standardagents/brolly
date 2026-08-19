@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { number as formatNumber } from "../../format";
+import { Switch } from "../ui";
 import type { UsageSeriesResponse } from "./api";
 import { type CycleBounds, cycleIndexFor, type DayPoint } from "./cycles";
 import { deriveSeries } from "./defaults";
@@ -156,13 +157,7 @@ export function Expander({ open, children }: { open: boolean; children: React.Re
 }
 
 export function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
-  return (
-    <label className="inline-flex cursor-pointer items-center" title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."}>
-      <span className="sr-only">Monitor {label}</span>
-      <input type="checkbox" role="switch" checked={on} aria-checked={on} className="peer sr-only" onChange={event => onChange(event.target.checked)} />
-      <span className="relative inline-block h-[18px] w-[32px] rounded-full bg-[#c3cad2] transition-colors peer-checked:bg-[#1a9c8c] peer-focus-visible:shadow-[0_0_0_3px_#f6821f33] dark:bg-[#505862] after:absolute after:top-[2px] after:left-[2px] after:size-[14px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[14px]" aria-hidden="true" />
-    </label>
-  );
+  return <Switch label={`Monitor ${label}`} on={on} onChange={onChange} title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."} />;
 }
 
 /** One level value in a row: click to edit in place, Enter/blur commits, Escape cancels. */

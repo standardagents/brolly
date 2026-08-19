@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money, number as formatNumber } from "../../format";
-import { ProductIcon } from "../ui";
+import { ProductIcon, Switch } from "../ui";
 import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults } from "./defaults";
@@ -482,7 +482,7 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
         <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
           <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
           <span className="truncate">{level.label}</span>
-          {onToggle && <span className="ml-3 flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
+          {onToggle && <span className="ml-3 flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active on this chart. Switch off to skip it.` : `${level.label} is off for this chart.`} /></span>}
         </span>
         <span className="-ml-1 w-max rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
       </label>
@@ -493,24 +493,10 @@ function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = 
       <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
         <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
         <span className="truncate">{level.label}</span>
-        {onToggle && <span className="ml-auto flex-none"><LevelSwitch label={level.label} on={enabled} onChange={onToggle} /></span>}
+        {onToggle && <span className="ml-auto flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active on this chart. Switch off to skip it.` : `${level.label} is off for this chart.`} /></span>}
       </span>
       {input}
     </label>
-  );
-}
-
-function LevelSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
-  return (
-    <span className="inline-flex cursor-pointer items-center" title={on ? `${label} is active on this chart. Switch off to skip it.` : `${label} is off for this chart.`} onClick={event => event.preventDefault()}>
-      <span className="sr-only">Use {label} level</span>
-      <input type="checkbox" role="switch" checked={on} aria-checked={on} className="peer sr-only" onChange={event => onChange(event.target.checked)} onClick={event => event.stopPropagation()} />
-      <span
-        className="relative inline-block h-[14px] w-[24px] rounded-full bg-[#c3cad2] transition-colors peer-checked:bg-[#1a9c8c] peer-focus-visible:shadow-[0_0_0_3px_#f6821f33] dark:bg-[#505862] after:absolute after:top-[2px] after:left-[2px] after:size-[10px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[10px]"
-        aria-hidden="true"
-        onClick={() => onChange(!on)}
-      />
-    </span>
   );
 }
 

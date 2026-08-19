@@ -83,6 +83,37 @@ export function ProductIcon({ family, tone = "neutral", size = "md" }: { family:
   );
 }
 
+/** Compact accessible switch used by limit and monitoring controls. */
+export function Switch({ label, on, onChange, disabled = false, title }: {
+  label: string;
+  on: boolean;
+  onChange(next: boolean): void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <label className="inline-flex cursor-pointer items-center has-[:disabled]:cursor-default" title={title} onClick={event => { event.preventDefault(); event.stopPropagation(); }}>
+      <span className="sr-only">{label}</span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={on}
+        aria-checked={on}
+        aria-label={label}
+        disabled={disabled}
+        className="peer sr-only"
+        onChange={event => onChange(event.target.checked)}
+        onClick={event => event.stopPropagation()}
+      />
+      <span
+        className="relative inline-block h-[14px] w-[24px] rounded-full bg-[#c3cad2] transition-colors peer-checked:bg-[#1a9c8c] peer-focus-visible:shadow-[0_0_0_3px_#f6821f33] peer-disabled:opacity-55 dark:bg-[#505862] after:absolute after:top-[2px] after:left-[2px] after:size-[10px] after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-[10px]"
+        aria-hidden="true"
+        onClick={() => { if (!disabled) onChange(!on); }}
+      />
+    </label>
+  );
+}
+
 /**
  * Anchored floating panel rendered through a portal, so it escapes any
  * `overflow` clipping ancestor (horizontal scrollers clip vertically too).
