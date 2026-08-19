@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction } from "react";
 import { costSeries, useUsageSeries } from "../components/limits-chart/api";
 import { cycleIndexFor, daysBetween } from "../components/limits-chart/cycles";
+import { LevelValueField } from "../components/limits-chart/LevelValueField";
 import { levelColor } from "../components/limits-chart/LimitsChart";
 import { snapStep, snapToNice } from "../components/limits-chart/scale";
 import { useElementWidth } from "../components/limits-chart/use-element-width";
@@ -398,7 +399,9 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
           <div key={level.id} className="absolute rounded-field border bg-panel px-2.5 py-2 shadow-panel" style={{ width: cardWidth, left: cardLeft(index), top: cardTop, borderColor: level.color }}>
             <div className="flex items-baseline justify-between gap-1">
               <span className="truncate text-[11.5px] font-bold" style={{ color: level.color }}>{level.label}</span>
-              <PercentField label={level.label} value={percent} onCommit={next => change(level.id, next)} />
+              <span className="[&_[data-level-field]]:w-auto [&_[data-level-label]]:hidden">
+                <LevelValueField level={level} unit="%" value={percent} enabled variant="bare" step={value => snapStep(value, 1)} onCommit={next => change(level.id, next)} />
+              </span>
             </div>
             {typical > 0 && (
               <div className="mt-1 grid gap-0.5 text-[11px] tabular-nums text-muted">
@@ -417,43 +420,6 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
 function connector(x1: number, y1: number, x2: number, y2: number): string {
   const midY = (y1 + y2) / 2;
   return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
-}
-
-function PercentField({ label, value, onCommit }: { label: string; value: number; onCommit: (next: number) => void }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? String(Math.round(value));
-  const commit = () => {
-    if (draft === null) return;
-    const next = Number(draft.replace(/[% ,]/g, ""));
-    setDraft(null);
-    if (Number.isFinite(next)) onCommit(next);
-  };
-  return (
-    <span className="inline-flex items-baseline justify-center gap-0.5 rounded-[4px] border border-transparent px-1 text-[15px] font-[740] tabular-nums text-ink hover:border-line focus-within:border-orange focus-within:bg-field">
-      <input
-        className="min-w-[2ch] border-0 bg-transparent text-right text-[15px] font-[740] tabular-nums text-ink outline-none"
-        style={{ width: `${Math.max(2, shown.length) + 0.5}ch` }}
-        aria-label={`${label} percent of typical`}
-        inputMode="decimal"
-        value={shown}
-        onFocus={event => { setDraft(String(Math.round(value))); event.target.select(); }}
-        onChange={event => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={event => {
-          if (event.key === "Enter") { event.preventDefault(); commit(); event.currentTarget.blur(); }
-          if (event.key === "Escape") { setDraft(null); event.currentTarget.blur(); }
-          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-            event.preventDefault();
-            const step = snapStep(value, 1) * (event.shiftKey ? 10 : 1);
-            const next = value + (event.key === "ArrowUp" ? step : -step);
-            setDraft(String(Math.round(next)));
-            onCommit(next);
-          }
-        }}
-      />
-      <span className="text-[11px] font-medium text-faint">%</span>
-    </span>
-  );
 }
 
 function formatPercent(value: number): string {

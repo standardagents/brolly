@@ -37,7 +37,7 @@ function Harness() {
   />;
 }
 
-describe("dimension level diamonds", () => {
+describe("dimension level fields", () => {
   it("toggles a level off and back on while the expanded chart follows", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -45,12 +45,12 @@ describe("dimension level diamonds", () => {
     await act(async () => { root!.render(<Harness />); });
     expect(container.querySelectorAll("[data-limits-chart] [role='slider']")).toHaveLength(2);
 
-    const disable = container.querySelector("button[aria-label='Disable Warn for this dimension']") as HTMLButtonElement;
+    const disable = container.querySelector("input[role='switch'][aria-label='Use Warn level']") as HTMLInputElement;
     await act(async () => disable.click());
     expect(container.querySelectorAll("[data-limits-chart] [role='slider']")).toHaveLength(1);
-    expect(container.querySelector("button[aria-label='Enable Warn for this dimension']")).not.toBeNull();
+    expect(disable.checked).toBe(false);
 
-    const enable = container.querySelector("button[aria-label='Enable Warn for this dimension']") as HTMLButtonElement;
+    const enable = container.querySelector("input[role='switch'][aria-label='Use Warn level']") as HTMLInputElement;
     await act(async () => enable.click());
     expect(container.querySelectorAll("[data-limits-chart] [role='slider']")).toHaveLength(2);
   });

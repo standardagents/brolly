@@ -3,8 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { LimitsChartDual, levelColor, useUsageSeries, type WindowLimits } from "../components/limits-chart";
 import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
 import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
-import { Icon, ProductIcon, Spinner } from "../components/ui";
-import { MonitorSwitch } from "../components/limits-chart/UsageDimensions";
+import { Icon, ProductIcon, Spinner, Switch } from "../components/ui";
 import type { AlertLevel, OnboardingData, Policy, PolicyLimits, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
 
@@ -235,7 +234,7 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
         </span>
         <span className="ml-auto flex items-center gap-2 text-[11.5px] font-bold text-muted">
           <span>{familyEnabled ? "Monitored" : "Not monitored"}</span>
-          <MonitorSwitch label={label} on={familyEnabled} onChange={setFamilyEnabled} />
+          <Switch label={`Monitor ${label}`} on={familyEnabled} onChange={setFamilyEnabled} title={familyEnabled ? "Monitored. Switch off to ignore this product." : "Not monitored."} />
         </span>
       </header>
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}

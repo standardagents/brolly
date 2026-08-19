@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money, number as formatNumber } from "../../format";
-import { ProductIcon, Switch } from "../ui";
+import { ProductIcon } from "../ui";
 import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults } from "./defaults";
+import { formatLimitValue } from "./format";
+import { LevelValueField } from "./LevelValueField";
 import { type Axis, chooseAxis, snapStep, snapToNice } from "./scale";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
@@ -71,17 +73,7 @@ export function levelColor(index: number, count: number): string {
   return LEVEL_PALETTE[Math.min(LEVEL_PALETTE.length - 1, Math.round(index * step))]!;
 }
 
-/** Short unit labels for tight cells; anything not listed shows as-is. */
-const UNIT_ABBREVIATIONS: Record<string, string> = { requests: "reqs", messages: "msgs", operations: "ops", transformations: "xforms" };
-
-export function unitLabel(unit: string): string {
-  return UNIT_ABBREVIATIONS[unit] ?? unit;
-}
-
-export function formatLimitValue(value: number, unit: string): string {
-  if (unit === "USD") return money(value);
-  return `${formatNumber(value)} ${unitLabel(unit)}`;
-}
+export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
 export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
@@ -418,7 +410,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         // Aligned with the plot area, not the axis gutter, so values sit under the lines they set.
         <div className="mt-2 grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
           {levels.map(level => (
-            <LevelField key={level.id} inline level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+            <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
               onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
@@ -427,7 +419,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         // Four across when there are four or more levels; fewer levels share the row three-wide so each card gets a third.
         <div className={`mt-2.5 grid grid-cols-2 gap-2 ${levels.length >= 4 ? "@[560px]:grid-cols-4" : "@[560px]:grid-cols-3"}`}>
           {levels.map(level => (
-            <LevelField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+            <LevelValueField key={level.id} variant="boxed" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               enabled={levelEnabled?.[level.id] ?? true}
               onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
@@ -438,105 +430,6 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       </p>}
     </div>
   );
-}
-
-function LevelField({ level, unit, value, onCommit, enabled, onToggle, inline = false }: { level: LimitsChartLevel; unit: string; value: number; onCommit(next: number): void; enabled: boolean; onToggle?(next: boolean): void; inline?: boolean }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? compactValue(value, unit);
-  const commitDraft = () => {
-    if (draft === null) return;
-    const parsed = parseCompact(draft);
-    setDraft(null);
-    if (parsed !== null && parsed >= 0) onCommit(parsed);
-  };
-  const input = (
-    <span className="flex min-w-0 items-baseline gap-[3px] text-ink">
-        {unit === "USD" && <b className="text-[13px] text-faint">$</b>}
-        <input
-          className="min-w-[2ch] max-w-full border-0 bg-transparent p-0 text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default"
-          style={{ width: `calc(${Math.max(2, shown.length)}ch + 2px)` }}
-          inputMode="decimal"
-          disabled={!enabled}
-          value={shown}
-          aria-label={`${level.label} limit${unit === "USD" ? " in dollars" : ` in ${unit}`}`}
-          onFocus={event => { const text = editableValue(value, unit); setDraft(text); selectNumber(event.target, text); }}
-          onChange={event => setDraft(event.target.value)}
-          onBlur={commitDraft}
-          onKeyDown={event => {
-            if (event.key === "Enter") { event.preventDefault(); commitDraft(); (event.target as HTMLInputElement).blur(); return; }
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-            event.preventDefault();
-            const step = snapStep(value) * (event.shiftKey ? 10 : 1);
-            const next = Math.max(0, value + (event.key === "ArrowUp" ? step : -step));
-            setDraft(editableValue(next, unit));
-            onCommit(next);
-          }}
-        />
-        {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unitLabel(unit)}</small>}
-      </span>
-  );
-  if (inline) {
-    // Label over value, switch to the right; no box.
-    return (
-      <label className={`flex w-full min-w-0 flex-col transition-opacity ${enabled ? "" : "opacity-55"}`}>
-        <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
-          <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-          <span className="truncate">{level.label}</span>
-          {onToggle && <span className="ml-3 flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active on this chart. Switch off to skip it.` : `${level.label} is off for this chart.`} /></span>}
-        </span>
-        <span className="-ml-1 w-max rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field">{input}</span>
-      </label>
-    );
-  }
-  return (
-    <label className={`flex min-w-0 flex-col gap-1 rounded-field border border-field-line bg-field px-2 py-1.5 transition-opacity focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${enabled ? "" : "opacity-55"}`}>
-      <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-muted">
-        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-        <span className="truncate">{level.label}</span>
-        {onToggle && <span className="ml-auto flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active on this chart. Switch off to skip it.` : `${level.label} is off for this chart.`} /></span>}
-      </span>
-      {input}
-    </label>
-  );
-}
-
-/** Short display form: values from 1,000 up carry a K/M/B/T suffix ("2.1K", "100.5M"), so a value is at most 6 characters. */
-export function compactValue(value: number, _unit: string): string {
-  return value >= 1_000
-    ? new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
-    : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
-}
-
-/** Select the digits of an edit value but leave a K/M/B/T suffix unselected, so typing keeps the scale. */
-export function selectNumber(input: HTMLInputElement, text: string): void {
-  const digits = text.match(/^[0-9.]*/)?.[0].length ?? text.length;
-  requestAnimationFrame(() => { try { input.setSelectionRange(0, digits); } catch { /* unsupported input type */ } });
-}
-
-/**
- * The text a field shows while editing. Large values keep their K/M/B/T
- * suffix with a little more precision ("5.83B"), so users edit in that
- * form and can swap the suffix; small values are plain numbers.
- */
-export function editableValue(value: number, _unit: string): string {
-  if (!(value >= 1_000)) return String(roundForField(value));
-  const units: Array<[number, string]> = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
-  const [scale, suffix] = units.find(([limit]) => value >= limit)!;
-  return `${roundFloatText(value / scale)}${suffix}`;
-}
-
-function roundFloatText(value: number): string {
-  return String(Number(value.toPrecision(4)));
-}
-
-/** Accepts "5.8B", "12k", "2,000", "1.5 M". Returns null when unreadable. */
-export function parseCompact(text: string): number | null {
-  const match = text.trim().replace(/,/g, "").match(/^\$?\s*([0-9]*\.?[0-9]+)\s*([kKmMbBtT])?/);
-  if (!match) return null;
-  const base = Number(match[1]);
-  if (!Number.isFinite(base)) return null;
-  const scale: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, t: 1e12 };
-  return base * (match[2] ? scale[match[2].toLowerCase()]! : 1);
 }
 
 function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { history: LimitHistory; canReset: boolean; onReset(): void; onUndo(): void; onRedo(): void }) {
@@ -573,10 +466,6 @@ function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { histor
       </button>
     </div>
   );
-}
-
-function roundForField(value: number): number {
-  return Number(value.toFixed(value >= 100 ? 0 : 2));
 }
 
 function formatTick(value: number, unit: string): string {

@@ -4,9 +4,11 @@ import { Switch } from "../ui";
 import type { UsageSeriesResponse } from "./api";
 import { type CycleBounds, cycleIndexFor, type DayPoint } from "./cycles";
 import { deriveSeries } from "./defaults";
+import { formatLimitValue, unitLabel } from "./format";
+import { LevelValueField } from "./LevelValueField";
 import { type LevelValues, crossedLevel } from "./levels";
 import { chooseAxis } from "./scale";
-import { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel, type LimitsChartLevel } from "./LimitsChart";
+import type { LimitsChartLevel } from "./LimitsChart";
 
 /**
  * Dimension rows for the limits chart pair: every billable dimension as a
@@ -113,14 +115,14 @@ export function DimensionRows({ dimensions, levels, values, selected, onSelect, 
                   const levelOn = levelEnabled?.[dimension.id]?.[level.id] ?? true;
                   const value = values[dimension.id]?.[level.id];
                   return (
-                    <LevelChip key={level.id} level={level} value={value} on={levelOn} unit={dimension.unit}
+                    <LevelValueField key={level.id} variant="chip" level={level} value={value} enabled={levelOn} unit={dimension.unit}
                       onToggle={onToggleLevel && on ? next => onToggleLevel(dimension.id, level.id, next) : undefined}
                       onCommit={onValueChange && on && levelOn && value !== undefined ? next => onValueChange(dimension.id, level.id, next) : undefined} />
                   );
                 })}
               </span>
               <span className="relative flex justify-end">
-                {onToggle ? <MonitorSwitch label={dimension.label} on={on} onChange={next => onToggle(dimension.id, next)} /> : null}
+                {onToggle ? <Switch label={`Monitor ${dimension.label}`} on={on} onChange={next => onToggle(dimension.id, next)} title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."} /> : null}
               </span>
             </div>
             {renderChart && <Expander open={open}>{renderChart(dimension.id)}</Expander>}
@@ -153,51 +155,6 @@ export function Expander({ open, children }: { open: boolean; children: React.Re
         </div>
       </div>
     </div>
-  );
-}
-
-export function MonitorSwitch({ label, on, onChange }: { label: string; on: boolean; onChange(next: boolean): void }) {
-  return <Switch label={`Monitor ${label}`} on={on} onChange={onChange} title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."} />;
-}
-
-/** One level value in a row: click to edit in place, Enter/blur commits, Escape cancels. */
-export function LevelChip({ level, value, on, unit, onToggle, onCommit }: { level: LimitsChartLevel; value: number | undefined; on: boolean; unit: string; onToggle?(next: boolean): void; onCommit?(next: number): void }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = value === undefined ? "–" : compactValue(value, unit);
-  const commit = () => {
-    if (draft === null) return;
-    const parsed = parseCompact(draft);
-    setDraft(null);
-    if (parsed !== null && parsed >= 0 && onCommit) onCommit(parsed);
-  };
-  return (
-    <span className={`inline-flex items-center gap-1 text-[10.5px] tabular-nums text-muted ${on ? "" : "opacity-40 line-through"}`} title={`${level.label} limit${on ? "" : " (off)"}${onCommit ? " · click to edit" : ""}`}>
-      {onToggle ? <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        aria-label={`${on ? "Disable" : "Enable"} ${level.label} for this dimension`}
-        className="size-3 flex-none cursor-pointer rounded-[2px] p-[3px] outline-none focus-visible:ring-2 focus-visible:ring-orange focus-visible:ring-offset-1"
-        onClick={event => { event.stopPropagation(); onToggle(!on); }}
-      ><i className="block size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" /></button>
-        : <i className="size-1.5 rotate-45 rounded-[1px]" style={{ background: level.color }} aria-hidden="true" />}
-      {onCommit ? (
-        <input
-          className="w-[5ch] rounded-[3px] border border-transparent bg-transparent px-0.5 text-[10.5px] tabular-nums text-muted outline-none hover:border-line focus:border-orange focus:bg-field focus:text-ink"
-          style={{ width: `${Math.max(3, (draft ?? shown).length) + 1}ch` }}
-          value={draft ?? shown}
-          aria-label={`${level.label} limit`}
-          inputMode="decimal"
-          onFocus={event => { const text = editableValue(value ?? 0, unit); setDraft(text); selectNumber(event.target, text); }}
-          onChange={event => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={event => {
-            if (event.key === "Enter") { event.preventDefault(); commit(); (event.target as HTMLInputElement).blur(); }
-            if (event.key === "Escape") { setDraft(null); (event.target as HTMLInputElement).blur(); }
-          }}
-        />
-      ) : shown}
-    </span>
   );
 }
 

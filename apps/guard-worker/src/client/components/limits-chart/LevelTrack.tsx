@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Switch } from "../ui";
-import { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel, type LimitsChartLevel } from "./LimitsChart";
+import { compactValue, formatLimitValue, unitLabel } from "./format";
+import { LevelValueField } from "./LevelValueField";
+import type { LimitsChartLevel } from "./LimitsChart";
 import { type LevelValues, pushLevels } from "./levels";
 import { chooseAxis, niceCeil, snapStep, snapToNice } from "./scale";
 import { useElementWidth } from "./use-element-width";
@@ -123,43 +124,12 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
       {!readOnly && (
         <div className="grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2">
           {levels.map(level => (
-            <TrackField key={level.id} level={level} unit={unit} value={shown[level.id] ?? 0} enabled={levelEnabled?.[level.id] ?? true}
+            <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} enabled={levelEnabled?.[level.id] ?? true}
               onCommit={next => onChange(push(value, level.id, next))}
               onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
         </div>
       )}
     </div>
-  );
-}
-
-function TrackField({ level, unit, value, enabled, onCommit, onToggle }: { level: LimitsChartLevel; unit: string; value: number; enabled: boolean; onCommit(next: number): void; onToggle?(next: boolean): void }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const shown = draft ?? compactValue(value, unit);
-  const commit = () => {
-    if (draft === null) return;
-    const parsed = parseCompact(draft);
-    setDraft(null);
-    if (parsed !== null && parsed >= 0) onCommit(parsed);
-  };
-  return (
-    <label className={`flex w-full min-w-0 flex-col transition-opacity ${enabled ? "" : "opacity-55"}`}>
-      <span className="flex items-center gap-1.5 text-[11px] font-bold text-muted">
-        <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-        <span className="truncate">{level.label}</span>
-        {onToggle && (
-          <span className="ml-3 flex-none"><Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active. Switch off to skip it.` : `${level.label} is off.`} /></span>
-        )}
-      </span>
-      <span className="-ml-1 flex w-max items-baseline gap-[3px] rounded-[4px] border border-transparent px-1 text-ink hover:border-line focus-within:border-orange focus-within:bg-field">
-        {unit === "USD" && <b className="text-[13px] text-faint">$</b>}
-        <input className="min-w-[2ch] border-0 bg-transparent p-0 text-[15px] font-[740] tabular-nums outline-none disabled:cursor-default" style={{ width: `calc(${Math.max(2, shown.length)}ch + 2px)` }} inputMode="decimal" disabled={!enabled} value={shown}
-          aria-label={`${level.label} limit${unit === "USD" ? " in dollars" : ` in ${unit}`}`}
-          onFocus={event => { const text = editableValue(value, unit); setDraft(text); selectNumber(event.target, text); }}
-          onChange={event => setDraft(event.target.value)} onBlur={commit}
-          onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); commit(); event.currentTarget.blur(); } if (event.key === "Escape") { setDraft(null); event.currentTarget.blur(); } }} />
-        {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unitLabel(unit)}</small>}
-      </span>
-    </label>
   );
 }

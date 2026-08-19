@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { number as formatNumber } from "../../format";
+import { Switch } from "../ui";
 import { billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
 import { cycleIndexFor, type DayPoint } from "./cycles";
+import { formatLimitValue, unitLabel } from "./format";
+import { LevelValueField } from "./LevelValueField";
 import type { LevelValues } from "./levels";
-import { formatLimitValue, unitLabel, type LimitsChartLevel } from "./LimitsChart";
-import { Expander, LevelChip, MiniChart, MonitorSwitch } from "./UsageDimensions";
+import type { LimitsChartLevel } from "./LimitsChart";
+import { Expander, MiniChart } from "./UsageDimensions";
 import { useScopeWindow, type ScopeWindow, type UsageLimitValues } from "./use-scope-window";
 
 export interface WindowLimits {
@@ -129,7 +132,7 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, total, levels, day, cy
             const value = side.values[level.id];
             const commit = row.id === "cost" ? (next: number) => side.window.commitCost(level.id, next) : (next: number) => side.window.commitUsage(row.id, level.id, next);
             const toggle = row.id === "cost" ? side.window.toggleCostLevel && ((next: boolean) => side.window.toggleCostLevel!(level.id, next)) : side.window.toggleUsageLevel && ((next: boolean) => side.window.toggleUsageLevel!(row.id, level.id, next));
-            return <LevelChip key={level.id} level={level} value={value} on={levelOn} unit={row.unit} onToggle={on && !readOnly ? toggle : undefined} onCommit={on && levelOn && value !== undefined && !readOnly ? commit : undefined} />;
+            return <LevelValueField key={level.id} variant="chip" level={level} value={value} enabled={levelOn} unit={row.unit} onToggle={on && !readOnly ? toggle : undefined} onCommit={on && levelOn && value !== undefined && !readOnly ? commit : undefined} />;
           })}
         </span>
       </span>
@@ -146,7 +149,7 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, total, levels, day, cy
         <span className="relative max-lg:order-last max-lg:col-span-3">{cell("day", day)}</span>
         <span className="relative max-lg:order-last max-lg:col-span-3">{cell("cycle", cycle)}</span>
         <span className="pointer-events-none relative text-right text-[12.5px] font-[740] tabular-nums">{total}</span>
-        <span className="relative flex justify-end">{onToggle ? <MonitorSwitch label={row.label} on={on} onChange={onToggle} /> : null}</span>
+        <span className="relative flex justify-end">{onToggle ? <Switch label={`Monitor ${row.label}`} on={on} onChange={onToggle} title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."} /> : null}</span>
       </div>
       <Expander open={open}>
         <div className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
