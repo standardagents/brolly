@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { number as formatNumber } from "../../format";
-import { Switch } from "../ui";
-import { billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
+import { Spinner, Switch } from "../ui";
+import { billableMetricIds, costSeries, metricSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
 import { cycleIndexFor, type DayPoint } from "./cycles";
 import { formatLimitValue, unitLabel } from "./format";
 import { LevelValueField } from "./LevelValueField";
@@ -21,7 +21,11 @@ export interface WindowLimits {
 }
 
 export interface LimitsChartDualProps {
-  data: UsageSeriesResponse;
+  /** Preloaded series. Preferred when the caller has already fetched this scope. */
+  data?: UsageSeriesResponse;
+  /** Session token and policy scope used to fetch series when data is omitted. */
+  token?: string;
+  scope?: string;
   levels: LimitsChartLevel[];
   day: WindowLimits;
   cycle: WindowLimits;
@@ -31,6 +35,8 @@ export interface LimitsChartDualProps {
   open: string | null;
   onOpenChange(next: string | null): void;
   readOnly?: boolean;
+  /** Render only the cost row for account-wide limits. */
+  costOnly?: boolean;
 }
 
 const COST_ACCENT = "#2f6fd6";
@@ -41,28 +47,30 @@ const USAGE_ACCENT = "#1a9c8c";
  * per-billing-cycle mini charts and level chips side by side, one cycle
  * total, and one switch. The open row shows both charts under it.
  */
-export function LimitsChartDual({ data, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false }: LimitsChartDualProps) {
+export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false, costOnly = false }: LimitsChartDualProps) {
+  const fetched = useUsageSeries(token ?? "", dataProp ? "" : scope ?? "");
+  const data = dataProp ?? fetched.data;
   const dayWindow = useScopeWindow({
-    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly, chartFields: "inline",
+    data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly,
     onCostChange: cost => onChange("day", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("day", current => ({ ...current, usage })),
     costLevelEnabled: day.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("day", current => ({ ...current, costLevelEnabled })),
     usageLevelEnabled: day.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("day", current => ({ ...current, usageLevelEnabled })),
   });
   const cycleWindow = useScopeWindow({
-    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, chartFields: "inline", costFloor: day.cost, usageFloor: day.usage,
+    data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, costFloor: day.cost, usageFloor: day.usage,
     onCostChange: cost => onChange("cycle", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("cycle", current => ({ ...current, usage })),
     costLevelEnabled: cycle.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("cycle", current => ({ ...current, costLevelEnabled })),
     usageLevelEnabled: cycle.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("cycle", current => ({ ...current, usageLevelEnabled })),
   });
   const metricIds = dayWindow.metricIds;
-  const currentCycle = cycleIndexFor(data.cycles, data.today);
-  const cycleTotal = (series: DayPoint[]) => series.filter(point => cycleIndexFor(data.cycles, point.day) === currentCycle).reduce((sum, point) => sum + point.value, 0);
-  const rows = useMemo(() => [
+  const currentCycle = data ? cycleIndexFor(data.cycles, data.today) : -1;
+  const cycleTotal = (series: DayPoint[]) => data ? series.filter(point => cycleIndexFor(data.cycles, point.day) === currentCycle).reduce((sum, point) => sum + point.value, 0) : 0;
+  const rows = useMemo(() => data ? [
     { id: "cost", label: "Cost", unit: "USD", series: costSeries(data) },
-    ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: metricSeries(data, id) })),
-  ], [data, metricIds]);
+    ...(costOnly ? [] : metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: metricSeries(data, id) }))),
+  ] : [], [data, metricIds, costOnly]);
   // One switch per dimension, written to both windows; the day map is authoritative.
   const enabledFor = (id: string) => (id === "cost" ? day.costEnabled ?? true : day.usageEnabled?.[id] ?? true);
   const setEnabled = (id: string, next: boolean) => {
@@ -70,6 +78,14 @@ export function LimitsChartDual({ data, levels, day, cycle, onChange, tolerance,
       onChange(window, current => (id === "cost" ? { ...current, costEnabled: next } : { ...current, usageEnabled: { ...current.usageEnabled, [id]: next } }));
     }
   };
+
+  if (!dataProp && scope && fetched.loading) {
+    return <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>;
+  }
+  if (!data) {
+    const message = fetched.error || "Usage history is unavailable.";
+    return <div className="grid h-[200px] place-content-center text-center text-[13px] text-faint">Usage history is unavailable. {message === "Usage history is unavailable." ? "" : message}</div>;
+  }
 
   return (
     <div className="@container">
@@ -131,8 +147,7 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, total, levels, day, cy
             const levelOn = side.levelEnabled?.[level.id] ?? true;
             const value = side.values[level.id];
             const commit = row.id === "cost" ? (next: number) => side.window.commitCost(level.id, next) : (next: number) => side.window.commitUsage(row.id, level.id, next);
-            const toggle = row.id === "cost" ? side.window.toggleCostLevel && ((next: boolean) => side.window.toggleCostLevel!(level.id, next)) : side.window.toggleUsageLevel && ((next: boolean) => side.window.toggleUsageLevel!(row.id, level.id, next));
-            return <LevelValueField key={level.id} variant="chip" level={level} value={value} enabled={levelOn} unit={row.unit} onToggle={on && !readOnly ? toggle : undefined} onCommit={on && levelOn && value !== undefined && !readOnly ? commit : undefined} />;
+            return <LevelValueField key={level.id} variant="chip" level={level} value={value} enabled={levelOn} unit={row.unit} onCommit={on && levelOn && value !== undefined && !readOnly ? commit : undefined} />;
           })}
         </span>
       </span>

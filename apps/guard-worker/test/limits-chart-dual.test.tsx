@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LimitsChartPair } from "../src/client/components/limits-chart/LimitsChartPair";
+import { afterEach, describe, expect, it } from "vitest";
+import { LimitsChartDual, type WindowLimits } from "../src/client/components/limits-chart/LimitsChartDual";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -26,56 +26,63 @@ const response = {
 };
 
 let root: Root | null = null;
-beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } })));
-});
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
   document.body.innerHTML = "";
-  vi.restoreAllMocks();
 });
 
-function Harness({ initial = {}, window = "day" as "day" | "cycle", daily }: { initial?: Record<string, number>; window?: "day" | "cycle"; daily?: Record<string, number> }) {
-  const [cost, setCost] = useState(initial);
-  const [usage, setUsage] = useState({ requests: { warn: 150, critical: 300 } });
+function Harness({ dayCost = {}, cycleCost = {}, costOnly = false }: { dayCost?: Record<string, number>; cycleCost?: Record<string, number>; costOnly?: boolean }) {
+  const [day, setDay] = useState<WindowLimits>({ cost: dayCost, usage: { requests: { warn: 150, critical: 300 } } });
+  const [cycle, setCycle] = useState<WindowLimits>({ cost: cycleCost, usage: {} });
   const [tolerance, setTolerance] = useState({ warn: 150, critical: 800 });
-  return <div data-cost={JSON.stringify(cost)} data-usage={JSON.stringify(usage)}>
+  const [open, setOpen] = useState<string | null>("cost");
+  return <div data-day={JSON.stringify(day)} data-cycle={JSON.stringify(cycle)}>
     <button type="button" onClick={() => setTolerance({ warn: 250, critical: 3000 })}>Change tolerance</button>
-    <LimitsChartPair token="test" scope="account" window={window} levels={levels}
-      cost={cost} onCostChange={setCost} usage={usage} onUsageChange={setUsage}
-      costFloor={daily} usageFloor={daily ? { requests: daily } : undefined} tolerance={tolerance} />
+    <LimitsChartDual data={response} levels={levels} day={day} cycle={cycle} costOnly={costOnly}
+      onChange={(window, change) => window === "day" ? setDay(change) : setCycle(change)}
+      tolerance={tolerance} open={open} onOpenChange={setOpen} />
   </div>;
 }
 
-describe("LimitsChartPair tolerance behavior", () => {
-  it("seeds an empty chart from tolerance; untouched maps follow a tolerance change, edited maps stay", async () => {
+describe("LimitsChartDual tolerance behavior", () => {
+  it("seeds an empty chart from tolerance while hand-edited maps stay fixed", async () => {
     const container = await render(<Harness />);
-    await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!).warn).toBeGreaterThan(0));
-    const seeded = JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!);
-    const savedUsage = container.querySelector("[data-usage]")!.getAttribute("data-usage");
+    await waitFor(() => expect(readWindow(container, "day").cost.warn).toBeGreaterThan(0));
+    const seeded = readWindow(container, "day").cost;
+    const savedUsage = readWindow(container, "day").usage;
     await act(async () => button(container, "Change tolerance").click());
-    await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!).warn).toBeGreaterThan(seeded.warn));
-    // The usage map was set by hand (150/300), so it does not move.
-    expect(container.querySelector("[data-usage]")!.getAttribute("data-usage")).toBe(savedUsage);
+    await waitFor(() => expect(readWindow(container, "day").cost.warn).toBeGreaterThan(seeded.warn));
+    expect(readWindow(container, "day").usage).toEqual(savedUsage);
   });
 
   it("allows a cycle value below its daily reference and shows the note", async () => {
-    const container = await render(<Harness window="cycle" initial={{ warn: 40, critical: 80 }} daily={{ warn: 50, critical: 60 }} />);
+    const container = await render(<Harness dayCost={{ warn: 50, critical: 60 }} cycleCost={{ warn: 40, critical: 80 }} />);
     await waitFor(() => expect(container.textContent).toContain("Warn is below its daily limit ($50.00)."));
-    const slider = container.querySelector("[data-limits-chart='cost'] [role='slider']") as SVGGElement;
+    const charts = container.querySelectorAll("[data-limits-chart='cost']");
+    const slider = charts[1]!.querySelector("[role='slider']") as SVGGElement;
     await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
-    expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!).warn).toBeLessThan(40);
+    expect(readWindow(container, "cycle").cost.warn).toBeLessThan(40);
   });
 
   it("resets one chart to tolerance and restores it with undo", async () => {
     const initial = { warn: 40, critical: 80 };
-    const container = await render(<Harness initial={initial} />);
+    const container = await render(<Harness dayCost={initial} />);
     const chart = container.querySelector("[data-limits-chart='cost']")!;
     await act(async () => button(chart as HTMLElement, "Reset to tolerance").click());
-    await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!)).not.toEqual(initial));
+    await waitFor(() => expect(readWindow(container, "day").cost).not.toEqual(initial));
     await act(async () => (chart.querySelector("[aria-label='Undo last limit change']") as HTMLButtonElement).click());
-    await waitFor(() => expect(JSON.parse(container.querySelector("[data-cost]")!.getAttribute("data-cost")!)).toEqual(initial));
+    await waitFor(() => expect(readWindow(container, "day").cost).toEqual(initial));
+  });
+
+  it("opens the day and cycle charts together and supports a cost-only scope", async () => {
+    const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} cycleCost={{ warn: 400, critical: 800 }} costOnly />);
+    expect(container.querySelectorAll("[data-limits-chart='cost']")).toHaveLength(2);
+    expect(container.textContent).not.toContain("Requests");
+    const chips = [...container.querySelectorAll("[data-level-field][data-variant='chip']")];
+    expect(chips).toHaveLength(levels.length * 2);
+    expect(chips.every(chip => !chip.querySelector("[data-level-label], [role='switch']"))).toBe(true);
+    expect(container.querySelectorAll("[data-level-field][data-variant='bare'] [role='switch']")).toHaveLength(levels.length * 2);
   });
 });
 
@@ -85,6 +92,10 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
   root = createRoot(container);
   await act(async () => { root!.render(node); await Promise.resolve(); });
   return container;
+}
+
+function readWindow(container: HTMLElement, window: "day" | "cycle"): WindowLimits {
+  return JSON.parse(container.querySelector(`[data-${window}]`)!.getAttribute(`data-${window}`)!);
 }
 
 function button(container: HTMLElement, label: string): HTMLButtonElement {

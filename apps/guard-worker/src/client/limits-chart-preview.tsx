@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { LimitsChartPair, levelColor, type LevelValues, type UsageLimitValues } from "./components/limits-chart";
+import { LimitsChartDual, levelColor, type WindowLimits } from "./components/limits-chart";
 import { RiskToleranceStep } from "./onboarding/RiskToleranceStep";
 import { AlertLevelsStep, useAlertLevels } from "./onboarding/levels";
+import { AccountLimitStep } from "./onboarding/LimitSteps";
 import { ProductLimitsStep } from "./onboarding/ProductLimitsStep";
 import { useNotificationTargets } from "./components/notifications";
 import type { AlertLevel, Policy } from "./types";
@@ -20,16 +21,12 @@ export function LimitsChartPreview() {
   const board = useAlertLevels("session");
   const targets = useNotificationTargets("session");
   const [policy, setPolicy] = useState<Policy>({ version: "preview", accountDailySpend: {}, familyDailySpend: {}, assetDailySpend: {}, thresholds: [] });
-  const [cost, setCost] = useState<LevelValues>({});
-  const [usage, setUsage] = useState<UsageLimitValues>({});
-  const [cycleCost, setCycleCost] = useState<LevelValues>({});
-  const [cycleUsage, setCycleUsage] = useState<UsageLimitValues>({});
-  const [doCost, setDoCost] = useState<LevelValues>({});
-  const [doUsage, setDoUsage] = useState<UsageLimitValues>({});
-  const [doEnabled, setDoEnabled] = useState<Record<string, boolean>>({});
-  const [doCostOn, setDoCostOn] = useState(true);
-  const [doCostLevels, setDoCostLevels] = useState<Record<string, boolean>>({});
-  const [doUsageLevels, setDoUsageLevels] = useState<Record<string, Record<string, boolean>>>({});
+  const [workerDay, setWorkerDay] = useState<WindowLimits>({ cost: {}, usage: {} });
+  const [workerCycle, setWorkerCycle] = useState<WindowLimits>({ cost: {}, usage: {} });
+  const [workerOpen, setWorkerOpen] = useState<string | null>("cost");
+  const [doDay, setDoDay] = useState<WindowLimits>({ cost: {}, usage: {} });
+  const [doCycle, setDoCycle] = useState<WindowLimits>({ cost: {}, usage: {} });
+  const [doOpen, setDoOpen] = useState<string | null>("cost");
 
   return (
     <main className="mx-auto max-w-[1180px] p-8 text-ink">
@@ -52,20 +49,17 @@ export function LimitsChartPreview() {
       <section className="mb-12 max-w-[900px] rounded-panel border border-line bg-panel p-8">
         <RiskToleranceStep token="session" policy={policy} levels={ALERT_LEVELS} setPolicy={setPolicy} />
       </section>
-      <h2 className="mb-1 text-[22px]">Daily limits · Durable Objects (6 dimensions)</h2>
-      <p className="mb-4 text-[13px] text-muted">Every dimension is a sparkline row with its level values and an on/off switch. The selected row expands into its chart.</p>
-      <LimitsChartPair token="session" scope="family:durable_objects" family="durable_objects" window="day" levels={LEVELS}
-        cost={doCost} onCostChange={setDoCost} usage={doUsage} onUsageChange={setDoUsage}
-        usageEnabled={doEnabled} onUsageEnabledChange={setDoEnabled} costEnabled={doCostOn} onCostEnabledChange={setDoCostOn}
-        costLevelEnabled={doCostLevels} onCostLevelEnabledChange={setDoCostLevels} usageLevelEnabled={doUsageLevels} onUsageLevelEnabledChange={setDoUsageLevels} />
+      <section className="mb-12 rounded-panel border border-line bg-panel p-8">
+        <AccountLimitStep token="session" policy={policy} levels={ALERT_LEVELS} setPolicy={setPolicy} />
+      </section>
+      <h2 className="mb-1 text-[22px]">Limits · Durable Objects</h2>
+      <p className="mb-4 text-[13px] text-muted">Every dimension shows daily and billing-cycle values in one row. The selected row expands both charts.</p>
+      <LimitsChartDual token="session" scope="family:durable_objects" levels={LEVELS} day={doDay} cycle={doCycle}
+        onChange={(window, change) => window === "day" ? setDoDay(change) : setDoCycle(change)} open={doOpen} onOpenChange={setDoOpen} />
       <hr className="my-12 border-line" />
-      <h2 className="mb-4 text-[22px]">Daily limits · Workers</h2>
-      <LimitsChartPair token="session" scope="family:workers" family="workers" window="day" levels={LEVELS}
-        cost={cost} onCostChange={setCost} usage={usage} onUsageChange={setUsage} />
-      <h2 className="mt-10 mb-4 text-[22px]">Billing cycle limits · Workers</h2>
-      <LimitsChartPair token="session" scope="family:workers" family="workers" window="cycle" levels={LEVELS}
-        cost={cycleCost} onCostChange={setCycleCost} usage={cycleUsage} onUsageChange={setCycleUsage}
-        costFloor={cost} usageFloor={usage} />
+      <h2 className="mb-4 text-[22px]">Limits · Workers</h2>
+      <LimitsChartDual token="session" scope="family:workers" levels={LEVELS} day={workerDay} cycle={workerCycle}
+        onChange={(window, change) => window === "day" ? setWorkerDay(change) : setWorkerCycle(change)} open={workerOpen} onOpenChange={setWorkerOpen} />
     </main>
   );
 }

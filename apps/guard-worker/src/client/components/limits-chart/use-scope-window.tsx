@@ -26,8 +26,6 @@ export interface ScopeWindowInput {
   onCostLevelEnabledChange?(next: Record<string, boolean>): void;
   usageLevelEnabled?: Record<string, Record<string, boolean>>;
   onUsageLevelEnabledChange?(next: Record<string, Record<string, boolean>>): void;
-  /** Value editors under each chart: cards, one inline row, or none. */
-  chartFields?: "cards" | "inline" | false;
 }
 
 export interface ScopeWindow {
@@ -49,7 +47,7 @@ export interface ScopeWindow {
  * undo history, chart nodes, and chip edit handlers. Layouts decide how the
  * rows look; this decides what they contain.
  */
-export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange, chartFields = "cards" }: ScopeWindowInput): ScopeWindow {
+export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: ScopeWindowInput): ScopeWindow {
   const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const histories = useLimitHistories();
@@ -125,7 +123,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
       <LimitsChart kind="cost" unit="USD" window={window} series={series} cycles={data.cycles} today={data.today}
         levels={levels} value={cost} seed={scaleFloor(costFloor)} tolerance={fromTolerance} resetToTolerance={reset}
         reference={window === "cycle" ? costFloor : undefined} onChange={onCostChange} readOnly={readOnly}
-        levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} history={histories("cost")} fields={chartFields} />
+        levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} history={histories("cost")} fields="inline" />
     );
   })();
   const usageChart = (id: string): ReactNode => {
@@ -141,7 +139,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
       tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined}
-      history={histories(id)} fields={chartFields} />;
+      history={histories(id)} fields="inline" />;
   };
 
   const commitCost = (levelId: string, next: number) => {

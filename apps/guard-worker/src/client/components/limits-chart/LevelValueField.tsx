@@ -80,9 +80,7 @@ export function LevelValueField({ level, unit, value, enabled, onCommit, onToggl
     return (
       <span data-level-field data-variant="chip" className={`inline-flex min-w-0 items-center gap-1 text-[10.5px] tabular-nums text-muted transition-opacity ${enabled ? "" : "opacity-55 line-through"}`} title={title}>
         {swatch}
-        <span data-level-label className="truncate font-bold">{level.label}</span>
         {valueEditor}
-        {toggle}
       </span>
     );
   }

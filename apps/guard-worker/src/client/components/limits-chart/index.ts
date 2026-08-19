@@ -4,6 +4,6 @@ export { useLimitHistory, type LimitHistory } from "./use-limit-history";
 export { type CycleBounds, type DayPoint } from "./cycles";
 export { type LevelValues, pushLevels, defaultLevels, completeLevels } from "./levels";
 export { chooseAxis, type Axis } from "./scale";
-export { LimitsChartPair, type LimitsChartPairProps, type UsageLimitValues } from "./LimitsChartPair";
+export { type UsageLimitValues } from "./use-scope-window";
 export { useUsageSeries, scopeKey, type UsageSeriesResponse } from "./api";
 export { LimitsChartDual, type LimitsChartDualProps, type WindowLimits } from "./LimitsChartDual";
