@@ -69,9 +69,11 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
 
   return <>
     <StepIntro title="Risk tolerance">
-      How far above your daily historical average each alert should sit. This sets every starting limit. You can fine-tune each limit on the next steps.
+      Each alert level starts at a multiple of your own daily spend. This sets every starting limit. You can fine-tune each limit on the next steps.
     </StepIntro>
-    <div className="mb-6 flex flex-wrap items-center gap-2" role="group" aria-label="Risk tolerance preset">
+    <BaselinePanel state={usage} series={series} typical={typical} windowDays={tolerance.baseline.windowDays} />
+    <div className="mb-5 flex flex-wrap items-center gap-2" role="group" aria-label="Risk tolerance preset">
+      <span className="mr-1 text-[12px] font-[650] text-muted">Preset</span>
       {PRESETS.map(preset => (
         <button
           key={preset.id}
@@ -83,13 +85,93 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy }: {
       ))}
       {tolerance.preset === "custom" && <span className="ml-1 rounded-full bg-chip px-2.5 py-1 text-[11.5px] font-bold text-chip-ink">Custom</span>}
     </div>
-    {usage.loading && <div className="mb-4 inline-flex items-center gap-2 text-[12.5px] text-muted"><Spinner /> Loading account history…</div>}
-    {usage.error && <p className="mb-4 text-[12.5px] text-muted">Account history is unavailable. Percentages can still be configured.</p>}
     <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
-    {typical > 0
-      ? <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Amounts are computed from your current {tolerance.baseline.windowDays}-day average account spend: {money(typical)} per day.</p>
-      : <p className="mt-3 text-[11.5px] text-faint" aria-label="Risk tolerance estimates">Account history has no nonzero daily spend yet, so there are no amounts to show.</p>}
   </>;
+}
+
+/**
+ * The number every level is measured against: the median of this account's
+ * own daily spend over the window, with the days that produced it.
+ */
+function BaselinePanel({ state, series, typical, windowDays }: {
+  state: { loading: boolean; error: string; data: { today: string } | null };
+  series: Array<{ day: string; value: number }>;
+  typical: number;
+  windowDays: number;
+}) {
+  const today = state.data?.today;
+  const windowed = useMemo(() => {
+    if (!today) return [];
+    const todayAt = Date.parse(`${today}T00:00:00Z`);
+    const cutoff = todayAt - (windowDays - 1) * 86_400_000;
+    return series.filter(point => { const at = Date.parse(`${point.day}T00:00:00Z`); return at >= cutoff && at <= todayAt; });
+  }, [series, today, windowDays]);
+  const daysWithSpend = windowed.filter(point => point.value > 0).length;
+  const first = windowed[0]?.day;
+  const last = windowed.at(-1)?.day;
+  return (
+    <section className="mb-5 rounded-panel border border-line bg-panel-soft p-4" aria-label="Your baseline">
+      <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+        <div className="w-[340px] max-w-full flex-none">
+          <p className="text-[10.5px] font-[700] uppercase tracking-[0.06em] text-faint">Your daily spend baseline</p>
+          {state.loading && <p className="mt-2 inline-flex items-center gap-2 text-[12.5px] text-muted"><Spinner /> Reading your account history…</p>}
+          {!state.loading && state.error && <p className="mt-2 text-[12.5px] text-muted">Brolly could not read your account history. You can still set the percentages.</p>}
+          {!state.loading && !state.error && typical > 0 && (
+            <>
+              <p className="mt-1 text-[26px] font-[760] leading-none tracking-[-0.01em] text-ink tabular-nums">{money(typical)} <span className="text-[13px] font-[600] text-muted">per day</span></p>
+              <p className="mt-2 max-w-[46ch] text-[12px] leading-[1.5] text-muted">
+                Median of your account's daily spend from {shortDate(first)} to {shortDate(last)}, across {daysWithSpend} {daysWithSpend === 1 ? "day" : "days"} with spend. Every level below is a multiple of this amount.
+              </p>
+            </>
+          )}
+          {!state.loading && !state.error && typical === 0 && (
+            <p className="mt-2 max-w-[46ch] text-[12.5px] leading-[1.5] text-muted">Your account has no daily spend in the last {windowDays} days, so there is no baseline yet. Levels are saved as percentages and take effect once spend appears.</p>
+          )}
+        </div>
+        {typical > 0 && <Sparkline points={windowed} median={typical} />}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Daily spend bars for the window with the median drawn across them. The
+ * scale clamps at three times the median so a spike cannot flatten the
+ * baseline; clamped days are drawn to the top in a lighter tone and counted
+ * in the caption.
+ */
+function Sparkline({ points, median }: { points: Array<{ day: string; value: number }>; median: number }) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const height = 72;
+  const max = median * 3 || 1;
+  const clipped = points.filter(point => point.value > max).length;
+  const slot = width / Math.max(1, points.length);
+  const barWidth = Math.max(1, slot - 1);
+  const y = (value: number) => height - (Math.min(value, max) / max) * (height - 14);
+  return (
+    <figure ref={ref} className="m-0 min-w-[280px] flex-1" aria-label={`Your daily spend for the last ${points.length} days`}>
+      {width > 0 && (
+        <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="block overflow-visible">
+          {points.map((point, index) => (
+            <rect key={point.day} x={index * slot} y={y(point.value)} width={barWidth} height={Math.max(0, height - y(point.value))} rx="0.5"
+              className={point.value > max ? "fill-orange/25" : point.value > 0 ? "fill-orange/60" : "fill-line"} />
+          ))}
+          <line x1="0" x2={width} y1={y(median)} y2={y(median)} className="stroke-ink" strokeWidth="1.25" strokeDasharray="3 3" />
+          <text x={width} y={y(median) - 4} textAnchor="end" className="fill-ink text-[10px] font-[700]">median {money(median)}</text>
+        </svg>
+      )}
+      <figcaption className="mt-1 flex justify-between gap-3 text-[10px] text-faint">
+        <span>{shortDate(points[0]?.day)}</span>
+        <span className="truncate">{clipped > 0 ? `Your daily spend · ${clipped} ${clipped === 1 ? "day" : "days"} above ${money(max)} shown clipped` : "Your daily spend"}</span>
+        <span>{shortDate(points.at(-1)?.day)}</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+function shortDate(day: string | undefined): string {
+  if (!day) return "";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${day}T00:00:00Z`));
 }
 
 /** Track geometry: linear from 0% to 100% over the first LINEAR_SHARE of the width, log above. */
@@ -253,7 +335,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
         {axisTicks(max).map(tick => (
           <text key={tick} x={xFor(tick)} y={trackY - 8} style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }} textAnchor={tick === 0 ? "start" : tick >= max ? "end" : "middle"} className={`text-[10.5px] tabular-nums ${tick === 100 ? "fill-ink font-bold" : "fill-faint"}`}>{formatPercent(tick)}</text>
         ))}
-        <text x={xFor(100)} y={trackY - 24} textAnchor="middle" className="fill-muted text-[10.5px] font-bold" style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }}>Daily historical average</text>
+        <text x={xFor(100)} y={trackY - 24} textAnchor="middle" className="fill-ink text-[10.5px] font-bold" style={{ transition: "x 240ms cubic-bezier(.2,.7,.2,1)" }}>{typical > 0 ? `Your daily average · ${money(typical)}` : "Your daily average"}</text>
         {/* Track: neutral base, tinted segment per level from its diamond to the next */}
         <rect x={pad} y={trackY} width={trackWidth} height={TRACK.height} rx={TRACK.height / 2} className="fill-line-soft" />
         {levels.map((level, index) => {
@@ -308,8 +390,8 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
             </div>
             {typical > 0 && (
               <div className="mt-1 grid gap-0.5 text-[11px] tabular-nums text-muted">
-                <span><b className="font-[740] text-ink">{money(daily)}</b> / day</span>
-                <span><b className="font-[740] text-ink">{money(daily * cycleDays)}</b> / cycle</span>
+                <span><b className="font-[740] text-ink">{money(daily)}</b> per day</span>
+                <span><b className="font-[740] text-ink">{money(daily * cycleDays)}</b> per cycle</span>
               </div>
             )}
           </div>
