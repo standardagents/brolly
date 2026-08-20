@@ -6764,7 +6764,7 @@ async function configurationData(env) {
 			inventory: pass("Discovered", "Durable Object namespace is present in Cloudflare inventory."),
 			owner: owner ? pass("Owner mapped", `Cloudflare associates this namespace with ${owner}.`) : unknown("Owner unknown", "Cloudflare did not return an owning Worker. Brolly will not accept a manual override."),
 			constructor: constructorConfirmed ? pass("Constructor confirmed", "An operator confirmed brollyDurableObject(ctx, env) is installed for this namespace.") : unknown("Constructor not confirmed", "The namespace remains alert-only until the constructor guard is confirmed."),
-			worker: ownerWorker?.status === "configured" ? pass("Owning Worker configured", `${owner} has live fuse and runtime evidence.`) : ownerWorker ? unknown("Owning Worker incomplete", `${owner} is ${ownerWorker.status.replaceAll("_", " ")}.`) : unknown("Worker not inventoried", owner ? `${owner} was not found in the Worker inventory.` : "Map an owning Worker first.")
+			worker: ownerWorker?.status === "configured" ? pass("Owning Worker configured", `${owner} has live breaker and runtime evidence.`) : ownerWorker ? unknown("Owning Worker incomplete", `${owner} is ${ownerWorker.status.replaceAll("_", " ")}.`) : unknown("Worker not inventoried", owner ? `${owner} was not found in the Worker inventory.` : "Map an owning Worker first.")
 		};
 		const status = constructorConfirmed && ownerWorker?.status === "configured" ? "configured" : constructorConfirmed || Boolean(owner) || ownerWorker?.status === "partial" ? "partial" : "not_configured";
 		return {
@@ -6850,7 +6850,7 @@ async function verifyWorker(env, token, workerScript) {
 		versionId: version,
 		checks: {
 			apiAccess,
-			fuseSecret: secretResult.status === "rejected" ? errorCheck("Secret check failed", secretResult.reason) : hasFuse ? pass("Fuse secret present", "The deployed Worker has a secret_text binding named BROLLY_FUSE.") : fail("Fuse secret missing", "Initialize BROLLY_FUSE before enabling shutdown controls."),
+			fuseSecret: secretResult.status === "rejected" ? errorCheck("Secret check failed", secretResult.reason) : hasFuse ? pass("Breaker secret present", "The deployed Worker has a secret_text binding named BROLLY_FUSE.") : fail("Breaker secret missing", "Initialize the BROLLY_FUSE secret before enabling shutdown controls."),
 			runtimeBundle: bundleResult.status === "rejected" ? errorCheck("Bundle check failed", bundleResult.reason) : bundle?.found ? pass("Runtime detected", "The deployed Worker bundle contains the Brolly quarantine marker.") : bundle?.truncated ? unknown("Bundle scan bounded", `No marker was found in the first ${MAX_BUNDLE_SCAN_BYTES.toLocaleString()} bytes.`) : fail("Runtime not detected", "The active Worker bundle does not contain the Brolly runtime marker."),
 			activeDeployment: deploymentResult.status === "rejected" ? errorCheck("Deployment check failed", deploymentResult.reason) : active ? pass("Active deployment found", version ? `Deployment ${active.id} is serving version ${version}.` : `Deployment ${active.id} is active.`) : fail("No active deployment", "Cloudflare returned no active deployment for this Worker.")
 		}
@@ -7563,7 +7563,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "58e2620073e537e122d072e8e5f07ac5c4a13828";
+var BROLLY_RELEASE = "c255004e9c61cf378a231f66184326fe3b285215";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
