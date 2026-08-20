@@ -158,7 +158,7 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
       <Panel aria-label="Runtime integration">
         <PanelHead
           eyebrow="Runtime integration"
-          title="Install the shutdown fuse"
+          title="Install the circuit breaker"
           sub="Required for precise, zero-hot-path-I/O Worker and Durable Object quarantine. Verify each install on the Configuration page afterwards."
           actions={<Button onClick={() => onNavigate("configuration")}>Verify installs</Button>}
         />

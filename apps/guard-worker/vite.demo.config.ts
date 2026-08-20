@@ -198,7 +198,7 @@ const returningFamilies = catalogFamilies.map(definition => ({
 const discoveredAssets = [
   { key: "workers:api-gateway", family: "workers", id: "api-gateway", name: "api-gateway", scope: "resource", protection: "active", tags: { env: "production" } },
   { key: "workers:image-resizer", family: "workers", id: "image-resizer", name: "image-resizer", scope: "resource", protection: "active", tags: {} },
-  { key: "durable_objects:agent-thread", family: "durable_objects", id: "agent-thread", name: "AgentThread", scope: "namespace", protection: "active", tags: { app: "agents" } },
+  { key: "durable_objects:agent-thread", family: "durable_objects", id: "agent-thread", name: "AgentThread", scope: "namespace", protection: "active", tags: { app: "agents", cloudflareWorkerScript: "api-gateway" } },
   { key: "durable_objects:rate-limiter", family: "durable_objects", id: "rate-limiter", name: "RateLimiter", scope: "namespace", protection: "coverage_gap", tags: {} },
 ];
 
@@ -484,11 +484,11 @@ const configuration = {
       deploymentId: "deploy-101", versionId: "ver-101", status: "configured",
       checks: {
         inventory: check("pass", "Inventory", "Seen in the account inventory scan."),
-        declared: check("pass", "Declared", "Runtime fuse declared in deployment metadata."),
+        declared: check("pass", "Declared", "Breaker declared in deployment metadata."),
         apiAccess: check("pass", "API access", "Script metadata is readable."),
-        fuseSecret: check("pass", "Fuse secret", "BROLLY_FUSE secret present."),
+        fuseSecret: check("pass", "Breaker secret", "BROLLY_FUSE secret present."),
         runtimeBundle: check("pass", "Runtime bundle", "@standardagents/brolly-runtime detected."),
-        activeDeployment: check("pass", "Active deployment", "Fuse active in the current deployment."),
+        activeDeployment: check("pass", "Active deployment", "Breaker active in the current deployment."),
       },
     },
     {
@@ -497,11 +497,11 @@ const configuration = {
       deploymentId: "deploy-88", versionId: "ver-88", status: "partial",
       checks: {
         inventory: check("pass", "Inventory", "Seen in the account inventory scan."),
-        declared: check("fail", "Declared", "No runtime fuse declared for this Worker."),
+        declared: check("fail", "Declared", "No breaker declared for this Worker."),
         apiAccess: check("pass", "API access", "Script metadata is readable."),
-        fuseSecret: check("fail", "Fuse secret", "BROLLY_FUSE secret not found."),
-        runtimeBundle: check("unknown", "Runtime bundle", "Not checked because the fuse is not declared."),
-        activeDeployment: check("unknown", "Active deployment", "Not checked because the fuse is not declared."),
+        fuseSecret: check("fail", "Breaker secret", "BROLLY_FUSE secret not found."),
+        runtimeBundle: check("unknown", "Runtime bundle", "Not checked because the breaker is not declared."),
+        activeDeployment: check("unknown", "Active deployment", "Not checked because the breaker is not declared."),
       },
     },
   ],
@@ -774,6 +774,7 @@ function demoApi(): Plugin {
         if (billingRoute && get) return send(billingAccess);
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
+        if (url.pathname === "/api/configuration/verify" && req.method === "POST") return send(configuration);
         if (url.pathname === "/api/targets" && get) return send({ targets, credentialStorageReady: true });
         if (url.pathname === "/api/providers" && get) return send({ providers });
         if (url.pathname === "/api/alert-levels" && get) return send({ levels: alertLevels });

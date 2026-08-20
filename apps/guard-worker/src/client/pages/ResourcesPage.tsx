@@ -76,7 +76,7 @@ export function ResourcesPage({ token, onNavigate }: { token: string; onNavigate
                   </Td>
                   <Td>{scope(resource.resourceType)}</Td>
                   <Td><QualityBadge quality={resource.coverageStatus} /></Td>
-                  <Td><CellStack title={resource.controlCapability.replaceAll("_", " ")} sub={`Fuse ${resource.runtimeFuseStatus}`} /></Td>
+                  <Td><CellStack title={resource.controlCapability.replaceAll("_", " ")} sub={`Breaker ${resource.runtimeFuseStatus}`} /></Td>
                   <Td>{resource.excluded ? "Excluded" : resource.autoQuarantinePolicy}</Td>
                   <Td>{resource.lastActiveAt ? relativeTime(resource.lastActiveAt) : "No activity observed"}</Td>
                   <Td className="whitespace-nowrap text-right">
@@ -160,7 +160,7 @@ function ResourceDrawer({ resource, token, onClose, onChanged, onUsage }: {
         <label className="my-[13px] inline-flex items-center gap-2 text-[12.5px] font-[650] whitespace-nowrap">
           <input type="checkbox" checked={excluded} onChange={event => setExcluded(event.target.checked)} className="size-[15px] accent-orange" /> Exclude this resource and descendants from automatic quarantine
         </label>
-        <small className="block text-[12.5px] leading-[1.5] text-muted">Rules remain able to alert and prepare operator-reviewed controls. Runtime fuse verification and complete fresh evidence are still required for automatic execution.</small>
+        <small className="block text-[12.5px] leading-[1.5] text-muted">Rules remain able to alert and prepare operator-reviewed controls. Circuit breaker verification and complete fresh evidence are still required for automatic execution.</small>
         {error && <Notice tone="error">{error}</Notice>}
         <Button variant="primary" full disabled={busy} onClick={() => void save()}>{busy ? "Saving…" : "Save protection boundary"}</Button>
       </DetailBlock>

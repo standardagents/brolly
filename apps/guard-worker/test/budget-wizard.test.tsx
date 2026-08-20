@@ -68,15 +68,16 @@ describe("BudgetWizard", () => {
       root!.render(<BudgetWizard data={data} token="test" editing onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
-    await waitFor(() => expect(container.querySelectorAll("aside ol li")).toHaveLength(7));
-    expect([...container.querySelectorAll("aside ol li")].map(item => item.textContent?.replace(/^[✓\d]+/, "").trim())).toEqual([
-      "Connect Cloudflare",
-      "Alert channels",
-      "Alert levels",
-      "Risk tolerance",
-      "Global account spend limits",
-      "Product limits",
-      "Install shutdown fuse",
+    await waitFor(() => expect(container.querySelectorAll("header ol li")).toHaveLength(8));
+    expect([...container.querySelectorAll("header ol li")].map(item => item.textContent?.replace(/^[✓\d]+/, "").trim())).toEqual([
+      "Connect",
+      "Channels",
+      "Levels",
+      "Risk",
+      "Account",
+      "Products",
+      "Install",
+      "Verify",
     ]);
     expect(container.textContent).toContain("Set how far above your usual daily spend each alert level starts.");
     expect(container.textContent).toContain("Your Cloudflare accounttest-account");
@@ -91,9 +92,9 @@ describe("BudgetWizard", () => {
       root!.render(<BudgetWizard data={data} token="test" editing onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
-    await waitFor(() => expect([...container.querySelectorAll("button")].some(item => item.textContent === "Save runtime status")).toBe(true));
+    await waitFor(() => expect([...container.querySelectorAll("button")].some(item => item.textContent === "Save breaker status")).toBe(true));
     await act(async () => {
-      [...container.querySelectorAll("button")].find(item => item.textContent === "Save runtime status")!.click();
+      [...container.querySelectorAll("button")].find(item => item.textContent === "Save breaker status")!.click();
       await Promise.resolve();
     });
     const call = vi.mocked(fetch).mock.calls.find(([input]) => new URL(String(input), "https://brolly.test").pathname === "/api/policy");

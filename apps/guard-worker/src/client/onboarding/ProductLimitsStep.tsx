@@ -13,8 +13,8 @@ type OpenState = string | null;
 type SidebarItem = { id: string; label: string };
 type SectionInfo = { items: SidebarItem[]; hasUsage: boolean; deviated: string[] };
 
-/** Fallback offset (page header + step rail) when the rail cannot be measured. */
-const DEFAULT_STICKY_TOP = 108;
+/** Fallback offset (single merged header row) when the header cannot be measured. */
+const DEFAULT_STICKY_TOP = 60;
 
 /** Bottom edge of the wizard's sticky step rail, so sticky parts sit right under it. */
 function useStickyTop(): number {

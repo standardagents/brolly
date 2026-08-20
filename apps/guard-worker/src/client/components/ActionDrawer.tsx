@@ -133,7 +133,7 @@ export function ActionDrawer({ action, incident, token, onClose, onChanged }: {
         <h3 className="mb-2 text-[14.5px]">Available control</h3>
         {canExecute && (
           <>
-            <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{action.state === "failed" ? "The previous Cloudflare request did not complete conclusively. Retrying reapplies the same desired fuse state; inspect Cloudflare first if the target status is uncertain." : "This action is only prepared. No live service change has happened yet."}</p>
+            <p className="mb-2.5 text-[13px] leading-[1.55] text-muted">{action.state === "failed" ? "The previous Cloudflare request did not complete conclusively. Retrying reapplies the same desired breaker state; inspect Cloudflare first if the target status is uncertain." : "This action is only prepared. No live service change has happened yet."}</p>
             <Button variant="danger" full disabled={Boolean(busy)} onClick={() => void run("execute")}>
               {busy === "execute" ? "Stopping…" : action.state === "failed" ? "Retry stop" : "Approve and stop service"}
             </Button>

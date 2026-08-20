@@ -110,7 +110,7 @@ export async function configurationData(env: Env): Promise<Record<string, unknow
         ? pass("Constructor confirmed", "An operator confirmed brollyDurableObject(ctx, env) is installed for this namespace.")
         : unknown("Constructor not confirmed", "The namespace remains alert-only until the constructor guard is confirmed."),
       worker: ownerWorker?.status === "configured"
-        ? pass("Owning Worker configured", `${owner} has live fuse and runtime evidence.`)
+        ? pass("Owning Worker configured", `${owner} has live breaker and runtime evidence.`)
         : ownerWorker
           ? unknown("Owning Worker incomplete", `${owner} is ${ownerWorker.status.replaceAll("_", " ")}.`)
           : unknown("Worker not inventoried", owner ? `${owner} was not found in the Worker inventory.` : "Map an owning Worker first."),
@@ -196,8 +196,8 @@ async function verifyWorker(env: Env, token: string, workerScript: string): Prom
     checks: {
       apiAccess,
       fuseSecret: secretResult.status === "rejected" ? errorCheck("Secret check failed", secretResult.reason)
-        : hasFuse ? pass("Fuse secret present", "The deployed Worker has a secret_text binding named BROLLY_FUSE.")
-          : fail("Fuse secret missing", "Initialize BROLLY_FUSE before enabling shutdown controls."),
+        : hasFuse ? pass("Breaker secret present", "The deployed Worker has a secret_text binding named BROLLY_FUSE.")
+          : fail("Breaker secret missing", "Initialize the BROLLY_FUSE secret before enabling shutdown controls."),
       runtimeBundle: bundleResult.status === "rejected" ? errorCheck("Bundle check failed", bundleResult.reason)
         : bundle?.found ? pass("Runtime detected", "The deployed Worker bundle contains the Brolly quarantine marker.")
           : bundle?.truncated ? unknown("Bundle scan bounded", `No marker was found in the first ${MAX_BUNDLE_SCAN_BYTES.toLocaleString()} bytes.`)

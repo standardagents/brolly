@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Brand, Button, Eyebrow, Icon, Notice } from "../components/ui";
 import type { OnboardingData } from "../types";
 import {
   AccessStep,
   RuntimeStep,
   StepActions,
+  VerifyStep,
 } from "./BudgetSteps";
 import { AlertsStep } from "./alerts";
 import { AlertLevelsStep, useAlertLevels } from "./levels";
@@ -24,23 +25,32 @@ import { useWizardNavigation } from "./useWizardNavigation";
  * alert-level behavior. Risk tolerance seeds the daily and billing-cycle
  * charts that follow it.
  */
-const STEPS = [
-  { key: "access", label: "Connect Cloudflare", preview: "Confirm the usage and billing APIs Brolly can read." },
-  { key: "alerts", label: "Alert channels", preview: "Where Brolly sends alerts." },
-  { key: "levels", label: "Alert levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
-  { key: "tolerance", label: "Risk tolerance", preview: "How far above typical usage each alert level starts." },
-  { key: "account", label: "Global account spend limits", preview: "One cost limit for the whole account, per day and per billing cycle." },
-  { key: "products", label: "Product limits", preview: "Cost and billable usage limits for each product and resource, per day and per billing cycle." },
-  { key: "runtime", label: "Install shutdown fuse", preview: "Optional runtime fuse that enables emergency quarantine." },
-] as const;
-type StepKey = typeof STEPS[number]["key"];
+type Step = {
+  key: "access" | "alerts" | "levels" | "tolerance" | "account" | "products" | "runtime" | "verify";
+  label: string;
+  /** Rail label on constrained widths; below lg the rail keeps markers only. */
+  short: string;
+  preview: string;
+  continueLabel?: string;
+};
+const STEPS: readonly Step[] = [
+  { key: "access", label: "Connect Cloudflare", short: "Connect", preview: "Confirm the usage and billing APIs Brolly can read." },
+  { key: "alerts", label: "Alert channels", short: "Channels", preview: "Where Brolly sends alerts." },
+  { key: "levels", label: "Alert levels", short: "Levels", preview: "Ordered thresholds, channels, repeat intervals, and protective actions." },
+  { key: "tolerance", label: "Risk tolerance", short: "Risk", preview: "How far above typical usage each alert level starts." },
+  { key: "account", label: "Account limits", short: "Account", preview: "One cost limit for the whole account, per day and per billing cycle." },
+  { key: "products", label: "Product limits", short: "Products", preview: "Cost and billable usage limits for each product and resource, per day and per billing cycle." },
+  { key: "runtime", label: "Install breaker", short: "Install", preview: "Optional code that lets Brolly stop a Worker or one Durable Object in an emergency.", continueLabel: "I installed the circuit breaker" },
+  { key: "verify", label: "Verify breaker", short: "Verify", preview: "Brolly checks each Worker in Cloudflare for the deployed breaker." },
+];
+type StepKey = Step["key"];
 const stepIndex = (key: StepKey) => STEPS.findIndex(step => step.key === key);
 
 /** Round step marker: filled while active, green once done, outlined otherwise. */
-function StepMarker({ state = "todo", children }: { state?: "active" | "done" | "todo"; children: ReactNode }) {
+function StepMarker({ state = "todo", className = "", children }: { state?: "active" | "done" | "todo"; className?: string; children: ReactNode }) {
   return (
     <span
-      className={`grid size-[27px] flex-none place-items-center rounded-full border text-[12px] ${
+      className={`grid size-[27px] flex-none place-items-center rounded-full border text-[12px] ${className} ${
         state === "active"
           ? "border-orange bg-orange text-white"
           : state === "done"
@@ -66,6 +76,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [integrations, setIntegrations] = useState(() => prepareRuntimeIntegrations(data.scopedAssets));
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   const [accessCheckComplete, setAccessCheckComplete] = useState(false);
+  const [breakerClaimed, setBreakerClaimed] = useState(false);
   const board = useAlertLevels(token);
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
@@ -99,22 +110,25 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <ProductLimitsStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
-    <RuntimeStep assets={data.scopedAssets} integrations={integrations} onChange={setIntegrations} />,
+    <RuntimeStep assets={data.scopedAssets} />,
+    <VerifyStep assets={data.scopedAssets} token={token} integrations={integrations} onChange={setIntegrations} autoRun={breakerClaimed && !editing} />,
   ];
 
   return (
     <main className="min-h-screen bg-bg">
-      <header className="sticky top-0 z-40 flex h-[60px] items-center gap-6 border-b border-line bg-panel px-7 font-[680] max-md:px-3.5">
-        <Brand />
-        <div className="border-l border-line pl-6 text-[14px] text-muted max-md:hidden">{editing ? "Budget settings" : "First-run setup"}</div>
-        <span className="ml-auto flex items-center gap-2">
+      <header data-wizard-rail className="sticky top-0 z-40 grid min-h-[60px] grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-x-6 border-b border-line bg-panel px-7 font-[680] max-md:grid-cols-[1fr_auto] max-md:gap-x-3 max-md:px-3.5">
+        <span className="flex items-center justify-self-start py-2.5 max-md:col-start-1 max-md:row-start-1">
+          <Brand />
+        </span>
+        <div className="flex min-w-0 justify-center max-md:col-span-2 max-md:col-start-1 max-md:row-start-2">
+          <WizardStepper active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection} />
+        </div>
+        <span className="flex flex-none items-center gap-2 justify-self-end whitespace-nowrap py-2.5 max-md:col-start-2 max-md:row-start-1">
+          {navigation.unlocked >= 1 && <span className="max-lg:hidden"><ImportProgress token={token} billingConnected={billingConnected} /></span>}
           {onCancel && <Button variant="quiet" onClick={onCancel}>Close</Button>}
           <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
       </header>
-      <WizardStepper active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection}>
-        {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} />}
-      </WizardStepper>
       <div className="mx-auto max-w-[1440px] px-8 pt-8 pb-[100px] max-xl:px-6 max-xl:pb-20 max-md:px-3.5 max-md:pt-4 max-md:pb-[60px]">
         <div className="grid min-w-0 gap-5">
           {STEPS.map((step, index) => index > navigation.unlocked
@@ -123,7 +137,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
               <section
                 key={step.label}
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
-                className="min-w-0 scroll-mt-[128px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:px-4 max-md:py-[22px]"
+                className="min-w-0 scroll-mt-[76px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:scroll-mt-[116px] max-md:px-4 max-md:py-[22px]"
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
                 {bodies[index]}
@@ -134,9 +148,13 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     busy={save.busy || (index === 0 && estimates.busy)}
                     blocked={index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue." : ""}
                     firstStep={index === 0}
+                    label={step.continueLabel}
                     accessCheckComplete={accessCheckComplete}
                     onOpenBilling={() => setBillingDialogOpen(true)}
-                    onContinue={navigation.advance}
+                    onContinue={() => {
+                      if (step.key === "runtime") setBreakerClaimed(true);
+                      navigation.advance();
+                    }}
                   />
                 )}
                 {index === STEPS.length - 1 && (
@@ -158,43 +176,47 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
 }
 
 /**
- * Horizontal step rail under the header. It replaces the old side column so
- * the step cards get the full page width; labels hide below `lg`, markers
- * stay.
+ * Horizontal step rail, centered inside the single header row. Full labels
+ * show on wide screens, one-word labels below `xl`, markers only below `lg`,
+ * and below `md` the markers wrap onto their own second header row.
  */
-function WizardStepper({ active, unlocked, onSelect, children }: {
-  children?: ReactNode;
+function WizardStepper({ active, unlocked, onSelect }: {
   active: number;
   unlocked: number;
   onSelect: (index: number) => void;
 }) {
+  const listRef = useRef<HTMLOListElement>(null);
+
+  // When the rail overflows, keep the active step centered as the page scrolls.
+  useEffect(() => {
+    const list = listRef.current;
+    const item = list?.children[active] as HTMLElement | undefined;
+    if (!list || !item || list.scrollWidth <= list.clientWidth) return;
+    list.scrollTo({ left: item.offsetLeft - (list.clientWidth - item.offsetWidth) / 2, behavior: "smooth" });
+  }, [active]);
+
   return (
-    <aside data-wizard-rail className="sticky top-[60px] z-30 border-b border-line bg-panel/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[1440px] items-center gap-6 px-8 py-2.5 max-xl:px-6 max-md:gap-3 max-md:px-3.5">
-        <ol className="flex min-w-0 flex-1 list-none items-center gap-1 overflow-x-auto">
-          {STEPS.map((step, index) => {
-            const reachable = index <= unlocked;
-            return (
-              <li key={step.label} className={`flex items-center text-[13px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}>
-                {index > 0 && <span className="mx-1 h-px w-4 bg-line max-lg:w-2" aria-hidden="true" />}
-                <button
-                  type="button"
-                  className="group/step flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-field border-0 bg-transparent px-1.5 py-1 text-left text-inherit hover:bg-panel-soft disabled:cursor-default disabled:hover:bg-transparent"
-                  disabled={!reachable}
-                  aria-current={index === active ? "step" : undefined}
-                  title={reachable ? step.label : "Unlocks when you reach this step"}
-                  onClick={() => onSelect(index)}
-                >
-                  <StepMarker state={index === active ? "active" : index < unlocked ? "done" : "todo"}>{index < unlocked ? "✓" : index + 1}</StepMarker>
-                  <span className={`max-lg:sr-only ${reachable ? "group-hover/step:text-ink" : ""}`}>{step.label}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-        <div className="ml-auto flex-none max-md:hidden">{children}</div>
-      </div>
-    </aside>
+    <ol ref={listRef} className="flex max-w-full list-none items-center gap-1 overflow-x-auto py-2 max-md:flex-wrap max-md:justify-center max-md:gap-1.5 max-md:overflow-visible max-md:py-1.5">
+      {STEPS.map((step, index) => {
+        const reachable = index <= unlocked;
+        return (
+          <li key={step.label} className={`flex items-center text-[13px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}>
+            {index > 0 && <span className="mx-1 h-px w-3 bg-line max-xl:hidden" aria-hidden="true" />}
+            <button
+              type="button"
+              className="group/step flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-field border-0 bg-transparent px-1.5 py-1 text-left text-inherit hover:bg-panel-soft disabled:cursor-default disabled:hover:bg-transparent"
+              disabled={!reachable}
+              aria-current={index === active ? "step" : undefined}
+              title={reachable ? step.label : "Unlocks when you reach this step"}
+              onClick={() => onSelect(index)}
+            >
+              <StepMarker className="max-xl:size-[22px] max-xl:text-[11px]" state={index === active ? "active" : index < unlocked ? "done" : "todo"}>{index < unlocked ? "✓" : index + 1}</StepMarker>
+              <span className={`max-xl:sr-only ${reachable ? "group-hover/step:text-ink" : ""}`}>{step.short}</span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -211,12 +233,13 @@ function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number
   );
 }
 
-export function ContinueFooter({ accessCheckComplete = true, billingConnected, blocked = "", busy, firstStep, onContinue, onOpenBilling }: {
+export function ContinueFooter({ accessCheckComplete = true, billingConnected, blocked = "", busy, firstStep, label, onContinue, onOpenBilling }: {
   accessCheckComplete?: boolean;
   billingConnected: boolean;
   blocked?: string;
   busy: boolean;
   firstStep: boolean;
+  label?: string;
   onContinue: () => void;
   onOpenBilling: () => void;
 }) {
@@ -236,7 +259,7 @@ export function ContinueFooter({ accessCheckComplete = true, billingConnected, b
     <StepActions>
       <span className="flex w-full flex-wrap items-center justify-between gap-4">
         {blocked && <small className="text-[12.5px] text-muted">{blocked}</small>}
-        <Button variant="primary" className="ml-auto shrink-0" disabled={busy || Boolean(blocked)} title={blocked || undefined} onClick={onContinue}>{firstStep ? "Continue to alerts" : "Continue"}</Button>
+        <Button variant="primary" className="ml-auto shrink-0" disabled={busy || Boolean(blocked)} title={blocked || undefined} onClick={onContinue}>{label ?? (firstStep ? "Continue to alerts" : "Continue")}</Button>
       </span>
     </StepActions>
   );
@@ -250,13 +273,13 @@ function FinishFooter({ assetCount, busy, editing, error, installedCount, onSave
   installedCount: number;
   onSave: () => void;
 }) {
-  const buttonLabel = busy ? "Saving…" : editing ? "Save runtime status" : installedCount ? "Finish and verify installs" : "Finish alerts-only setup";
+  const buttonLabel = busy ? "Saving…" : editing ? "Save breaker status" : installedCount ? "Finish setup" : "Finish alerts-only setup";
   return <>
     {error && <Notice tone="error">{error}</Notice>}
     <StepActions>
       <span className="mx-auto max-w-[42ch] px-3.5 text-center text-[11.5px] leading-[1.45] text-muted max-md:order-first max-md:basis-full">
         {assetCount
-          ? <><strong className="text-ink">{installedCount} of {assetCount} resources reported installed.</strong> {installedCount ? "Verify them after deployment." : "Brolly will alert but cannot quarantine them yet."}</>
+          ? <><strong className="text-ink">{installedCount} of {assetCount} resources verified.</strong> {installedCount ? "Quarantine is ready for them." : "Brolly will alert but cannot stop them yet."}</>
           : <><strong className="text-ink">No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
       </span>
       <Button variant="primary" disabled={busy} onClick={onSave}>{buttonLabel}</Button>

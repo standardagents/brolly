@@ -54,7 +54,7 @@ export function tierDescription(tier: string): string {
   const descriptions: Record<string, string> = {
     control_plane: "Never stopped. Brolly, its database, and the notification path only alert.",
     critical: "Alert only. An operator must reclassify before any stop can even be prepared.",
-    standard: "Alert, prepare a reversible stop, and allow automatic emergency quarantine when a tested fuse exists.",
+    standard: "Alert, prepare a reversible stop, and allow automatic emergency quarantine when a tested breaker exists.",
     disposable: "Alert with optional reversible auto-stop at an emergency threshold.",
     unclassified: "Treated as critical (alert only) until an operator classifies it.",
   };

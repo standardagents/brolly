@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
+import { Highlight, type CodeLang } from "./highlight";
 import { Button, Eyebrow, Icon, InfoTip, Panel, PanelHead, Pill, ProductIcon, StepNumber, type Tone } from "./ui";
 import type { OnboardingData } from "../types";
 
-/** Dark code block used by the install guide. */
-function Code({ children }: { children: ReactNode }) {
+/** Quiet highlighted code block used by the install guide. */
+function Code({ lang = "shell", children }: { lang?: CodeLang; children: string }) {
   return (
     <pre className="mt-2 overflow-x-auto rounded-field border border-code-line bg-code-bg px-3.5 py-3 text-[12px] leading-[1.55] text-code-ink">
-      <code className="font-mono break-normal">{children}</code>
+      <code className="font-mono break-normal"><Highlight code={children} lang={lang} /></code>
     </pre>
   );
 }
@@ -44,10 +45,10 @@ export function ControlCapabilities() {
         <CapabilityCard
           icon={<ProductIcon family="durable_objects" />}
           title="One Durable Object"
-          pill="Precise · needs runtime fuse"
+          pill="Precise · needs circuit breaker"
           tone="good"
         >
-          The deployment fuse names one exact 64-character object ID. Its constructor throws before application handlers run, while stored data and other IDs remain available. A Worker-version rollout may restart other live objects in that script.
+          The deployed breaker names one exact 64-character object ID. Its constructor throws before application handlers run, while stored data and other IDs remain available. A Worker-version rollout may restart other live objects in that script.
         </CapabilityCard>
         <CapabilityCard
           icon={<ProductIcon family="workers" />}
@@ -55,7 +56,7 @@ export function ControlCapabilities() {
           pill="Broad impact"
           tone="warn"
         >
-          An installed Worker guard can reject every instrumented entry point through the same fuse. Without the package, Brolly remains alert-only; it will not remove routes, domains, triggers, or the Worker.
+          An installed breaker can reject every instrumented entry point in the Worker. Without the package, Brolly remains alert-only; it will not remove routes, domains, triggers, or the Worker.
         </CapabilityCard>
         <CapabilityCard
           icon={<ProductIcon family="queues" />}
@@ -150,7 +151,7 @@ export function ProtectionExplainer() {
         <Icon name="shield" className="mt-px size-[21px]" />
         <div>
           <strong className="text-[14px]">What "stop this object" actually means</strong>
-          <p className="mt-0.5 text-[12.5px] text-[#aab2bc]">An exact-object stop is a deployment-carried application fuse—not a Cloudflare pause switch.</p>
+          <p className="mt-0.5 text-[12.5px] text-[#aab2bc]">An exact-object stop is a circuit breaker carried in your Worker deployment; Cloudflare offers no external pause switch.</p>
         </div>
       </header>
       <div className="grid gap-4 p-4">
@@ -158,7 +159,7 @@ export function ProtectionExplainer() {
           <h3 className="mb-2.5 text-[13.5px]">How Brolly reaches one object from outside</h3>
           <ol className="m-0 grid list-none gap-2 p-0">
             <ControlFlowStep step={1} title="Detect and identify">A bounded scan attributes the emergency to one 64-character Durable Object ID.</ControlFlowStep>
-            <ControlFlowStep step={2} title="Deploy a fuse generation">Brolly updates the owning Worker's reserved BROLLY_FUSE secret. Cloudflare creates and deploys a new Worker version.</ControlFlowStep>
+            <ControlFlowStep step={2} title="Deploy a breaker generation">Brolly updates the owning Worker's reserved BROLLY_FUSE secret. Cloudflare creates and deploys a new Worker version.</ControlFlowStep>
             <ControlFlowStep step={3} title="Compare locally">The Worker ingress guard and object constructor compare the requested or current 64-character object ID against the secret entirely in memory.</ControlFlowStep>
             <ControlFlowStep step={4} title="Eject before application code">Only the matching object throws before fetch, RPC, alarm, or WebSocket handlers run. No Brolly, KV, D1, HTTP, or object-storage lookup occurs.</ControlFlowStep>
           </ol>
@@ -170,7 +171,7 @@ export function ProtectionExplainer() {
         </section>
       </div>
       <QuarantineNote className="mx-4 mb-4">
-        <strong>This requires one package and one constructor line in the owning runtime.</strong> Cloudflare deploys the fuse at Worker-script scope, so other live objects in that script may be restarted during rollout even though only the selected ID is denied. Nothing is deleted.
+        <strong>This requires one package and one constructor line in the owning runtime.</strong> Cloudflare deploys the breaker at Worker-script scope, so other live objects in that script may be restarted during rollout even though only the selected ID is denied. Nothing is deleted.
       </QuarantineNote>
     </section>
   );
@@ -205,13 +206,13 @@ printf '%s' '{"version":1,"generation":0,"objects":{}}' \\
           <p className="mt-2 text-[12.5px] leading-[1.55] text-muted">Secrets survive ordinary code deployments. Brolly replaces this value only when applying or clearing a quarantine. Its Cloudflare account grant must include <strong>Workers Scripts Write</strong>; without it, the action fails and Brolly records the error instead of claiming a stop.</p>
         </InstallStep>
         <InstallStep step={3} title="Add one line after super() in every protected Durable Object">
-          <Code>{`constructor(ctx: DurableObjectState, env: Env) {
+          <Code lang="ts">{`constructor(ctx: DurableObjectState, env: Env) {
   super(ctx, env)
   brollyDurableObject(ctx, env)
 }`}</Code>
         </InstallStep>
         <InstallStep step={4} title="Guard Worker ingress before work starts">
-          <Code>{`brollyWorker(env)
+          <Code lang="ts">{`brollyWorker(env)
 const id = env.ROOMS.idFromName(name)
 brollyWorker(env, { durableObjectId: id.toString() })
 return env.ROOMS.get(id).fetch(request)`}</Code>
@@ -250,18 +251,18 @@ Requirements:
 3. In every protected Durable Object constructor, import brollyDurableObject and call brollyDurableObject(ctx, env) immediately after super(ctx, env).
 4. Call brollyWorker(env) before application work in fetch, scheduled, queue, and email entry points. Before waking a known Durable Object, also call brollyWorker(env, { durableObjectId: id.toString() }).
 5. At HTTP ingress, catch BrollyQuarantinedError and return a clear 503 response with Retry-After and X-Brolly-Quarantined headers. Do not swallow unrelated errors.
-6. Declare BROLLY_FUSE as a required Worker secret. Never hardcode a fuse value or put one in source control.
+6. Declare BROLLY_FUSE as a required Worker secret. Never hardcode a BROLLY_FUSE value or put one in source control.
 7. Add or update focused tests for the protected entry points and run the relevant checks.
 
 Safety boundaries:
 - Make code and local configuration changes only. Do not deploy, set secrets, change routes, or mutate anything in Cloudflare.
 - The runtime checks must remain synchronous and local: no HTTP, service binding, KV, D1, Durable Object storage, or other external operation.
-- Preserve existing behavior whenever the fuse is absent, malformed, or does not target this Worker/object.
+- Preserve existing behavior whenever the secret is absent, malformed, or does not target this Worker/object.
 
 When finished, report the files changed, every protected Worker entry point and Durable Object class, any unprotected gaps, the checks you ran, and the exact manual command I should run to initialize BROLLY_FUSE. Remind me to deploy, return to Brolly's Configuration page, and refresh the affected Worker before enabling automatic quarantine. Do not claim quarantine is configured until that verification passes.`;
 }
 
-/** A safe code-agent handoff for the optional runtime fuse installation. */
+/** A safe code-agent handoff for the optional circuit breaker installation. */
 export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scopedAssets"] }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -285,27 +286,30 @@ export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scoped
   }
 
   return (
-    <section className="overflow-hidden rounded-panel border border-line bg-panel shadow-panel" aria-labelledby="agent-handoff-title">
-      <header className="flex items-end justify-between gap-[18px] border-b border-line bg-panel-soft px-5 py-[18px] max-md:flex-col max-md:items-start">
-        <div>
-          <Eyebrow tone="orange">Recommended</Eyebrow>
-          <h3 id="agent-handoff-title" className="m-0 text-[17px] tracking-[-.015em]">Hand this to your coding agent</h3>
-          <p className="mt-1 max-w-[68ch] text-[12.5px] leading-[1.55] text-muted">The prompt finds your Worker entry points and Durable Object classes, installs the two local guards, adds tests, and stops before making any Cloudflare changes.</p>
-        </div>
-        <div className="flex flex-none flex-wrap items-center justify-end gap-1.5 max-md:justify-start" aria-label="Compatible coding agents">
+    <section className="grid grid-cols-[340px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1 max-lg:gap-5" aria-labelledby="agent-handoff-title">
+      <div className="min-w-0">
+        <Eyebrow tone="orange">Recommended</Eyebrow>
+        <h3 id="agent-handoff-title" className="m-0 text-[17px] tracking-[-.015em]">Hand this to your coding agent</h3>
+        <p className="mt-2 text-[13px] leading-[1.6] text-muted">The prompt installs the breaker in your repository and adds tests.</p>
+        <p className="mt-2 flex items-start gap-2 text-[13px] leading-[1.6] text-muted">
+          <Icon name="shield" className="mt-[3px] size-[15px] flex-none text-good" />
+          <span>It cannot change Cloudflare. You review the diff.</span>
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-1.5" aria-label="Compatible coding agents">
           <AgentChip kind="claude" label="Claude Code" />
           <AgentChip kind="codex" label="Codex" />
           <AgentChip kind="cursor" label="Cursor" />
           <AgentChip kind="terminal" label="Other agent" />
         </div>
-      </header>
-      <div className="m-4 overflow-hidden rounded-panel border border-[#30363d] bg-[#101317] max-md:m-3">
-        <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[#30363d] py-[7px] pr-2 pl-3.5 text-[#c8d0d9] max-md:flex-col max-md:items-stretch max-md:p-2.5">
+      </div>
+      <div className="min-w-0 self-start overflow-hidden rounded-panel border border-code-line bg-code-bg">
+        <div className="flex min-h-12 items-center justify-between gap-3 border-b border-code-line py-[7px] pr-2 pl-3.5 text-muted max-md:flex-col max-md:items-stretch max-md:p-2.5">
           <span className="inline-flex items-center gap-2 text-[11.5px] font-[720] tracking-[.02em]">
             <i className="block size-2 rounded-full bg-orange shadow-[0_0_0_3px_#f6821f26]" aria-hidden="true" />
-            Brolly runtime install task
+            Circuit breaker install task
+            <span className="rounded-full border border-code-line px-2 py-0.5 text-[10px] font-[750] uppercase tracking-[.06em] text-faint">Markdown</span>
           </span>
-          <Button variant="primary" className="min-h-[34px] max-md:w-full" onClick={() => void copyPrompt()}>
+          <Button variant="secondary" className="min-h-[34px] max-md:w-full" onClick={() => void copyPrompt()}>
             <Icon name={copied ? "check" : "clipboard"} />
             {copied ? "Copied" : "Copy agent prompt"}
           </Button>
@@ -314,25 +318,21 @@ export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scoped
           className={`relative overflow-hidden ${
             expanded
               ? "max-h-none"
-              : "max-h-[176px] after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-[62px] after:bg-[linear-gradient(transparent,#101317)] after:content-['']"
+              : "max-h-[176px] after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-[62px] after:bg-[linear-gradient(transparent,var(--code-bg))] after:content-['']"
           }`}
         >
-          <pre tabIndex={0} role="region" aria-label="Coding agent prompt" className="m-0 max-h-[420px] overflow-auto rounded-none border-0 bg-[#101317] p-4 text-[11.5px] leading-[1.6] whitespace-pre-wrap text-[#dfe5eb] max-md:max-h-[300px]"><code className="font-mono break-normal">{prompt}</code></pre>
+          <pre tabIndex={0} role="region" aria-label="Coding agent prompt" className="m-0 max-h-[420px] overflow-auto rounded-none border-0 p-4 text-[11.5px] leading-[1.6] whitespace-pre-wrap text-code-ink max-md:max-h-[300px]"><code className="font-mono break-normal"><Highlight code={prompt} lang="md" /></code></pre>
         </div>
         <button
           type="button"
-          className="min-h-[38px] w-full cursor-pointer border-0 border-t border-[#30363d] bg-[#171b20] text-[12px] font-bold text-[#aeb8c2] hover:bg-[#1d2228] hover:text-white"
+          className="min-h-[38px] w-full cursor-pointer border-0 border-t border-code-line bg-transparent text-[12px] font-bold text-muted hover:bg-code-line/50 hover:text-ink"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
         >
           {expanded ? "Collapse prompt" : "Show full prompt"}
         </button>
       </div>
-      <div className="mx-4 mb-4 flex items-start gap-[9px] rounded-field border border-good-line bg-good-bg px-[13px] py-[11px] text-good max-md:mx-3 max-md:mb-3">
-        <Icon name="shield" className="mt-px size-[17px]" />
-        <p className="m-0 text-[12px] leading-[1.5]"><strong>Safe handoff:</strong> the agent edits and tests your repository, but the prompt forbids deployment or Cloudflare mutations. You review the diff and initialize the secret yourself.</p>
-      </div>
-      <span className="sr-only" aria-live="polite">{copied ? "Brolly runtime installation prompt copied" : ""}</span>
+      <span className="sr-only" aria-live="polite">{copied ? "Circuit breaker install prompt copied" : ""}</span>
     </section>
   );
 }

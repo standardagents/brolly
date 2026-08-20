@@ -335,7 +335,7 @@ function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token
                 disabled={!owningWorker}
                 onChange={event => setFuseInstalled(event.target.checked)}
                 className="size-[15px] accent-orange"
-              /> Runtime fuse installed
+              /> Circuit breaker installed
             </label>
             <small className="block text-[12.5px] font-[450] leading-[1.5] text-muted">
               Worker ownership comes from Cloudflare inventory and cannot be typed or overridden. Confirm the fuse only after installing @standardagents/brolly-runtime and BROLLY_FUSE.

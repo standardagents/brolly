@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
-import { Icon } from "../components/ui";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
 import { AccessActions } from "./access";
 import { RuntimeIntegrationMap } from "./runtime";
@@ -39,36 +38,29 @@ export function AccessStep({ data, token, busy, result, notice, error, billingDi
   </>;
 }
 
-export function RuntimeStep({ assets, integrations, onChange }: {
+export function RuntimeStep({ assets }: {
   assets: OnboardingData["scopedAssets"];
-  integrations: Record<string, RuntimeIntegration>;
-  onChange: (values: Record<string, RuntimeIntegration>) => void;
 }) {
   return <>
-    <StepIntro title="Make quarantine available">Brolly can monitor and alert as soon as you finish setup. To let it quarantine a runaway Worker or one Durable Object, your application needs a tiny local runtime guard.</StepIntro>
-    <div className="mb-[18px] grid grid-cols-2 gap-3 max-md:grid-cols-1">
-      <article className="flex items-start gap-[11px] rounded-panel border border-good-line bg-good-bg p-3.5">
-        <Icon name="check" className="mt-px size-5 flex-none text-good" />
-        <div>
-          <strong className="block text-[13.5px]">Monitoring and alerts are ready</strong>
-          <p className="mt-[3px] text-[12.5px] leading-[1.5] text-muted">No application changes are required. You can safely finish onboarding now.</p>
-        </div>
-      </article>
-      <article className="flex items-start gap-[11px] rounded-panel border border-line bg-panel-soft p-3.5">
-        <Icon name="shield" className="mt-px size-5 flex-none text-orange-deep" />
-        <div>
-          <strong className="block text-[13.5px]">Quarantine needs a few code lines</strong>
-          <p className="mt-[3px] text-[12.5px] leading-[1.5] text-muted">Install the runtime in each Worker you want Brolly to stop, then verify its deployment.</p>
-        </div>
-      </article>
-    </div>
+    <StepIntro title="Install the circuit breaker">This step is optional; alerts work without it. The circuit breaker is a few lines of code that let Brolly stop a runaway Worker or one Durable Object.</StepIntro>
     <RuntimeAgentHandoff assets={assets} />
-    <details className="group mt-3.5 rounded-panel border border-line bg-panel">
+    <details className="group mt-5 rounded-panel border border-line bg-panel">
       <summary className="cursor-pointer px-[15px] py-[13px] text-[13px] font-bold group-open:border-b group-open:border-line-soft">Prefer to install it yourself?</summary>
-      <p className="mx-[15px] mt-[-4px] mb-4 text-[12.5px] text-muted">Use the manual package, secret, constructor, and Worker-ingress instructions.</p>
       {/* Inside this disclosure the install guide needs its own 16px inset. */}
       <div className="p-4"><RuntimeInstallGuide /></div>
     </details>
-    <RuntimeIntegrationMap assets={assets} values={integrations} onChange={onChange} />
+  </>;
+}
+
+export function VerifyStep({ assets, token, integrations, onChange, autoRun }: {
+  assets: OnboardingData["scopedAssets"];
+  token: string;
+  integrations: Record<string, RuntimeIntegration>;
+  onChange: (values: Record<string, RuntimeIntegration>) => void;
+  autoRun: boolean;
+}) {
+  return <>
+    <StepIntro title="Verify the circuit breaker">Brolly checks each Worker in Cloudflare for the deployed breaker and its secret.</StepIntro>
+    <RuntimeIntegrationMap assets={assets} token={token} values={integrations} onChange={onChange} autoRun={autoRun} />
   </>;
 }

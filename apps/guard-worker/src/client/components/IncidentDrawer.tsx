@@ -12,11 +12,11 @@ export function humanizeReason(reason: string, metric: string, metricLabel: stri
 }
 
 function proposedControlText(incident: Incident): string {
-  if (incident.family === "durable_objects") return "Deploy a fuse for this exact object ID and retain an explicit resume action.";
+  if (incident.family === "durable_objects") return "Deploy a breaker for this exact object ID and retain an explicit resume action.";
   if (incident.family === "queues") return "Pause the queue consumer and retain rollback state.";
   return incident.tags.brollyFuse === "true"
-    ? "Deploy a whole-Worker fuse and retain an explicit resume action."
-    : "This Worker is alert-only until the Brolly runtime fuse is installed and verified.";
+    ? "Deploy a whole-Worker breaker and retain an explicit resume action."
+    : "This Worker is alert-only until the Brolly circuit breaker is installed and verified.";
 }
 
 export function IncidentDrawer({ incident, token, onClose, onChanged }: {
@@ -171,7 +171,7 @@ export function IncidentDrawer({ incident, token, onClose, onChanged }: {
             <strong>Owning Worker</strong>
             <p><code className="font-mono text-[.92em] break-all">{owningWorker || "Not reported by Cloudflare"}</code></p>
             <label className="inline-flex items-center gap-2 text-[12.5px] font-[650] whitespace-nowrap">
-              <input type="checkbox" className="size-[15px] accent-orange" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Runtime fuse installed
+              <input type="checkbox" className="size-[15px] accent-orange" checked={fuseInstalled} disabled={!owningWorker} onChange={event => setFuseInstalled(event.target.checked)} /> Circuit breaker installed
             </label>
             <small>Brolly accepts only the ownership mapping returned by Cloudflare. Confirm this after installing the runtime and verify it on the Configuration page.</small>
           </div>

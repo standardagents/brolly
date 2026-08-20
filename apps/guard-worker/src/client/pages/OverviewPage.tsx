@@ -77,7 +77,7 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
           onClick={() => onNavigate("configuration")}
         >
           {readiness
-            ? `Workers fuse-ready · ${readiness.configuredNamespaces}/${readiness.namespaces} namespaces`
+            ? `Workers breaker-ready · ${readiness.configuredNamespaces}/${readiness.namespaces} namespaces`
             : "Loading readiness…"}
         </StatTile>
       </section>

@@ -303,7 +303,7 @@ function RuntimeSection({ config, busy, error, onRefresh, onEditInstall }: {
             </span>
           </div>
 
-          <ConfigurationGroup title="Worker scripts" description="Each Worker independently carries its own fuse secret and deployment evidence." count={visibleWorkers.length}>
+          <ConfigurationGroup title="Worker scripts" description="Each Worker independently carries its own breaker secret and deployment evidence." count={visibleWorkers.length}>
             {visibleWorkers.length ? visibleWorkers.map(worker => (
               <details className={`group rounded-field border bg-panel ${ROW_BORDER[worker.status]}`} key={worker.id}>
                 <summary className={`${SUMMARY_BASE} grid-cols-[34px_minmax(180px,1.4fr)_auto_minmax(0,1fr)_auto_16px] gap-3 px-[13px] py-2.5 max-xl:grid-cols-[34px_minmax(0,1fr)_auto_16px]`}>
@@ -535,7 +535,7 @@ function ConfigurationGuidance({ status, kind, onEdit }: { status: Configuration
       <div className="rounded-field border border-good-line bg-good-bg px-[13px] py-[11px] dark:text-warn">
         <strong className="text-[13px]">Ready for precise protection</strong>
         <p className="mt-0.5 text-[12.5px] text-muted">{kind === "worker"
-          ? "This Worker can receive whole-script fuse generations."
+          ? "This Worker can receive whole-script breaker generations."
           : "Objects in this namespace inherit the verified owning Worker and are eligible for exact-ID quarantine when policy permits."}</p>
       </div>
     );
