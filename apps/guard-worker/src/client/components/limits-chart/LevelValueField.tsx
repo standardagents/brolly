@@ -13,11 +13,13 @@ export interface LevelValueFieldProps {
   onCommit?(next: number): void;
   onToggle?(next: boolean): void;
   variant?: "boxed" | "bare" | "chip";
+  /** Emphasize this field while its chart line is hovered or dragged. */
+  highlight?: boolean;
   step?(value: number): number;
 }
 
 /** One alert-level value editor shared by chart fields, tracks, rows, and risk tolerance. */
-export function LevelValueField({ level, unit, value, enabled, onCommit, onToggle, variant = "boxed", step }: LevelValueFieldProps) {
+export function LevelValueField({ level, unit, value, enabled, onCommit, onToggle, variant = "boxed", highlight = false, step }: LevelValueFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const cancelBlur = useRef(false);
   const display = value === undefined ? "–" : compactValue(value, unit);
@@ -102,7 +104,7 @@ export function LevelValueField({ level, unit, value, enabled, onCommit, onToggl
     <div
       data-level-field
       data-variant={variant}
-      className={`flex min-w-0 flex-col transition-opacity ${variant === "boxed" ? "gap-1 rounded-field border border-field-line bg-field px-2 py-1.5 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c]" : "w-full"} ${enabled ? "" : "opacity-55"}`}
+      className={`flex min-w-0 flex-col transition-[opacity,background-color,border-color] ${variant === "boxed" ? `gap-1 rounded-field border bg-field px-2 py-1.5 focus-within:border-orange focus-within:shadow-[0_0_0_3px_#f6821f1c] ${highlight ? "border-line-strong" : "border-field-line"}` : `-mx-1.5 -my-1 w-[calc(100%+12px)] rounded-[6px] px-1.5 py-1 ${highlight ? "bg-field" : ""}`} ${enabled ? "" : "opacity-55"}`}
     >
       <span data-level-label className={`${variant === "boxed" ? "text-[11.5px]" : "text-[11px]"} flex min-w-0 items-center gap-1.5 font-bold text-muted`}>
         {swatch}

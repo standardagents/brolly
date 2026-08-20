@@ -189,6 +189,38 @@ describe("LimitsChartDual tolerance behavior", () => {
     }
   });
 
+  it("shows a cursor tooltip per day and lights hovered cycle days, with no native titles", async () => {
+    const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} cycleCost={{ warn: 400, critical: 800 }} costOnly />);
+    const charts = container.querySelectorAll("[data-limits-chart='cost']");
+    expect(container.querySelector("svg title")).toBeNull();
+    // Day chart: hovering the first day column shows its date and value.
+    const dayLayer = charts[0]!.querySelector("[data-hover-layer]") as SVGRectElement;
+    await act(async () => dayLayer.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 63, clientY: 40 })));
+    const dayTip = charts[0]!.querySelector("[data-chart-tooltip]")!;
+    expect(dayTip.textContent).toContain("$10.00");
+    // Cycle chart: hovering shows the cycle-to-date total and lights the day.
+    const cycleLayer = charts[1]!.querySelector("[data-hover-layer]") as SVGRectElement;
+    await act(async () => cycleLayer.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 63, clientY: 40 })));
+    const cycleTip = charts[1]!.querySelector("[data-chart-tooltip]")!;
+    expect(cycleTip.textContent).toContain("so far this cycle");
+    expect(cycleTip.textContent).toContain("$10.00");
+    const litBars = [...charts[1]!.querySelectorAll("rect[rx]")].filter(bar => bar.getAttribute("opacity") === "0.38");
+    expect(litBars).toHaveLength(1);
+    // Both charts highlight the hovered column; the cycle band is fainter.
+    expect(charts[0]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".07");
+    expect(charts[1]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".045");
+    // Leaving the plot removes the tooltip and the band.
+    await act(async () => cycleLayer.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
+    expect(charts[1]!.querySelector("[data-chart-tooltip]")).toBeNull();
+    // Hovering a level line shows its live value on the line.
+    const slider = charts[0]!.querySelector("[role='slider']") as SVGGElement;
+    await act(async () => slider.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+    const badge = charts[0]!.querySelector("[data-line-value]")!;
+    expect(badge.textContent).toBe("$40.00");
+    await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+    expect(charts[0]!.querySelector("[data-line-value]")!.textContent).not.toBe("$40.00");
+  });
+
   it("marks deviated rows with the edge glow", async () => {
     const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} deviated={new Set(["cost"])} />);
     await waitFor(() => expect(container.querySelectorAll("[data-deviated]")).toHaveLength(1));

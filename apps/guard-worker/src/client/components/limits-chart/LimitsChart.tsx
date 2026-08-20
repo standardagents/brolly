@@ -61,6 +61,8 @@ export interface LimitsChartProps {
 
 const EASE = "cubic-bezier(.2,.7,.2,1)";
 const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
+/** Floating readouts over the chart: the day tooltip and the axis value chip share one look. */
+const FLOAT_CHIP = "pointer-events-none absolute z-10 whitespace-nowrap rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
 /** Bar accents sit outside the warm level ramp: cool blue for cost, teal for usage. */
 const ACCENT = { cost: "#2f6fd6", usage: "#1a9c8c" } as const;
 /** Level ramp, lowest to highest severity: amber → red → magenta → deep plum. */
@@ -143,6 +145,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  // Pointer hover: a day column under the cursor, and a level line under the
+  // cursor. The day tooltip hides while a line is hovered or dragged; the
+  // hovered or dragged line highlights its legend field instead.
+  const [hoverDay, setHoverDay] = useState<{ index: number; x: number; y: number } | null>(null);
+  const [hoverLevel, setHoverLevel] = useState<string | null>(null);
   // While a handle is dragged, values live here and the parent hears about
   // the result once on release. Pointer moves are coalesced to one update
   // per animation frame.
@@ -246,10 +253,6 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const sawtooth = useMemo(() => cyclePolygons(cumulative, xFor, yFor, PLOT.top + plotHeight, barSlot), [cumulative, axis, plotWidth, plotHeight, barSlot]);
-  const barTitles = useMemo(
-    () => dense.map((point, index) => `${dayLabel(point.day)} · ${formatLimitValue(point.value, unit)} · cycle to date ${formatLimitValue(cumulative[index]?.cumulative ?? 0, unit)}`),
-    [dense, cumulative, unit],
-  );
   const cycleMode = limitWindow === "cycle";
   // Horizontal color bands for the cycle sawtooth: accent under the lowest
   // line, then each level's color up to the next line, the top one open.
@@ -264,6 +267,17 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
   const accent = ACCENT[kind];
   const chartLabel = label ?? `${kind === "cost" ? "Cost" : "Usage"} per ${limitWindow === "day" ? "day" : "billing cycle"}`;
+  const trackHover = (event: PointerEvent<SVGRectElement>) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = event.clientX - rect.left;
+    const index = Math.floor((x - PLOT.left) / barSlot);
+    if (index < 0 || index >= dense.length) { setHoverDay(null); return; }
+    setHoverDay({ index, x, y: event.clientY - rect.top });
+  };
+  const highlightLevel = dragging ?? hoverLevel;
+  const hovered = hoverDay && !dragging && !hoverLevel ? dense[hoverDay.index] : null;
+
   const belowReference = limitWindow === "cycle" && reference
     ? activeLevels.find(level => (shown[level.id] ?? Number.POSITIVE_INFINITY) < (reference[level.id] ?? Number.NEGATIVE_INFINITY))
     : undefined;
@@ -279,6 +293,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           </div>
         </div>
       )}
+      <div className="relative">
       <svg
         ref={svgRef}
         className="block w-full touch-none overflow-visible text-ink"
@@ -351,20 +366,29 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         <text x={PLOT.left} y={PLOT.top + plotHeight + 16} className="fill-faint text-[10.5px]">{dayLabel(window.fromDay)}</text>
         {remainingDays > 2 && <text x={PLOT.left + plotWidth} y={PLOT.top + plotHeight + 16} textAnchor="end" className="fill-faint text-[10.5px]">Cycle end</text>}
 
+        {/* Day hover: a soft column band behind the hovered day. Fainter in
+            cycle mode so it never reads as a continuation of the day's bar. */}
+        {hovered && (
+          <rect data-hover-band x={xFor(hoverDay!.index) - barSlot / 2} y={PLOT.top} width={barSlot} height={plotHeight} fill="currentColor" opacity={cycleMode ? ".045" : ".07"} pointerEvents="none" />
+        )}
+
         {/* Bars */}
         {dense.map((point, index) => {
           const crossed = crossedLevel(activeOrder, shown, point.value);
           const color = (crossed && colorById.get(crossed)) || accent;
           const top = yFor(point.value);
           const base = PLOT.top + plotHeight;
+          const lit = hovered !== null && hoverDay?.index === index;
           return (
             <rect key={point.day} x={xFor(index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
-              fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.16 : crossed ? 1 : 0.9}
-              style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }}>
-              <title>{barTitles[index]}</title>
-            </rect>
+              pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? (lit ? 0.38 : 0.16) : lit || crossed ? 1 : 0.9}
+              style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, opacity 120ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }} />
           );
         })}
+
+        {/* Day hover tracking: sits above the bars, below the level lines. */}
+        <rect data-hover-layer x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} fill="transparent"
+          onPointerMove={trackHover} onPointerLeave={() => setHoverDay(null)} />
 
         {/* Level lines and handles */}
         {activeLevels.map(level => {
@@ -389,21 +413,41 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               onPointerMove={moveDrag(level.id)}
               onPointerUp={endDrag(level.id)}
               onPointerCancel={endDrag(level.id)}
+              onPointerEnter={() => setHoverLevel(level.id)}
+              onPointerLeave={() => setHoverLevel(null)}
               onKeyDown={keyStep(level.id)}
             >
-              <title>{`${level.label} · ${formatLimitValue(current, unit)}`}</title>
               <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke="transparent" strokeWidth="14" />
               <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke={level.color} strokeWidth="2" strokeDasharray="7 5" />
               <polygon points={diamond(PLOT.left - 3, 0, 6.5)} fill={level.color} stroke="var(--panel)" strokeWidth="1.5" />
+
             </g>
           );
         })}
       </svg>
+      {highlightLevel && (
+        <div data-line-value className={`${FLOAT_CHIP} -translate-y-1/2 font-[740] tabular-nums`}
+          style={{ left: PLOT.left - 6, top: yFor(shown[highlightLevel] ?? 0), transform: "translate(-100%, -50%)", color: colorById.get(highlightLevel) }}>
+          {formatLimitValue(shown[highlightLevel] ?? 0, unit)}
+        </div>
+      )}
+      {hovered && (
+        <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-x-1/2 -translate-y-full`}
+          style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left + 40), width - PLOT.right - 40), top: hoverDay!.y - 10 }}>
+          <b className="font-[720]">{dayLabel(hovered.day)}</b>
+          <span className="ml-1.5 tabular-nums text-muted">
+            {cycleMode
+              ? `${formatLimitValue(cumulative[hoverDay!.index]?.cumulative ?? 0, unit)} so far this cycle`
+              : formatLimitValue(hovered.value, unit)}
+          </span>
+        </div>
+      )}
+      </div>
 
       {!fields ? null : readOnly ? (
         <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
-            <li key={level.id} className="inline-flex items-center gap-1.5">
+            <li key={level.id} className={`inline-flex items-center gap-1.5 rounded-[5px] px-1.5 py-0.5 transition-colors ${highlightLevel === level.id ? "bg-field" : ""}`}>
               <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
               {level.label} <span className="font-[740] tabular-nums text-ink">{formatLimitValue(shown[level.id] ?? 0, unit)}</span>
             </li>
@@ -414,6 +458,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         <div className="mt-2 grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
           {levels.map(level => (
             <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+              highlight={highlightLevel === level.id}
               enabled={levelEnabled?.[level.id] ?? true}
               onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
@@ -423,6 +468,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         <div className={`mt-2.5 grid grid-cols-2 gap-2 ${levels.length >= 4 ? "@[560px]:grid-cols-4" : "@[560px]:grid-cols-3"}`}>
           {levels.map(level => (
             <LevelValueField key={level.id} variant="boxed" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
+              highlight={highlightLevel === level.id}
               enabled={levelEnabled?.[level.id] ?? true}
               onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
           ))}
