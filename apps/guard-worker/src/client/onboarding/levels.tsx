@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
+import { levelColor } from "../components/limits-chart";
 import { AddChannelRow, ChannelSetupModal, targetName, type NotificationChannel, type NotificationTargetsState } from "../components/notifications";
 import { Button, ChannelLogo, Icon, IconButton, Notice, Popover, ProductIcon, Spinner } from "../components/ui";
 import { useOutsideClose } from "../lib/outside-close";
@@ -20,7 +21,7 @@ const INTERVALS = [
   { value: "86400000", label: "24 h" },
 ] as const;
 
-const COLUMN_WIDTH = 290;
+const COLUMN_WIDTH = 360;
 type Target = NotificationTargetsState["targets"][number];
 
 export function useAlertLevels(token: string) {
@@ -331,6 +332,7 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, usedAct
     <section ref={sectionRef} data-level={ghost ? undefined : level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 transition-colors ${ghost ? "pointer-events-none border-orange" : entryDrag && entryDrag.targetLevelId === level.id ? "border-orange shadow-[0_0_0_3px_#f6821f1f]" : "border-line"}`}>
       <header className="mb-3 flex items-center gap-1.5">
         <button type="button" className="cursor-grab touch-none rounded px-1 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag ${level.label} to reorder`} onPointerDown={event => onGrabColumn(event, sectionRef.current!)}>⠿</button>
+        <span aria-hidden="true" className="text-[13px] leading-none" style={{ color: levelColor(index, count) }}>◆</span>
         <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
         <LevelMenu index={index} count={count} canAdd={count < 8} canDelete={count > 1} onMove={onMove} onAddBefore={onAddBefore} onAddAfter={onAddAfter} onDelete={() => void deleteLevel()} />
       </header>
@@ -378,9 +380,9 @@ function ChannelEntry({ entry, slotIndex, leaving, target, token, levelId, onGra
       <div className="flex items-center gap-2">
         <button type="button" className="-ml-1 cursor-grab touch-none rounded px-0.5 text-faint hover:text-ink active:cursor-grabbing" aria-label={`Drag ${target ? targetName(target) : "channel"} to another level`} title="Drag to move" onPointerDown={event => onGrab(event, ref.current!)}>⠿</button>
         <div className="min-w-0 flex-1"><EntryHead target={target} /></div>
+        <select title="Repeat interval" aria-label={`Repeat interval for ${target ? targetName(target) : "channel"}`} className="min-h-8 flex-none rounded-field border border-field-line bg-field px-2 text-[12px] text-ink" value={entry.repeatIntervalMs ?? ""} onChange={event => void patch(event.target.value ? Number(event.target.value) : null)}>{INTERVALS.map(interval => <option key={interval.label} value={interval.value}>{interval.label}</option>)}</select>
         <button type="button" aria-label={`Remove ${target ? targetName(target) : "channel"}`} className="text-faint hover:text-danger" onClick={() => void remove()}><Icon name="x" className="size-4" /></button>
       </div>
-      <label className="mt-2 flex items-center justify-between gap-2 text-[11.5px] text-muted">Repeat<select aria-label={`Repeat interval for ${target ? targetName(target) : "channel"}`} className="min-h-8 rounded-field border border-field-line bg-field px-2 text-[12px] text-ink" value={entry.repeatIntervalMs ?? ""} onChange={event => void patch(event.target.value ? Number(event.target.value) : null)}>{INTERVALS.map(interval => <option key={interval.label} value={interval.value}>{interval.label}</option>)}</select></label>
     </article>
   );
 }
@@ -425,7 +427,7 @@ function LevelAddMenu({ open, setOpen, level, targets, usedTargets, usedActions,
   const showActions = grouped.prepare.length === 0 || grouped.auto.length === 0;
   return (
     <div ref={ref} className="relative">
-      <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button>
+      <button type="button" data-add-entry aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="flex w-full items-center justify-center gap-1 rounded-field border border-dashed border-line px-3 py-2 text-[12.5px] font-[680] text-muted hover:border-orange hover:text-ink">+ Add</button>
       <Popover anchor={ref} open={open} side="top" align="start">
         <div ref={panel} role="menu" className={`flex rounded-panel border border-line bg-panel p-1.5 shadow-panel ${showActions ? "w-[480px]" : "w-[240px]"}`}>
           <div className={`grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-1 p-1 ${showActions ? "w-[200px] flex-none" : "flex-1"}`}>
@@ -459,6 +461,7 @@ function ActionOption({ mode, onClick }: { mode: "prepare" | "auto"; onClick: ()
     <button
       type="button"
       role="menuitem"
+      data-menu-action={mode}
       className={ADD_ROW}
       onClick={onClick}
     >

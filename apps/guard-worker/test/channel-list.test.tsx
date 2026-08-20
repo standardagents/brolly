@@ -42,11 +42,11 @@ describe("ChannelList grid", () => {
     expect(cells).toHaveLength(3);
     expect(cells.at(-1)?.hasAttribute("data-channel-add-cell")).toBe(true);
 
-    await act(async () => button("Add alert channel").click());
-    await act(async () => button("Cloudflare Email").click());
-    expect(document.querySelector("[role='dialog']")?.textContent).toContain("Add Cloudflare Email");
+    await act(async () => (document.querySelector("[data-channel-add-cell] button") as HTMLButtonElement).click());
+    await act(async () => (document.querySelector("[data-channel-kind='cloudflare_email']") as HTMLButtonElement).click());
+    expect(document.getElementById("add-cloudflare_email-channel-title")).not.toBeNull();
     expect(document.querySelectorAll("input[aria-label^='Recipient']")).toHaveLength(1);
-    await act(async () => button("Add recipient").click());
+    await act(async () => (document.querySelector("[data-action='add-recipient']") as HTMLButtonElement).click());
     expect(document.querySelectorAll("input[aria-label^='Recipient']")).toHaveLength(2);
   });
 
@@ -69,10 +69,10 @@ describe("ChannelList grid", () => {
     change(document.querySelector("input[type='password']")!, "secret");
     change(document.querySelectorAll("input[type='email']")[0]!, "alerts@example.com");
     change(document.querySelector("input[aria-label='Recipient 1']")!, "ops@example.com");
-    await act(async () => button("Add recipient").click());
+    await act(async () => (document.querySelector("[data-action='add-recipient']") as HTMLButtonElement).click());
     change(document.querySelector("input[aria-label='Recipient 2']")!, "finance@example.com");
-    await waitFor(() => expect(button("Save alert channel").disabled).toBe(false));
-    await act(async () => button("Save alert channel").click());
+    await waitFor(() => expect((document.querySelector("[data-action='save-channel']") as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => (document.querySelector("[data-action='save-channel']") as HTMLButtonElement).click());
     await waitFor(() => expect(submitted).not.toBeNull());
 
     expect(submitted).toMatchObject({
@@ -91,11 +91,6 @@ async function render(node: React.ReactNode): Promise<void> {
   await act(async () => root!.render(node));
 }
 
-function button(label: string): HTMLButtonElement {
-  const found = [...document.querySelectorAll("button")].find(item => item.textContent?.includes(label));
-  if (!found) throw new Error(`Missing button ${label}`);
-  return found;
-}
 
 function change(input: Element, value: string): void {
   act(() => {

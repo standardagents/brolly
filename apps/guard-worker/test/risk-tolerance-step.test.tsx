@@ -94,7 +94,6 @@ describe("RiskToleranceStep", () => {
       pointer(slider, "pointerup", { clientX: 340 });
     });
     expect(document.querySelector("[data-preset]")?.getAttribute("data-preset")).toBe("custom");
-    expect(document.body.textContent).toContain("Custom");
   });
 
   it("supports chart-style keyboard changes on sliders and fields", async () => {

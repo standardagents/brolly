@@ -15,6 +15,7 @@ import { configuredLedgerRunLimits } from "./ledger-settings.js";
 import { notificationApiRoute } from "./notification-api.js";
 import { alertLevelsApiRoute, loadAlertLevels } from "./alert-levels.js";
 import { CloudflareClient } from "./cloudflare.js";
+import { isPlanTier, planStateResponse, readPlanState, savePlanOverride } from "./plan-tier.js";
 
 type RuntimeIntegrationInput = { family: "workers" | "durable_objects"; id: string; workerScript?: string; installed: boolean };
 type RuntimeAssetRow = { family: string; asset_id: string; scope: AssetRef["scope"]; metadata_json: string };
@@ -64,6 +65,28 @@ export default {
       } catch (error) {
         return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
       }
+    }
+
+    const planRoute = url.pathname === "/api/plan" || url.pathname === "/api/plan-tier";
+    if (planRoute && request.method === "GET") {
+      return Response.json(planStateResponse(await readPlanState(env.DB)), { headers: { "cache-control": "no-store" } });
+    }
+
+    if (planRoute && request.method === "PUT") {
+      const body = await request.json<{ planTierOverride?: unknown; override?: unknown; tier?: unknown }>();
+      const hasOverride = Object.hasOwn(body, "planTierOverride") || Object.hasOwn(body, "override") || Object.hasOwn(body, "tier");
+      if (!hasOverride) return Response.json({ error: "planTierOverride is required" }, { status: 400 });
+      const raw = Object.hasOwn(body, "planTierOverride") ? body.planTierOverride
+        : Object.hasOwn(body, "override") ? body.override : body.tier;
+      const override = raw === null || raw === undefined ? null : raw;
+      if (override !== null && !isPlanTier(override)) {
+        return Response.json({ error: "planTierOverride must be free, paid, enterprise, unknown, or null" }, { status: 400 });
+      }
+      const state = await savePlanOverride(env.DB, override, Date.now());
+      await audit(env.DB, actor.actor, "plan-tier.override", env.BROLLY_ACCOUNT_ID, {
+        planTier: state.planTier, planTierSource: state.planTierSource, planTierOverride: state.overrideTier,
+      });
+      return Response.json({ ok: true, ...planStateResponse(state) }, { headers: { "cache-control": "no-store" } });
     }
 
     if (url.pathname === "/api/assets" && request.method === "GET") {
@@ -178,13 +201,14 @@ export default {
     }
 
     if (url.pathname === "/api/status" && request.method === "GET") {
-      const [incidentRows, coverageRow, assetRow, sampleRow] = await Promise.all([
+      const [incidentRows, coverageRow, assetRow, sampleRow, planState] = await Promise.all([
         env.DB.prepare(`SELECT severity,family,asset_id,reason,observed,last_seen FROM incidents WHERE status='open' AND metric!='telemetry_coverage' ORDER BY CASE severity WHEN 'emergency' THEN 0 WHEN 'critical' THEN 1 ELSE 2 END,last_seen DESC LIMIT 100`).all(),
         env.DB.prepare(`SELECT SUM(CASE WHEN state!='healthy' THEN 1 ELSE 0 END) AS c,MAX(checked_at) AS at FROM metric_coverage`).first<{ c: number | null; at: number | null }>(),
         env.DB.prepare(`SELECT COUNT(*) AS c FROM assets`).first<{ c: number }>(),
         env.DB.prepare(`SELECT MAX(end_at) AS at FROM metric_samples`).first<{ at: number | null }>(),
+        readPlanState(env.DB),
       ]);
-      return Response.json({ openIncidents: incidentRows.results.length, coverageGaps: coverageRow?.c ?? 0, assets: assetRow?.c ?? 0, lastCheckAt: coverageRow?.at ?? null, lastSampleAt: sampleRow?.at ?? null, incidents: incidentRows.results });
+      return Response.json({ openIncidents: incidentRows.results.length, coverageGaps: coverageRow?.c ?? 0, assets: assetRow?.c ?? 0, lastCheckAt: coverageRow?.at ?? null, lastSampleAt: sampleRow?.at ?? null, incidents: incidentRows.results, ...planStateResponse(planState) });
     }
 
     if (url.pathname === "/api/incidents" && request.method === "GET") {

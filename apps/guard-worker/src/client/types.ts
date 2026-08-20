@@ -48,6 +48,9 @@ export type Provider = NotificationProvider;
 export interface ProvidersResponse { providers: NotificationProvider[] }
 
 export type RiskTolerancePreset = "conservative" | "balanced" | "growth" | "custom";
+/** Cloudflare account billing tier used by included-quota surfaces. */
+export type PlanTier = "free" | "paid" | "enterprise" | "unknown";
+export type PlanTierSource = "api" | "override";
 
 export interface RiskTolerance {
   preset: RiskTolerancePreset;
@@ -90,6 +93,10 @@ export interface OnboardingData {
   /** Cloudflare account name captured at sign-in; null before the first OAuth session. */
   accountName?: string | null;
   complete: boolean;
+  /** Billing tier reported by the guard Worker. Older installations omit it. */
+  planTier?: PlanTier;
+  planTierSource?: PlanTierSource;
+  planTierOverride?: PlanTier | null;
   policy: Policy;
   families: Array<{ family: string; label: string; metrics: string[]; protection: "active" | "coverage_gap" }>;
   scopedAssets: Array<{ key: string; family: "workers" | "durable_objects"; id: string; name: string; scope: "resource" | "namespace"; protection: "active" | "coverage_gap"; tags: Record<string, string> }>;
@@ -171,6 +178,10 @@ export interface ControlActionRow {
 export interface DashboardData {
   generatedAt: number;
   account: { id: string; timezone: string };
+  /** Billing tier reported by the guard Worker. Older installations omit it. */
+  planTier?: PlanTier;
+  planTierSource?: PlanTierSource;
+  planTierOverride?: PlanTier | null;
   alertLevels?: AlertLevel[];
   policy: { version: string; accountDailySpend: SpendLimits; familyDailySpend: Record<string, SpendLimits>; assetDailySpend: Record<string, SpendLimits>; riskTolerance?: RiskTolerance; limits?: PolicyLimits };
   summary: {

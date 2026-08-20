@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { CycleBounds, DayPoint } from "./cycles";
+import type { PlanTier, PlanTierSource } from "../../types";
 
 /** Mirror of the Worker's `GET /api/usage-series` response. */
 export interface UsageSeriesResponse {
@@ -8,9 +9,13 @@ export interface UsageSeriesResponse {
   resourceId: string;
   found: boolean;
   today: string;
-  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean }>;
+  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number }>;
   series: Array<{ day: string; costUsd: number; metrics: Record<string, number>; sealed: boolean }>;
+  estimatedBillableCostSeries?: Array<{ day: string; costUsd: number }>;
   cycles: Array<CycleBounds & { approximate: boolean }>;
+  includedQuotaCatalogVersion?: string;
+  planTier?: PlanTier;
+  planTierSource?: PlanTierSource;
 }
 
 export interface UsageSeriesState {
@@ -40,12 +45,32 @@ export function useUsageSeries(token: string, scope: string): UsageSeriesState {
   return state;
 }
 
+// Derived per-day series are cached per response object. Charts, defaults,
+// and deviation checks ask for the same series dozens of times per render
+// pass; stable array identities also let downstream memo caches hit.
+const seriesCache = new WeakMap<UsageSeriesResponse, Map<string, DayPoint[]>>();
+
+function cachedSeries(data: UsageSeriesResponse, key: string, build: () => DayPoint[]): DayPoint[] {
+  let byKey = seriesCache.get(data);
+  if (!byKey) { byKey = new Map(); seriesCache.set(data, byKey); }
+  let series = byKey.get(key);
+  if (!series) { series = build(); byKey.set(key, series); }
+  return series;
+}
+
 export function costSeries(data: UsageSeriesResponse): DayPoint[] {
-  return data.series.map(point => ({ day: point.day, value: point.costUsd, sealed: point.sealed }));
+  return cachedSeries(data, "cost", () => data.series.map(point => ({ day: point.day, value: point.costUsd, sealed: point.sealed })));
+}
+
+export function billableCostSeries(data: UsageSeriesResponse): DayPoint[] {
+  return cachedSeries(data, "billable-cost", () => {
+    const sealedByDay = new Map(data.series.map(point => [point.day, point.sealed]));
+    return (data.estimatedBillableCostSeries ?? []).map(point => ({ day: point.day, value: point.costUsd, sealed: sealedByDay.get(point.day) }));
+  });
 }
 
 export function metricSeries(data: UsageSeriesResponse, metricId: string): DayPoint[] {
-  return data.series.map(point => ({ day: point.day, value: point.metrics[metricId] ?? 0, sealed: point.sealed }));
+  return cachedSeries(data, `metric:${metricId}`, () => data.series.map(point => ({ day: point.day, value: point.metrics[metricId] ?? 0, sealed: point.sealed })));
 }
 
 /** Billable metric ids present in the series, most-used first. */

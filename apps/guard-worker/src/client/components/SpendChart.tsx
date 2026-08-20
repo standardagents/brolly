@@ -1,11 +1,20 @@
 import { dateTime, money } from "../format";
+import { ENTERPRISE_COST_NOTICE } from "../plan-tier";
 import type { SpendPoint } from "../types";
 
 /**
  * Bounded aggregate spend trend. Points are account-level rolling-24h (or
  * projected-daily) totals written by the monitor — never a per-object rescan.
  */
-export function SpendChart({ points }: { points: SpendPoint[] }) {
+export function SpendChart({ points, disabled = false }: { points: SpendPoint[]; disabled?: boolean }) {
+  if (disabled) {
+    return (
+      <div className="grid h-[270px] place-content-center rounded-field border border-dashed border-line bg-panel-soft px-5 text-center opacity-55 saturate-0" aria-disabled="true">
+        <strong className="text-[13px]">Cost chart unavailable</strong>
+        <p className="mt-1 max-w-[36ch] text-[12.5px] leading-[1.5] text-muted">{ENTERPRISE_COST_NOTICE}</p>
+      </div>
+    );
+  }
   if (points.length < 2) {
     return (
       <div className="grid h-[270px] place-content-center text-center text-muted">

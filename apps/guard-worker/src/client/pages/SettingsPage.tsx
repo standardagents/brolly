@@ -7,7 +7,8 @@ import { money } from "../format";
 import type { ConnectionHealth } from "../lib/health";
 import { billingTokenTemplateUrl } from "../lib/billing";
 import type { Route } from "../router";
-import type { BillingAccessStatus, DashboardData, ReleaseStatus } from "../types";
+import { ENTERPRISE_COST_NOTICE, ENTERPRISE_QUOTA_NOTICE, FREE_PLAN_NOTICE, UNKNOWN_PLAN_NOTICE, effectivePlanTier } from "../plan-tier";
+import type { BillingAccessStatus, DashboardData, PlanTier, PlanTierSource, ReleaseStatus } from "../types";
 
 /** Auto-fitting grid of small labelled facts under a settings panel head. */
 function FactGrid({ children }: { children: ReactNode }) {
@@ -76,8 +77,21 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
   const [savingRepository, setSavingRepository] = useState(false);
   const [repositoryMessage, setRepositoryMessage] = useState("");
   const [repositoryError, setRepositoryError] = useState("");
+  const [planTier, setPlanTier] = useState<PlanTier>(effectivePlanTier(data));
+  const [planTierSource, setPlanTierSource] = useState<PlanTierSource>(data.planTierSource ?? (data.planTierOverride ? "override" : "api"));
+  const [planTierOverride, setPlanTierOverride] = useState<PlanTier | null>(data.planTierOverride ?? null);
+  const [planTierChoice, setPlanTierChoice] = useState<PlanTier | "detected">(data.planTierOverride ?? "detected");
+  const [planTierBusy, setPlanTierBusy] = useState(false);
+  const [planTierError, setPlanTierError] = useState("");
+  const [planTierMessage, setPlanTierMessage] = useState("");
 
   useEffect(() => setRepository(release?.repository ?? ""), [release?.repository]);
+  useEffect(() => {
+    setPlanTier(effectivePlanTier(data));
+    setPlanTierSource(data.planTierSource ?? (data.planTierOverride ? "override" : "api"));
+    setPlanTierOverride(data.planTierOverride ?? null);
+    setPlanTierChoice(data.planTierOverride ?? "detected");
+  }, [data.planTier, data.planTierSource, data.planTierOverride]);
 
   async function saveRepository() {
     setSavingRepository(true);
@@ -94,6 +108,31 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
     }
   }
 
+  async function savePlanTier() {
+    setPlanTierBusy(true);
+    setPlanTierError("");
+    setPlanTierMessage("");
+    const override = planTierChoice === "detected" ? null : planTierChoice;
+    try {
+      const result = await api<{ planTier?: PlanTier; planTierSource?: PlanTierSource; planTierOverride?: PlanTier | null }>("/api/plan-tier", token, {
+        method: "PUT",
+        body: JSON.stringify({ planTierOverride: override }),
+      });
+      setPlanTier(result.planTier ?? (override ?? data.planTier ?? "unknown"));
+      setPlanTierSource(result.planTierSource ?? (override ? "override" : "api"));
+      setPlanTierOverride(result.planTierOverride ?? override);
+      setPlanTierMessage(override ? "Manual plan tier saved." : "Plan detection restored.");
+    } catch (cause) {
+      setPlanTierError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPlanTierBusy(false);
+    }
+  }
+
+  const tier = planTier;
+  const enterprise = tier === "enterprise";
+  const free = tier === "free";
+
   return (
     <>
       <Panel aria-label="Budgets and enforcement">
@@ -105,12 +144,12 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
         <FactGrid>
           <Fact
             label="Account daily limits"
-            value={spendSummary(data.policy.accountDailySpend, data.alertLevels)}
+            value={<span className={enterprise ? "opacity-55" : undefined}>{spendSummary(data.policy.accountDailySpend, data.alertLevels)}</span>}
             note="Per-level spend limits per rolling day"
           />
           <Fact
             label="Scoped budgets"
-            value={Object.keys(data.policy.assetDailySpend).length}
+            value={<span className={enterprise ? "opacity-55" : undefined}>{Object.keys(data.policy.assetDailySpend).length}</span>}
             note="Per-Worker and per-namespace limits that override product defaults"
           />
           <Fact
@@ -120,9 +159,24 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
             note="Every change is audited and used by the next monitor pass"
           />
         </FactGrid>
+        {enterprise && <div className="mx-5 mb-4 rounded-field border border-line bg-panel-soft px-3 py-2.5 text-[12.5px] text-muted">{ENTERPRISE_COST_NOTICE}</div>}
       </Panel>
 
-      <BillingAccessSection accountId={data.account.id} token={token} />
+      <PlanTierSection
+        tier={tier}
+        source={planTierSource}
+        override={planTierOverride}
+        choice={planTierChoice}
+        busy={planTierBusy}
+        error={planTierError}
+        message={planTierMessage}
+        free={free}
+        enterprise={enterprise}
+        onChoice={setPlanTierChoice}
+        onSave={() => void savePlanTier()}
+      />
+
+      <BillingAccessSection accountId={data.account.id} token={token} planTier={tier} />
 
       <NotificationSection token={token} />
 
@@ -195,13 +249,69 @@ export function SettingsPage({ data, connection, token, onNavigate, onBudgets, o
   );
 }
 
-function BillingAccessSection({ accountId, token }: { accountId: string; token: string }) {
+function PlanTierSection({ tier, source, override, choice, busy, error, message, free, enterprise, onChoice, onSave }: {
+  tier: PlanTier;
+  source: PlanTierSource;
+  override: PlanTier | null;
+  choice: PlanTier | "detected";
+  busy: boolean;
+  error: string;
+  message: string;
+  free: boolean;
+  enterprise: boolean;
+  onChoice: (value: PlanTier | "detected") => void;
+  onSave: () => void;
+}) {
+  return (
+    <Panel aria-label="Cloudflare plan tier">
+      <PanelHead eyebrow="Billing tier" title="Cloudflare plan tier" sub="Brolly uses this tier to show included usage and keep cost surfaces accurate." />
+      <div className="grid gap-3 px-5 pb-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(190px,1fr))] gap-2.5">
+          <Fact label="Current tier" value={planTierLabel(tier)} note={source === "override" ? "Set by a manual override" : "Reported by the subscriptions check"} />
+          <Fact label="Tier source" value={source === "override" ? "Manual override" : "Cloudflare API"} note={override ? `Override: ${planTierLabel(override)}` : "No manual override is active"} />
+        </div>
+        {free && <div className="rounded-field border border-warn-line bg-warn-bg px-3 py-2.5 text-[12.5px] text-muted">{FREE_PLAN_NOTICE}</div>}
+        {enterprise && <div className="rounded-field border border-warn-line bg-warn-bg px-3 py-2.5 text-[12.5px] text-muted">{ENTERPRISE_QUOTA_NOTICE} {ENTERPRISE_COST_NOTICE}</div>}
+        {tier === "unknown" && <div className="rounded-field border border-warn-line bg-warn-bg px-3 py-2.5 text-[12.5px] text-muted">{UNKNOWN_PLAN_NOTICE}</div>}
+        <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end" onSubmit={event => { event.preventDefault(); onSave(); }}>
+          <label className="grid gap-1 text-[12px] font-[680] text-muted" htmlFor="plan-tier-override">
+            Manual tier override
+            <select id="plan-tier-override" className="min-h-10 rounded-field border border-field-line bg-field px-[11px] text-[13px] font-[450] text-ink" value={choice} onChange={event => onChoice(event.target.value as PlanTier | "detected")}>
+              <option value="detected">Use detected tier</option>
+              <option value="free">Free</option>
+              <option value="paid">Workers Paid</option>
+              <option value="enterprise">Enterprise</option>
+              <option value="unknown">Unknown</option>
+            </select>
+          </label>
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? "Saving…" : "Save tier"}</Button>
+        </form>
+        {error && <Notice tone="error">{error}</Notice>}
+        {message && <Notice tone="success" role="status">{message}</Notice>}
+      </div>
+    </Panel>
+  );
+}
+
+function planTierLabel(tier: PlanTier): string {
+  if (tier === "paid") return "Workers Paid";
+  if (tier === "enterprise") return "Enterprise";
+  if (tier === "free") return "Free";
+  return "Unknown";
+}
+
+function BillingAccessSection({ accountId, token, planTier }: { accountId: string; token: string; planTier: PlanTier }) {
   const [status, setStatus] = useState<BillingAccessStatus | null>(null);
   const [billingToken, setBillingToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const templateUrl = billingTokenTemplateUrl(accountId);
+  const enterprise = planTier === "enterprise";
+  const billingUnavailable = enterprise || planTier === "free";
+  const reconciliationNotice = planTier === "free"
+    ? "Free plans have hard usage caps and cannot accrue spend, so billing reconciliation is unavailable."
+    : `${ENTERPRISE_QUOTA_NOTICE} ${ENTERPRISE_COST_NOTICE}`;
 
   async function load() {
     setError("");
@@ -212,7 +322,14 @@ function BillingAccessSection({ accountId, token }: { accountId: string; token: 
     }
   }
 
-  useEffect(() => { void load(); }, [token]);
+  useEffect(() => {
+    if (billingUnavailable) {
+      setStatus(null);
+      setError("");
+      return;
+    }
+    void load();
+  }, [token, billingUnavailable]);
 
   async function save() {
     setBusy(true);
@@ -237,30 +354,30 @@ function BillingAccessSection({ accountId, token }: { accountId: string; token: 
       <PanelHead
         eyebrow="Usage coverage"
         title="Daily billing access"
-        sub="Highly recommended. Billing Read gives Brolly exact account-wide charges and greatly improves protection beyond fast service telemetry."
+        sub={billingUnavailable ? reconciliationNotice : "Highly recommended. Billing Read gives Brolly exact account-wide charges and greatly improves protection beyond fast service telemetry."}
         actions={
-          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold ${configured ? "bg-good-bg text-good" : "bg-warn-bg text-warn"}`}>
-            <span className="size-2 rounded-full bg-current" />{status ? configured ? "Connected" : "Setup needed" : "Checking…"}
+          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold ${billingUnavailable ? "bg-panel-soft text-muted" : configured ? "bg-good-bg text-good" : "bg-warn-bg text-warn"}`}>
+            <span className="size-2 rounded-full bg-current" />{billingUnavailable ? `Unavailable for ${planTier === "free" ? "Free" : "Enterprise"}` : status ? configured ? "Connected" : "Setup needed" : "Checking…"}
           </span>
         }
       />
 
       <div className="mt-4 grid gap-4 rounded-field border border-line bg-panel-soft p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
         <div>
-          <strong className="text-sm">{configured ? "Generate a replacement whenever you need one" : "Add Billing Read access"}</strong>
-          <p className="mt-1 max-w-[76ch] text-xs leading-5 text-muted">Cloudflare opens a prefilled user API-token form with Billing → Read and only this account selected. Create it, copy the token Cloudflare shows once, then verify it below.</p>
+          <strong className="text-sm">{billingUnavailable ? `${planTier === "free" ? "Free-plan" : "Enterprise"} reconciliation is unavailable` : configured ? "Generate a replacement whenever you need one" : "Add Billing Read access"}</strong>
+          <p className="mt-1 max-w-[76ch] text-xs leading-5 text-muted">{billingUnavailable ? reconciliationNotice : "Cloudflare opens a prefilled user API-token form with Billing → Read and only this account selected. Create it, copy the token Cloudflare shows once, then verify it below."}</p>
           {configured && <p className="mt-2 text-xs leading-5 text-muted">The current credential is {managedAsWorkerSecret ? "managed as the CLOUDFLARE_BILLING_TOKEN Worker secret. Create a replacement here, then replace that secret in Cloudflare" : `encrypted in this installation's D1${status?.updatedAt ? ` and was saved ${new Date(status.updatedAt).toLocaleString()}` : ""}. Saving another verified token replaces it`}.</p>}
         </div>
-        <ActionLink href={templateUrl} variant="primary" className="shrink-0"><Icon name="external" /> {configured ? "Create replacement token" : "Create billing token"}</ActionLink>
+        {!billingUnavailable && <ActionLink href={templateUrl} variant="primary" className="shrink-0"><Icon name="external" /> {configured ? "Create replacement token" : "Create billing token"}</ActionLink>}
       </div>
 
-      <form className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={event => { event.preventDefault(); void save(); }}>
+      {!billingUnavailable && <form className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={event => { event.preventDefault(); void save(); }}>
         <label className="sr-only" htmlFor="settings-billing-token">Paste the new Cloudflare user API token</label>
         <Input id="settings-billing-token" className="min-w-0 px-3 text-sm" type="password" value={billingToken} onChange={event => setBillingToken(event.target.value)} autoComplete="off" spellCheck={false} disabled={managedAsWorkerSecret} placeholder={managedAsWorkerSecret ? "Replace the Worker secret in Cloudflare" : configured ? "Paste a replacement cfut_ token" : "Paste the cfut_ token Cloudflare shows"} />
         <Button type="submit" variant="primary" disabled={managedAsWorkerSecret || busy || !billingToken.trim()}><Icon name="check" /> {managedAsWorkerSecret ? "Managed in Cloudflare" : busy ? "Verifying…" : configured ? "Verify and replace" : "Verify and save"}</Button>
-      </form>
-      <p className="mt-2 text-xs leading-5 text-faint">Brolly verifies the token against Cloudflare before saving it, encrypts it at rest, and never displays it again.</p>
-      {error && <Notice tone="error" className="mt-3"><strong>Billing access failed.</strong> {error}</Notice>}
+      </form>}
+      {!billingUnavailable && <p className="mt-2 text-xs leading-5 text-faint">Brolly verifies the token against Cloudflare before saving it, encrypts it at rest, and never displays it again.</p>}
+      {error && <Notice tone="error" className="mt-3"><strong>{billingUnavailable ? "Billing reconciliation unavailable." : "Billing access failed."}</strong> {billingUnavailable ? reconciliationNotice : error}</Notice>}
       {message && <Notice tone="success" className="mt-3" role="status">{message}</Notice>}
     </Panel>
   );

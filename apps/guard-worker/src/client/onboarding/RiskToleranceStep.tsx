@@ -76,7 +76,7 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy, accountNam
     </StepIntro>
     <div className="grid grid-cols-[340px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
       <BaselinePanel state={usage} series={series} typical={typical} windowDays={tolerance.baseline.windowDays} accountName={accountName} accountId={accountId} />
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-col">
         <div className="mb-5 flex flex-wrap items-center gap-2" role="group" aria-label="Risk tolerance preset">
           <span className="mr-1 text-[12px] font-[650] text-muted">Preset</span>
           {PRESETS.map(preset => (
@@ -90,7 +90,9 @@ export function RiskToleranceStep({ token, policy, levels, setPolicy, accountNam
           ))}
           {tolerance.preset === "custom" && <span className="ml-1 rounded-full bg-chip px-2.5 py-1 text-[11.5px] font-bold text-chip-ink">Custom</span>}
         </div>
-        <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
+        <div className="flex flex-1 flex-col justify-center rounded-panel border border-line bg-panel px-5 py-4">
+          <ToleranceTrack levels={chartLevels} value={tolerance.percentOfTypical} typical={typical} cycleDays={cycleDays} onChange={next => commit("custom", next)} />
+        </div>
       </div>
     </div>
   </>;

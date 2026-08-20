@@ -7,7 +7,7 @@ import {
   tolerancePresetValues,
   typicalDay,
 } from "../src/client/onboarding/risk-tolerance";
-import { completeWithDefaults, cycleDaysFor, toleranceDefaults, windowDefaults } from "../src/client/components/limits-chart/defaults";
+import { completeWithDefaults, cycleDaysFor, includedCycleDefaults, toleranceDefaults, windowDefaults } from "../src/client/components/limits-chart/defaults";
 import { preparePolicy } from "../src/client/onboarding/model";
 
 describe("risk tolerance presets", () => {
@@ -143,5 +143,28 @@ describe("risk tolerance baseline", () => {
     expect(defaults.warn).toBeGreaterThanOrEqual(100);
     expect(defaults.critical).toBeGreaterThanOrEqual(200);
     expect(defaults.emergency).toBeGreaterThanOrEqual(300);
+  });
+
+  it("anchors cycle defaults to an included allotment while typical usage stays below it", () => {
+    const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) }];
+    const values = includedCycleDefaults(
+      [{ day: "2026-01-18", value: 100 }], cycles, "2026-01-18",
+      ["warn", "critical", "emergency"],
+      { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000,
+    );
+    expect(values?.warn).toBe(800);
+    expect(values?.critical).toBe(1_000);
+    expect(values?.emergency).toBeGreaterThanOrEqual(1_000);
+  });
+
+  it("returns no allotment seed when observed cycle usage is already billable", () => {
+    const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) }];
+    const series = [{ day: "2026-01-18", value: 1_001 }];
+    expect(includedCycleDefaults(
+      series, cycles, "2026-01-18",
+      ["warn", "critical", "emergency"],
+      { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000,
+    )).toBeUndefined();
+    expect(windowDefaults(series, cycles, "2026-01-18", ["warn", "critical", "emergency"], "cycle", { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000)?.warn).not.toBe(800);
   });
 });

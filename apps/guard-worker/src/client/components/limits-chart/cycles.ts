@@ -91,6 +91,30 @@ export function projectCycle(series: readonly DayPoint[], cycles: readonly Cycle
 }
 
 /**
+ * Return the day on which the current cycle's straight-line projection first
+ * reaches an included allotment. A cycle already above the allotment has no
+ * future projected crossing to annotate.
+ */
+export function projectedCrossingDate(series: readonly DayPoint[], cycles: readonly CycleBounds[], today: string, includedPerCycle?: number): string | null {
+  const included = includedPerCycle;
+  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return null;
+  const projection = projectCycle(series, cycles, today);
+  if (!projection || projection.toDate >= included || !(projection.projected > included)) return null;
+  const dailyRate = projection.toDate / projection.elapsedDays;
+  if (!(dailyRate > 0)) return null;
+  const bounds = cycles[projection.cycle];
+  if (!bounds) return null;
+  // Values are recorded at the end of each UTC day. A crossing during day N
+  // is shown against that day's label, so day one has offset zero.
+  const offset = Math.max(0, Math.ceil(included / dailyRate) - 1);
+  const lastDay = Math.max(bounds.startsAt, bounds.endsAt - DAY_MS);
+  return dayOf(Math.min(lastDay, bounds.startsAt + offset * DAY_MS));
+}
+
+/** Shorter name for chart callers that describe the annotation as a crossing. */
+export const projectedCrossingDay = projectedCrossingDate;
+
+/**
  * The window to render: the cycle containing `today` plus `priorCycles`
  * before it, clamped to the days present in `series`.
  */

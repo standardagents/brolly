@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { type CycleBounds, type DayPoint } from "./cycles";
 import { deriveSeries } from "./defaults";
+import { includedUsagePercent } from "./included-quota";
 import { type LevelValues, crossedLevel } from "./levels";
 import { chooseAxis } from "./scale";
 import type { LimitsChartLevel } from "./LimitsChart";
@@ -11,7 +12,7 @@ import type { LimitsChartLevel } from "./LimitsChart";
  * color above). In cycle mode the bars are the running total per billing
  * cycle, so the sawtooth and its level colors show at row scale.
  */
-export function MiniChart({ series, cycles, today, window, levels, values, accent, className }: {
+export const MiniChart = memo(function MiniChart({ series, cycles, today, window, levels, values, accent, className }: {
   series: DayPoint[];
   cycles?: CycleBounds[];
   today?: string;
@@ -67,4 +68,24 @@ export function MiniChart({ series, cycles, today, window, levels, values, accen
       {bars.map(bar => <rect key={bar.key} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} opacity={window === "cycle" ? 0.82 : 1} />)}
     </svg>
   );
+});
+
+/**
+ * Cycle context for a day-window row. The allotment is cycle-scoped, so this
+ * readout remains visible while the operator is looking at daily bars.
+ */
+export function IncludedUsageReadout({ series, cycles, today, includedPerCycle, className }: {
+  series: DayPoint[];
+  cycles?: CycleBounds[];
+  today?: string;
+  includedPerCycle?: number;
+  className?: string;
+}) {
+  const cycleToDate = useMemo(() => {
+    const derived = deriveSeries(series, cycles, today);
+    return derived.cumulative.at(-1)?.cumulative ?? 0;
+  }, [series, cycles, today]);
+  const percent = includedUsagePercent(cycleToDate, includedPerCycle);
+  if (percent === null) return null;
+  return <small data-included-readout className={className}>{percent > 100 ? "Billable" : `${Math.round(percent)}% of included used this cycle`}</small>;
 }

@@ -42,13 +42,13 @@ describe("LimitsChart", () => {
 
   it("renders a numeric field per level and hides handles and fields in read-only mode", () => {
     expect((render().match(/inputMode="decimal"/g) ?? []).length).toBe(LEVELS.length);
-    expect((render().match(/aria-label="(?:Undo|Redo)[^"]*"/g) ?? []).length).toBe(2);
+    expect((render().match(/data-action="(?:undo|redo)"/g) ?? []).length).toBe(2);
     expect((render().match(/disabled=""/g) ?? []).length).toBe(2);
     const readOnly = render({ readOnly: true });
     expect(readOnly).not.toContain('role="slider"');
     expect(readOnly).not.toContain("inputMode");
-    expect(readOnly).not.toContain("Undo last limit change");
-    expect(readOnly).not.toContain("Redo limit change");
+    expect(readOnly).not.toContain(String.raw`data-action="undo"`);
+    expect(readOnly).not.toContain(String.raw`data-action="redo"`);
     expect(readOnly).toContain("Emergency");
   });
 
@@ -57,6 +57,15 @@ describe("LimitsChart", () => {
     expect(html).toContain('data-limits-chart="usage"');
     expect(html).toContain("500 reqs");
     expect(html).toContain('fill="#1a9c8c"');
+  });
+
+  it("renders estimated billable cost as a secondary line with a legend", () => {
+    const html = render({
+      secondarySeries: series.map(point => ({ ...point, value: point.value / 2 })),
+      secondaryLabel: "Estimated billable cost",
+    });
+    expect(html).toContain("data-secondary-cost-series");
+    expect(html).toContain("data-cost-series-legend");
   });
 
   it("paints the cycle running total in the color of the band it crosses and greys the bars", () => {
@@ -69,6 +78,18 @@ describe("LimitsChart", () => {
     const low = render({ window: "cycle", value: { warn: 5, critical: 10, emergency: 20 } });
     expect(low).toContain('fill="#561a55" opacity=".82"');
     expect(low).not.toMatch(/band-emergency"><rect[^>]*height="0"/);
+  });
+
+  it("shows the account usage allotment only on cycle charts and keeps distant boundaries off-scale", () => {
+    const cycle = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 50 });
+    expect((cycle.match(/data-included-band/g) ?? []).length).toBe(1);
+    expect((cycle.match(/data-included-boundary/g) ?? []).length).toBe(1);
+    expect((cycle.match(/data-projected-crossing/g) ?? []).length).toBe(1);
+    const day = render({ kind: "usage", unit: "requests", window: "day", includedPerCycle: 50 });
+    expect(day).not.toContain("data-included-band");
+    const distant = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 10_000 });
+    expect(distant).toMatch(/data-included-band="true" data-clamped="true"/);
+    expect(distant).not.toContain("data-included-boundary");
   });
 
   it("shows a non-blocking note when a cycle level is below its daily reference", () => {

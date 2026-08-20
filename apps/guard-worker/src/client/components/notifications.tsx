@@ -108,7 +108,12 @@ export function ChannelList({ token, state, layout = "list" }: { token: string; 
   const [adding, setAdding] = useState<NotificationChannel | null>(null);
   const [saved, setSaved] = useState("");
   const grid = layout === "grid";
-  const fullWidth = grid ? "lg:col-span-2 2xl:col-span-3" : "";
+  const fullWidth = grid ? "lg:col-span-2 xl:col-span-3" : "";
+  // Ghost cells complete the current grid row after the add cell, so the row
+  // count is stable: 1 channel → [channel][add][ghost], 2 → [c][c][add],
+  // 3 → a fresh [add][ghost][ghost] row. Counts differ per column count.
+  const cells = targets.length + 1;
+  const ghosts = (columns: number) => (columns - (cells % columns)) % columns;
 
   async function patchLabel(target: NotificationTarget, label: string) {
     setError("");
@@ -127,16 +132,23 @@ export function ChannelList({ token, state, layout = "list" }: { token: string; 
   }
 
   return (
-    <div className={`grid gap-2.5 ${grid ? "lg:grid-cols-2 2xl:grid-cols-3" : ""}`} data-channel-grid={grid || undefined}>
+    <div className={`grid gap-2.5 ${grid ? "lg:grid-cols-2 xl:grid-cols-3" : ""}`} data-channel-grid={grid || undefined}>
       {!credentialStorageReady && !loading && <div className={fullWidth}><CredentialWarning /></div>}
       {error && <div className={fullWidth}><Notice tone="error">{error}</Notice></div>}
       {saved && <p className="sr-only" role="status">{saved}</p>}
       {loading && <p className={`${fullWidth} py-2.5 text-[13px] text-muted`}>Loading alert channels…</p>}
       {targets.map(target => <ChannelRow key={target.id} target={target} onLabel={label => void patchLabel(target, label)} onRemove={() => void remove(target)} />)}
       <AddChannelRow disabled={!credentialStorageReady} onPick={channel => { setSaved(""); setAdding(channel); }} />
+      {grid && Array.from({ length: ghosts(2) }, (_, index) => <GhostCell key={`ghost-2-${index}`} className="hidden lg:block xl:hidden" />)}
+      {grid && Array.from({ length: ghosts(3) }, (_, index) => <GhostCell key={`ghost-3-${index}`} className="hidden xl:block" />)}
       {adding && <ChannelSetupModal channel={adding} token={token} onClose={() => setAdding(null)} onSaved={async () => { setSaved(`${adding.label} channel saved.`); setAdding(null); await load(); }} />}
     </div>
   );
+}
+
+/** Empty slot that keeps a channel-grid row visually complete. */
+function GhostCell({ className }: { className: string }) {
+  return <span aria-hidden="true" className={`min-h-[74px] rounded-panel border border-dashed border-line-soft ${className}`} />;
 }
 
 function CredentialWarning() {
@@ -164,7 +176,7 @@ export function AddChannelRow({ disabled = false, label = "Add alert channel", c
       {open && (
         <ul role="menu" className="absolute left-0 right-0 top-full z-30 mt-1.5 grid min-w-[280px] list-none gap-0.5 rounded-panel border border-line bg-panel p-1.5 shadow-panel">
           {NOTIFICATION_CHANNELS.map(channel => (
-            <li key={channel.kind} role="none"><button type="button" role="menuitem" onClick={() => { setOpen(false); onPick(channel); }} className="flex w-full cursor-pointer items-start gap-2.5 rounded-field border-0 bg-transparent px-2.5 py-2 text-left hover:bg-panel-soft"><ChannelLogo kind={channel.kind} /><span><strong className="block text-[13px]">{channel.label}</strong><span className="block text-[12px] text-muted">{channel.description}</span></span></button></li>
+            <li key={channel.kind} role="none"><button type="button" role="menuitem" data-channel-kind={channel.kind} onClick={() => { setOpen(false); onPick(channel); }} className="flex w-full cursor-pointer items-start gap-2.5 rounded-field border-0 bg-transparent px-2.5 py-2 text-left hover:bg-panel-soft"><ChannelLogo kind={channel.kind} /><span><strong className="block text-[13px]">{channel.label}</strong><span className="block text-[12px] text-muted">{channel.description}</span></span></button></li>
           ))}
         </ul>
       )}
@@ -208,7 +220,7 @@ function ChannelRow({ target, onLabel, onRemove }: { target: NotificationTarget;
         <p className="mt-0.5 px-1.5 text-[12px] text-muted">{channelLabel(target.kind)}{target.lastDeliveryAt ? ` · ${target.lastDeliveryOk ? "Delivered" : "Failed"} ${relativeTime(target.lastDeliveryAt)}` : ""}</p>
         {target.lastDeliveryOk === false && target.lastDeliveryError && <p className="mt-1 px-1.5 text-[12px] text-danger">{target.lastDeliveryError}</p>}
       </div>
-      <Button variant="quiet" onClick={onRemove}>Remove</Button>
+      <Button variant="quiet" onClick={onRemove} title="Remove channel" aria-label={`Remove ${channelLabel(target.kind)} channel`}><Icon name="x" /></Button>
     </article>
   );
 }
@@ -261,7 +273,7 @@ export function ChannelCredentialsForm({ channel, token, onCancel, onSaved }: { 
       <p className="m-0 flex items-center gap-[7px] text-[12px] text-muted"><Icon name="shield" className="size-3.5" /> Brolly stores credentials in encrypted form.</p>
       {providers.error && <Notice tone="error">{providers.error}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
-      <div className="flex justify-end gap-2">{onCancel && <Button variant="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>}<Button type="submit" variant="primary" disabled={busy || providers.loading}>{busy ? "Saving…" : "Save alert channel"}</Button></div>
+      <div className="flex justify-end gap-2">{onCancel && <Button variant="quiet" onClick={onCancel} disabled={busy}>Cancel</Button>}<Button type="submit" variant="primary" data-action="save-channel" disabled={busy || providers.loading}>{busy ? "Saving…" : "Save alert channel"}</Button></div>
     </form>
   );
 }
@@ -281,7 +293,7 @@ function RecipientFields({ values, onChange }: { values: string[]; onChange: (va
       ))}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <small className="text-[12px] text-muted">Every address in this channel receives the same alert.</small>
-        <Button variant="secondary" size="small" disabled={values.length >= MAX_EMAIL_RECIPIENTS} onClick={() => onChange([...values, ""])}><span aria-hidden="true">+</span> Add recipient</Button>
+        <Button variant="secondary" size="small" data-action="add-recipient" disabled={values.length >= MAX_EMAIL_RECIPIENTS} onClick={() => onChange([...values, ""])}><span aria-hidden="true">+</span> Add recipient</Button>
       </div>
     </fieldset>
   );

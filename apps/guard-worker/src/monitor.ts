@@ -13,6 +13,8 @@ import { runOneBackfillSlice } from "./backfill.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
 import { loadAlertLevels, resolveEffectiveEntries } from "./alert-levels.js";
+import { classifyPlanTier } from "./included-quota.js";
+import { saveDetectedPlan } from "./plan-tier.js";
 
 export interface CollectorWindowCursor<T> {
   startAt: number;
@@ -86,6 +88,7 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     const billingDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", 60 * 60_000, now, options.force === true);
     const retentionDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "retention-maintenance", 60 * 60_000, now, options.force === true);
     if (capabilityDue) await ledger.syncMetricCatalog();
+    if (billingDue) await refreshPlanTier(env, client, now);
     const inventory = inventoryDue ? await client.inventory() : { assets: [], coverage: [] as CoverageResult[] };
     budget.charge("samples", inventory.assets.length);
     await store.saveAssets(inventory.assets);
@@ -346,6 +349,16 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     }
     console.error("[Brolly] monitor failed", error);
     await writeSentinelIncident(env.DB, env.BROLLY_ACCOUNT_ID, message);
+  }
+}
+
+async function refreshPlanTier(env: Env, client: CloudflareClient, checkedAt: number): Promise<void> {
+  try {
+    const payload = await client.subscriptions();
+    await saveDetectedPlan(env.DB, classifyPlanTier(payload), checkedAt);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await saveDetectedPlan(env.DB, "unknown", checkedAt, detail);
   }
 }
 

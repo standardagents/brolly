@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Brand, Button, Eyebrow, Icon, Notice } from "../components/ui";
+import { Brand, Button, Eyebrow, Icon, Notice, Spinner } from "../components/ui";
+import { effectivePlanTier } from "../plan-tier";
 import type { OnboardingData } from "../types";
 import {
   AccessStep,
@@ -81,10 +82,14 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
   const navigation = useWizardNavigation(STEPS.length, initialStep, editing);
-  const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels);
+  const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels, data.planTier);
   const save = useOnboardingSave(token, data, policy, integrations, editing, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
   const billingConnected = estimates.estimates?.access.billing.state === "connected";
+  const billingState = estimates.estimates ? billingConnected : undefined;
+  const planTier = effectivePlanTier(data);
+  const billingRequired = planTier !== "free" && planTier !== "enterprise";
+  const billingFlow = useBillingSuccessFlow(billingState, billingRequired && !editing && navigation.unlocked === 0, navigation.advance);
 
   useEffect(() => {
     if (board.levels.length) setPolicy(current => preparePolicy(current, data.families.map(item => item.family), data.scopedAssets, board.levels, data.complete));
@@ -108,7 +113,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
     <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
-    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={data.planTier} />,
     <ProductLimitsStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} />,
     <VerifyStep assets={data.scopedAssets} token={token} integrations={integrations} onChange={setIntegrations} autoRun={breakerClaimed && !editing} />,
@@ -145,9 +150,12 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                 {index === navigation.unlocked && index < STEPS.length - 1 && (index !== 0 || estimates.estimates) && (
                   <ContinueFooter
                     billingConnected={billingConnected}
+                    billingRequired={billingRequired}
+                    planTier={planTier}
                     busy={save.busy || (index === 0 && estimates.busy)}
                     blocked={index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue." : ""}
                     firstStep={index === 0}
+                    billingFlow={billingFlow}
                     label={step.continueLabel}
                     accessCheckComplete={accessCheckComplete}
                     onOpenBilling={() => setBillingDialogOpen(true)}
@@ -200,7 +208,7 @@ function WizardStepper({ active, unlocked, onSelect }: {
       {STEPS.map((step, index) => {
         const reachable = index <= unlocked;
         return (
-          <li key={step.label} className={`flex items-center text-[13px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}>
+          <li key={step.label} data-step={step.key} className={`flex items-center text-[13px] font-[640] ${index === active ? "text-ink" : index < unlocked ? "text-good" : reachable ? "text-faint" : "text-faint opacity-55"}`}>
             {index > 0 && <span className="mx-1 h-px w-3 bg-line max-xl:hidden" aria-hidden="true" />}
             <button
               type="button"
@@ -233,9 +241,36 @@ function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number
   );
 }
 
-export function ContinueFooter({ accessCheckComplete = true, billingConnected, blocked = "", busy, firstStep, label, onContinue, onOpenBilling }: {
+type BillingFlow = "idle" | "settling" | "done";
+
+/**
+ * Post-connect choreography for step 1: hold a checking state long enough for
+ * the coverage board to turn green, show a quiet success label, then advance
+ * to the next step on its own. It runs only when billing moves from a known
+ * not-connected result to connected, never when a page load discovers billing
+ * that was already connected.
+ */
+function useBillingSuccessFlow(connected: boolean | undefined, active: boolean, advance: () => void): BillingFlow {
+  const [flow, setFlow] = useState<BillingFlow>("idle");
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    const was = wasConnected.current;
+    wasConnected.current = connected;
+    if (connected !== true || was !== false || !active) return;
+    setFlow("settling");
+    const settle = setTimeout(() => setFlow("done"), 1600);
+    const next = setTimeout(advance, 2800);
+    return () => { clearTimeout(settle); clearTimeout(next); };
+  }, [connected, active, advance]);
+  return flow;
+}
+
+export function ContinueFooter({ accessCheckComplete = true, billingConnected, billingRequired = true, planTier = "unknown", billingFlow = "idle", blocked = "", busy, firstStep, label, onContinue, onOpenBilling }: {
   accessCheckComplete?: boolean;
   billingConnected: boolean;
+  billingRequired?: boolean;
+  planTier?: OnboardingData["planTier"];
+  billingFlow?: BillingFlow;
   blocked?: string;
   busy: boolean;
   firstStep: boolean;
@@ -243,13 +278,24 @@ export function ContinueFooter({ accessCheckComplete = true, billingConnected, b
   onContinue: () => void;
   onOpenBilling: () => void;
 }) {
-  if (firstStep && !billingConnected) {
+  if (firstStep && billingRequired && !billingConnected) {
     return (
       <StepActions>
-        <span className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 max-lg:grid-cols-1 max-lg:items-stretch">
-          <small className="max-w-[52ch] text-left leading-5 text-muted"><strong className="text-ink">Billing access is highly recommended.</strong> It lets Brolly trigger events from actual billable charges. This gives you more understandable thresholds and greater protection for your account.</small>
-          <Button variant="secondary" className="shrink-0" disabled={busy} onClick={onContinue}>Continue without billing</Button>
+        <span className="flex w-full flex-col items-end gap-1.5">
           <GrantBillingAccessButton disabled={busy || !accessCheckComplete} onClick={onOpenBilling} />
+          <small className="text-[12px] text-muted">Read-only billing access is required to continue.</small>
+        </span>
+      </StepActions>
+    );
+  }
+
+  if (firstStep && billingFlow !== "idle") {
+    return (
+      <StepActions>
+        <span className="flex w-full justify-end">
+          {billingFlow === "settling"
+            ? <Button variant="secondary" disabled><Spinner /> Checking billing access…</Button>
+            : <span className="inline-flex min-h-9 items-center gap-[7px] rounded-field border border-good-line px-3.5 text-[13.5px] font-[620] text-good"><Icon name="check" className="size-4" /> Billing access enabled</span>}
         </span>
       </StepActions>
     );
@@ -257,9 +303,10 @@ export function ContinueFooter({ accessCheckComplete = true, billingConnected, b
 
   return (
     <StepActions>
-      <span className="flex w-full flex-wrap items-center justify-between gap-4">
-        {blocked && <small className="text-[12.5px] text-muted">{blocked}</small>}
-        <Button variant="primary" className="ml-auto shrink-0" disabled={busy || Boolean(blocked)} title={blocked || undefined} onClick={onContinue}>{label ?? (firstStep ? "Continue to alerts" : "Continue")}</Button>
+      <span className="flex w-full flex-col items-end gap-1.5">
+        <Button variant="primary" className="shrink-0" disabled={busy || (firstStep && !accessCheckComplete) || Boolean(blocked)} title={blocked || undefined} onClick={onContinue}>{label ?? (firstStep ? "Continue to alerts" : "Continue")}</Button>
+        {blocked && <small className="text-[12px] text-muted">{blocked}</small>}
+        {firstStep && !billingRequired && <small className="max-w-[48ch] text-right text-[12px] text-muted">{planTier === "free" ? "Free plans have hard usage caps, so Brolly continues with usage monitoring." : "Enterprise billing reconciliation is unavailable, so Brolly continues with usage monitoring."}</small>}
       </span>
     </StepActions>
   );
@@ -282,7 +329,7 @@ function FinishFooter({ assetCount, busy, editing, error, installedCount, onSave
           ? <><strong className="text-ink">{installedCount} of {assetCount} resources verified.</strong> {installedCount ? "Quarantine is ready for them." : "Brolly will alert but cannot stop them yet."}</>
           : <><strong className="text-ink">No resources discovered yet.</strong> Finish in alerts-only mode, run a scan, then return here.</>}
       </span>
-      <Button variant="primary" disabled={busy} onClick={onSave}>{buttonLabel}</Button>
+      <Button variant="primary" data-action="finish" disabled={busy} onClick={onSave}>{buttonLabel}</Button>
     </StepActions>
   </>;
 }

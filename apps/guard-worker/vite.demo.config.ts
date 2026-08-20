@@ -34,7 +34,9 @@ import { createServer as createNetServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
-import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget } from "./src/client/types.ts";
+import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget, PlanTier } from "./src/client/types.ts";
+import { estimatedBillableCostSeries } from "./src/estimated-billable-cost.js";
+import { WORKERS_PAID_INCLUDED } from "./src/included-quota.js";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
 
 const now = Date.now();
@@ -103,6 +105,18 @@ const billingAccess = {
   configured: false,
   source: "none" as "worker_secret" | "encrypted_database" | "none",
   updatedAt: null as number | null,
+};
+
+const configuredDemoPlanTier = process.env.BROLLY_DEMO_PLAN_TIER;
+const initialDemoPlanTier: PlanTier = configuredDemoPlanTier === "free" || configuredDemoPlanTier === "enterprise" || configuredDemoPlanTier === "unknown"
+  ? configuredDemoPlanTier : "paid";
+const demoPlan = {
+  planTier: initialDemoPlanTier,
+  planTierSource: "api" as "api" | "override",
+  detectedPlanTier: initialDemoPlanTier,
+  planTierOverride: null as PlanTier | null,
+  planTierCheckedAt: now - HOUR,
+  planTierError: null as string | null,
 };
 
 const policy = {
@@ -261,6 +275,7 @@ const onboarding = {
   accountId: "placeholder-demo-account",
   accountName: "Demo Account (local preview)",
   complete: !freshInstall,
+  ...demoPlan,
   policy: freshInstall ? defaultPolicy : policy,
   families: freshInstall
     ? catalogFamilies.map(definition => ({ ...definition, protection: "coverage_gap" }))
@@ -413,6 +428,7 @@ const spendHistory = Array.from({ length: 24 }, (_, i) => {
 const dashboard = {
   generatedAt: now,
   account: { id: "placeholder-demo-account", timezone: "America/New_York" },
+  ...demoPlan,
   policy: {
     version: policy.version,
     accountDailySpend: policy.accountDailySpend,
@@ -623,8 +639,13 @@ const realUsage: RealUsageFixture | null = (() => {
 
 function demoUsageSeries(scope: string): UsageSeriesResponse {
   const real = realUsageSeries(scope);
-  if (real) return real;
-  return syntheticUsageSeries(scope);
+  const response = real ?? syntheticUsageSeries(scope);
+  return {
+    ...response,
+    estimatedBillableCostSeries: scope === "account"
+      ? estimatedBillableCostSeries(response.series, response.cycles, WORKERS_PAID_INCLUDED, demoPlan.planTier)
+      : [],
+  };
 }
 
 function realUsageSeries(scope: string): UsageSeriesResponse | null {
@@ -633,7 +654,7 @@ function realUsageSeries(scope: string): UsageSeriesResponse | null {
     const date = new Date(now);
     return { startsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1), endsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset + 1, 1), approximate: false };
   });
-  const base = { resourceId: `real:${scope}`, found: true, today: realUsage.today, cycles };
+  const base = { resourceId: `real:${scope}`, found: true, today: realUsage.today, cycles, includedQuotaCatalogVersion: "2026-08", planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource };
   if (scope === "account") {
     const families = Object.values(realUsage.families);
     const days = new Map<string, UsageSeriesResponse["series"][number]>();
@@ -643,13 +664,13 @@ function realUsageSeries(scope: string): UsageSeriesResponse | null {
       for (const [id, value] of Object.entries(point.metrics)) entry.metrics[id] = (entry.metrics[id] ?? 0) + value;
       days.set(point.day, entry);
     }
-    return { ...base, scope, metrics: Object.assign({}, ...families.map(family => family.metrics)), series: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)) };
+    return { ...base, scope, metrics: withDemoQuota(Object.assign({}, ...families.map(family => family.metrics)), scope), series: [...days.values()].sort((left, right) => left.day.localeCompare(right.day)) };
   }
   const family = realUsage.families[scope.replace(/^family:/, "")];
   // With real data loaded, a product the fetch did not cover has no usage;
   // it must not fall back to invented numbers.
   if (!family) return { ...base, scope, metrics: {}, series: [] };
-  return { ...base, scope, metrics: family.metrics, series: family.series };
+  return { ...base, scope, metrics: withDemoQuota(family.metrics, scope), series: family.series };
 }
 
 function syntheticUsageSeries(scope: string): UsageSeriesResponse {
@@ -665,13 +686,18 @@ function syntheticUsageSeries(scope: string): UsageSeriesResponse {
     const costUsd = Number((base * weekend * (0.7 + random(index) * 0.6) * spike).toFixed(4));
     const metrics: Record<string, number> = scope === "family:durable_objects"
       ? {
-        "durable_objects.requests": Math.round(costUsd * 900_000 * (0.8 + random(index + 7) * 0.4)),
-        "durable_objects.duration_gb_seconds": Math.round(costUsd * 2_400 * (0.8 + random(index + 11) * 0.4)),
-        "durable_objects.rows_read": Math.round(costUsd * 4_800_000 * (index > 60 ? 4 : 1) * (0.8 + random(index + 3) * 0.4)),
-        "durable_objects.rows_written": Math.round(costUsd * 260_000 * (0.8 + random(index + 5) * 0.4)),
-        "durable_objects.incoming_websocket_messages": Math.round(costUsd * 120_000 * (0.8 + random(index + 13) * 0.4)),
-        "durable_objects.sql_storage_bytes": Math.round(2_000_000_000 + index * 18_000_000),
+        "durable_objects:requests": Math.round(costUsd * 900_000 * (0.8 + random(index + 7) * 0.4)),
+        "durable_objects:duration_gb_seconds": Math.round(costUsd * 2_400 * (0.8 + random(index + 11) * 0.4)),
+        "durable_objects:rows_read": Math.round(costUsd * 4_800_000 * (index > 60 ? 4 : 1) * (0.8 + random(index + 3) * 0.4)),
+        "durable_objects:rows_written": Math.round(costUsd * 260_000 * (0.8 + random(index + 5) * 0.4)),
+        "durable_objects:incoming_websocket_messages": Math.round(costUsd * 120_000 * (0.8 + random(index + 13) * 0.4)),
+        "durable_objects:sql_storage_bytes": Math.round(2_000_000_000 + index * 18_000_000),
       }
+      : scope === "account"
+        ? {
+          "workers:requests": Math.round((new Date(at).getUTCMonth() === new Date(now).getUTCMonth() ? 400_000 : 250_000) * (0.8 + random(index + 7) * 0.4)),
+          "workers:cpu_ms": Math.round((new Date(at).getUTCMonth() === new Date(now).getUTCMonth() ? 1_200_000 : 700_000) * (0.8 + random(index + 11) * 0.4)),
+        }
       : Object.fromEntries(demoFamilyMetrics(scope).map(([id, , , perDollar], position) => [id, Math.round(costUsd * perDollar * (0.8 + random(index + position * 3) * 0.4))]));
     return { day: new Date(at).toISOString().slice(0, 10), costUsd, sealed: index < 89, metrics };
   });
@@ -681,33 +707,66 @@ function syntheticUsageSeries(scope: string): UsageSeriesResponse {
   });
   return {
     scope, resourceId: `demo:${scope}`, found: true, today,
-    metrics: scope === "family:durable_objects"
+    includedQuotaCatalogVersion: "2026-08", planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource,
+    metrics: withDemoQuota(scope === "family:durable_objects"
       ? {
-        "durable_objects.requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
-        "durable_objects.duration_gb_seconds": { key: "duration_gb_seconds", label: "Duration", unit: "GB-s", billable: true },
-        "durable_objects.rows_read": { key: "rows_read", label: "Rows read", unit: "rows", billable: true },
-        "durable_objects.rows_written": { key: "rows_written", label: "Rows written", unit: "rows", billable: true },
-        "durable_objects.incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", billable: true },
-        "durable_objects.sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", billable: true },
+        "durable_objects:requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
+        "durable_objects:duration_gb_seconds": { key: "duration_gb_seconds", label: "Duration", unit: "GB-s", billable: true },
+        "durable_objects:rows_read": { key: "rows_read", label: "Rows read", unit: "rows", billable: true },
+        "durable_objects:rows_written": { key: "rows_written", label: "Rows written", unit: "rows", billable: true },
+        "durable_objects:incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", billable: true },
+        "durable_objects:sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", billable: true },
       }
-      : Object.fromEntries(demoFamilyMetrics(scope).map(([id, label, unit]) => [id, { key: id.split(".")[1]!, label, unit, billable: true }])),
+      : scope === "account"
+        ? {
+          "workers:requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
+          "workers:cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "milliseconds", billable: true },
+        }
+        : Object.fromEntries(demoFamilyMetrics(scope).map(([id, label, unit]) => [id, { key: id.split(":")[1]!, label, unit, billable: true }])), scope),
     series, cycles,
   };
+}
+
+const demoIncludedPerCycle: Record<string, number> = {
+  "workers:requests": 10_000_000,
+  "workers:cpu_ms": 30_000_000,
+  "kv:reads": 10_000_000,
+  "kv:writes": 1_000_000,
+  "kv:deletes": 1_000_000,
+  "kv:lists": 1_000_000,
+  "kv:storage_bytes": 1_000_000_000,
+  "d1:rows_read": 25_000_000_000,
+  "d1:rows_written": 50_000_000,
+  "d1:storage_bytes": 5_000_000_000,
+  "durable_objects:requests": 1_000_000,
+  "durable_objects:duration_gb_seconds": 400_000,
+  "r2:class_a": 1_000_000,
+  "r2:class_b": 10_000_000,
+  "r2:storage_bytes": 10_000_000_000,
+  "queues:operations": 1_000_000,
+};
+
+function withDemoQuota(metrics: UsageSeriesResponse["metrics"], scope: string): UsageSeriesResponse["metrics"] {
+  if (scope !== "account") return metrics;
+  return Object.fromEntries(Object.entries(metrics).map(([id, metric]) => {
+    const includedPerCycle = demoIncludedPerCycle[id];
+    return [id, demoPlan.planTier === "free" || includedPerCycle === undefined ? metric : { ...metric, includedPerCycle }];
+  }));
 }
 
 /** Billable dimensions per demo product: id, label, unit, units per dollar. */
 function demoFamilyMetrics(scope: string): Array<[string, string, string, number]> {
   const family = scope.replace(/^family:/, "");
   const table: Record<string, Array<[string, string, string, number]>> = {
-    workers: [["workers.requests", "Requests", "requests", 3_300_000], ["workers.cpu_ms", "CPU time", "ms", 41_000]],
-    kv: [["kv.reads", "Reads", "requests", 2_000_000], ["kv.writes", "Writes", "requests", 200_000], ["kv.storage_bytes", "Storage", "bytes", 900_000_000]],
-    d1: [["d1.rows_read", "Rows read", "rows", 1_000_000_000], ["d1.rows_written", "Rows written", "rows", 1_000_000], ["d1.storage_bytes", "Storage", "bytes", 1_300_000_000]],
-    r2: [["r2.class_a", "Class A operations", "operations", 220_000], ["r2.class_b", "Class B operations", "operations", 2_700_000], ["r2.storage_bytes", "Storage", "bytes", 66_000_000_000]],
-    queues: [["queues.operations", "Operations", "operations", 2_500_000]],
-    workers_ai: [["workers_ai.neurons", "Neurons", "neurons", 90_000]],
-    email: [["email.sent", "Messages sent", "messages", 100_000], ["email.routed", "Messages routed", "messages", 400_000]],
-    pages: [["pages.builds", "Builds", "builds", 400]],
-    images: [["images.transformations", "Transformations", "transformations", 2_000]],
+    workers: [["workers:requests", "Requests", "requests", 3_300_000], ["workers:cpu_ms", "CPU time", "ms", 41_000]],
+    kv: [["kv:reads", "Reads", "requests", 2_000_000], ["kv:writes", "Writes", "requests", 200_000], ["kv:storage_bytes", "Storage", "bytes", 900_000_000]],
+    d1: [["d1:rows_read", "Rows read", "rows", 1_000_000_000], ["d1:rows_written", "Rows written", "rows", 1_000_000], ["d1:storage_bytes", "Storage", "bytes", 1_300_000_000]],
+    r2: [["r2:class_a", "Class A operations", "operations", 220_000], ["r2:class_b", "Class B operations", "operations", 2_700_000], ["r2:storage_bytes", "Storage", "bytes", 66_000_000_000]],
+    queues: [["queues:operations", "Operations", "operations", 2_500_000]],
+    workers_ai: [["workers_ai:neurons", "Neurons", "neurons", 90_000]],
+    email: [["email:sent", "Messages sent", "messages", 100_000], ["email:routed", "Messages routed", "messages", 400_000]],
+    pages: [["pages:builds", "Builds", "builds", 400]],
+    images: [["images:transformations", "Transformations", "transformations", 2_000]],
   };
   return table[family] ?? [[`${family}.requests`, "Requests", "requests", 3_300_000]];
 }
@@ -767,11 +826,24 @@ function demoApi(): Plugin {
         const get = req.method === "GET";
         // The Worker answers billing access under both paths; so does this.
         const billingRoute = url.pathname === "/api/billing-access" || url.pathname === "/api/onboarding/billing-access";
+        const planRoute = url.pathname === "/api/plan" || url.pathname === "/api/plan-tier";
         if (url.pathname === "/api/auth/session") return send(session);
         if (url.pathname === "/api/onboarding" && get) return send(onboarding);
         if (url.pathname === "/api/onboarding/ingest" && get) return send(advanceInitialIngestion());
         if (url.pathname === "/api/onboarding/ingest" && req.method === "POST") return send({ ok: true });
         if (billingRoute && get) return send(billingAccess);
+        if (planRoute && get) return send(demoPlan);
+        if (planRoute && req.method === "PUT") {
+          const body = await readJson(req);
+          const override = body.planTierOverride === null || body.planTierOverride === undefined ? null : body.planTierOverride;
+          if (override !== null && !["free", "paid", "enterprise", "unknown"].includes(String(override))) return send({ error: "Invalid plan tier" }, 400);
+          demoPlan.planTierOverride = override as PlanTier | null;
+          demoPlan.planTier = demoPlan.planTierOverride ?? demoPlan.detectedPlanTier;
+          demoPlan.planTierSource = demoPlan.planTierOverride === null ? "api" : "override";
+          Object.assign(onboarding, demoPlan);
+          Object.assign(dashboard, demoPlan);
+          return send({ ok: true, ...demoPlan });
+        }
         if (url.pathname === "/api/dashboard") return send(dashboard);
         if (url.pathname === "/api/configuration" && get) return send(configuration);
         if (url.pathname === "/api/configuration/verify" && req.method === "POST") return send(configuration);

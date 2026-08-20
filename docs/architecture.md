@@ -170,6 +170,20 @@ A level diamond in a dimension row switches that level for the dimension. The
 diamond stays available while its level is off. Read-only charts omit all
 editing and history controls.
 
+Account-scope billing-cycle usage charts also read Brolly's release-versioned
+Workers Paid quota catalog. An eligible metric shows a shaded included range
+and a fixed boundary where billable usage begins. The fixed boundary is a
+system value and never enters threshold hit testing, editing, Undo, or Redo.
+Daily usage rows report cycle-to-date progress without drawing a cycle quota on
+the daily axis. Enterprise accounts use the same boundary as a labeled
+standard paid-plan baseline. Free accounts receive no quota boundary.
+
+Paid and unknown account series also expose estimated billable cost as a
+secondary chart line. Its daily values contain only usage above the catalog
+allotment at the existing conservative gross rates. The computation resets at
+each billing-cycle boundary and leaves the primary reconciled or gross cost
+series unchanged. Free and Enterprise accounts omit this series.
+
 Risk tolerance is one ordered percentage map shared by account cost, product
 and resource cost, and every billable usage dimension. Conservative spans 120%
 through 300%, Balanced spans 150% through 800%, and Growth spans 250% through
@@ -182,6 +196,12 @@ Billing-cycle defaults use the median of at least two fully covered completed
 cycles. When fewer cycles exist, the cycle baseline is the daily median times
 the current cycle length. A p95 value appears only as the busiest-normal-day
 readout. A single spike therefore does not change the multiplier baseline.
+
+For an account-cycle usage metric with an included allotment, Warning defaults
+to 80 percent of included usage and Critical defaults to 100 percent.
+Emergency keeps its tolerance value with Critical as its minimum. Typical
+cycle usage above the allotment selects the complete tolerance-derived map.
+This guard prevents fresh rules from beginning in a breached state.
 
 Tolerance seeds missing chart values once. Saved chart values remain detached
 from later tolerance edits. Reset to tolerance reapplies the current
@@ -270,6 +290,30 @@ Namespace spend is the sum of all returned object operations plus namespace-leve
 SQLite retained storage. Worker spend is projected from per-script billed
 invocations and CPU milliseconds; cache-side request attribution remains a
 visible coverage gap rather than being double-counted.
+
+## Cloudflare plan detection
+
+The hourly billing reconciliation claim also refreshes the account Workers
+tier from `GET /accounts/{account_id}/subscriptions`. The operational OAuth
+credential is used first. A forbidden response is retried with the configured
+Billing Read credential. Brolly classifies the exact account-scoped
+`workers_paid` rate plan as paid and an exact Enterprise rate plan as
+enterprise. A successful response without either plan is free. An unavailable
+response is unknown, which uses paid behavior with a visible detection notice.
+
+D1 stores the detected tier, the last check time, any detection error, and an
+optional operator override. The override wins until an operator clears it.
+The dashboard and onboarding APIs report the effective tier and whether its
+source is API detection or an override.
+
+The included-quota catalog applies to paid and unknown accounts. Enterprise
+accounts use it as a standard paid-plan baseline because Cloudflare provides
+no API for negotiated allotments. Enterprise cost surfaces remain disabled
+because negotiated rates and committed spend cannot be represented by
+Cloudflare's self-serve billing interfaces. Usage limits, alerts, monitoring,
+and reversible controls remain available. Free accounts continue monitoring,
+with a direct notice that Cloudflare's hard caps prevent spend protection from
+having work to perform until the account moves to a paid plan.
 
 ## Policy tiers and action safety
 

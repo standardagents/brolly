@@ -55,6 +55,13 @@ only to make a checklist feel enforced. Concretely:
 - Never test that a label, hint, button text, or copy string exists in a
   source file. If copy matters to behavior, render the component; if it does
   not, do not test it.
+- Never assert on rendered user-facing copy either. A test that matches a
+  label, caption, heading, or sentence in the DOM breaks on every copy edit
+  and protects nothing. Select elements through roles, ids, and `data-*`
+  attributes, and assert structure and state. Add a small `data-*` hook when
+  a test needs a handle. Strings may be asserted only when the string itself
+  is the contract: a generated prompt or payload, a formatted value, or data
+  the test supplied as a fixture.
 - Never test styling by grep. Design rules (Tailwind-first, no semantic class
   names, dark mode) are enforced by review and by rewriting the offending
   code, never by a scanner test.

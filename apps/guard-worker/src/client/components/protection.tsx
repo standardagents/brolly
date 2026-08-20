@@ -309,7 +309,7 @@ export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scoped
             Circuit breaker install task
             <span className="rounded-full border border-code-line px-2 py-0.5 text-[10px] font-[750] uppercase tracking-[.06em] text-faint">Markdown</span>
           </span>
-          <Button variant="secondary" className="min-h-[34px] max-md:w-full" onClick={() => void copyPrompt()}>
+          <Button variant="secondary" data-action="copy-prompt" className="min-h-[34px] max-md:w-full" onClick={() => void copyPrompt()}>
             <Icon name={copied ? "check" : "clipboard"} />
             {copied ? "Copied" : "Copy agent prompt"}
           </Button>
@@ -325,6 +325,7 @@ export function RuntimeAgentHandoff({ assets }: { assets: OnboardingData["scoped
         </div>
         <button
           type="button"
+          data-action="toggle-prompt"
           className="min-h-[38px] w-full cursor-pointer border-0 border-t border-code-line bg-transparent text-[12px] font-bold text-muted hover:bg-code-line/50 hover:text-ink"
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
@@ -347,7 +348,7 @@ const AGENT_GLYPH_BG: Record<string, string> = {
 function AgentChip({ kind, label }: { kind: "claude" | "codex" | "cursor" | "terminal"; label: string }) {
   const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" } as const;
   return (
-    <span className="inline-flex items-center gap-[5px] rounded-full border border-line bg-panel py-1 pr-2 pl-[5px] text-[10.5px] font-bold whitespace-nowrap text-muted">
+    <span data-agent-chip={kind} className="inline-flex items-center gap-[5px] rounded-full border border-line bg-panel py-1 pr-2 pl-[5px] text-[10.5px] font-bold whitespace-nowrap text-muted">
       <span className={`grid size-5 place-items-center rounded-full text-white ${AGENT_GLYPH_BG[kind]}`} aria-hidden="true">
         {kind === "claude" && <svg viewBox="0 0 24 24" className="size-3" {...stroke}><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>}
         {kind === "codex" && <svg viewBox="0 0 24 24" className="size-3" {...stroke}><path d="m12 3 7.8 4.5v9L12 21l-7.8-4.5v-9L12 3Z" /><circle cx="12" cy="12" r="3.3" /></svg>}

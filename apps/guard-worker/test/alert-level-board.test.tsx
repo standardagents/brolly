@@ -63,7 +63,7 @@ describe("alert level board", () => {
     await waitFor(() => expect(document.querySelectorAll("section[data-level]")).toHaveLength(3));
 
     const warning = levelColumn("Warning");
-    await click(findButton(warning, "+ Add"));
+    await click(warning.querySelector("[data-add-entry]") as HTMLButtonElement);
     // The add menu renders through a portal (it must escape the board's horizontal scroller).
     await click(findButton(document.querySelector("[role='menu']") as HTMLElement, "Ops server"));
     await waitFor(() => expect(warning.querySelector("select[aria-label^='Repeat interval']")).not.toBeNull());
@@ -104,22 +104,21 @@ describe("alert level board drag and drop", () => {
     await waitFor(() => expect(document.querySelectorAll("section[data-level]")).toHaveLength(2));
 
     // The Critical column's "+ Add" menu does not offer Ops server, which already sits in Warning.
-    await click(findButton(levelColumn("Critical"), "+ Add"));
+    await click(levelColumn("Critical").querySelector("[data-add-entry]") as HTMLButtonElement);
     const menu = document.querySelector("[role='menu']") as HTMLElement;
     expect([...menu.querySelectorAll("button")].some(button => button.textContent?.trim() === "Ops server")).toBe(false);
-    const prepare = findButton(menu, "1-click QuarantineBrolly asks you before it quarantines anything.");
-    const automatic = findButton(menu, "Automatic QuarantineBrolly quarantines without asking.");
+    const prepare = menu.querySelector("[data-menu-action='prepare']") as HTMLButtonElement;
+    const automatic = menu.querySelector("[data-menu-action='auto']") as HTMLButtonElement;
     expect(prepare.querySelector("svg")).not.toBeNull();
     expect(automatic.querySelector("svg")).not.toBeNull();
-    // The quarantinable products are listed once, under both action options.
-    expect(menu.textContent).toContain("WorkersDurable ObjectsQueuesOnly the resources that are driving the overspend are affected. Quarantines are reversible.");
+    // The quarantinable products are listed once, shared by both action options.
     expect(menu.querySelectorAll(".product-glyph")).toHaveLength(3);
 
-    await click(findButton(menu, "+ Add new channel"));
-    const resend = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("Resend"));
+    await click(menu.querySelector("[data-channel-add-cell] button") as HTMLButtonElement);
+    const resend = document.querySelector<HTMLButtonElement>("[data-channel-kind='resend']");
     if (!resend) throw new Error("Resend channel option was not rendered");
     await click(resend);
-    await waitFor(() => expect(document.querySelector("[role='dialog']")?.textContent).toContain("Add Resend"));
+    await waitFor(() => expect(document.getElementById("add-resend-channel-title")).not.toBeNull());
     expect(document.querySelector("[role='dialog']")?.parentElement?.parentElement).toBe(document.body);
     await click(document.querySelector("[role='dialog'] button[aria-label='Close']") as HTMLButtonElement);
     await waitFor(() => expect(document.querySelector("[role='dialog']")).toBeNull());

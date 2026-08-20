@@ -1,6 +1,7 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "../api";
-import type { AlertLevel, OnboardingBudgetEstimates, Policy } from "../types";
+import { ENTERPRISE_COST_NOTICE } from "../plan-tier";
+import type { AlertLevel, OnboardingBudgetEstimates, PlanTier, Policy } from "../types";
 import { mapFixedSpendLimits } from "./model";
 
 const DEFAULT_ALERT_LEVELS: AlertLevel[] = [
@@ -9,7 +10,7 @@ const DEFAULT_ALERT_LEVELS: AlertLevel[] = [
   { id: "emergency", position: 2, label: "Emergency", entries: [] },
 ];
 
-export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dispatch<SetStateAction<Policy>>, levels: AlertLevel[] = DEFAULT_ALERT_LEVELS) {
+export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dispatch<SetStateAction<Policy>>, levels: AlertLevel[] = DEFAULT_ALERT_LEVELS, planTier?: PlanTier) {
   const [busy, setBusy] = useState(false);
   const [estimates, setEstimates] = useState<OnboardingBudgetEstimates | null>(null);
   const [suggestionNotice, setSuggestionNotice] = useState("");
@@ -43,7 +44,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     try {
       const result = estimates ?? await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       setEstimates(result);
-      const suggestion = applySuggestions(policy, result, levels);
+      const suggestion = applySuggestions(policy, result, levels, planTier);
       setPolicy(suggestion.policy);
       setSuggestionNotice(suggestion.notice);
     } catch (cause) {
@@ -51,7 +52,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     } finally {
       setBusy(false);
     }
-  }, [estimates, levels, policy, setPolicy, token]);
+  }, [estimates, levels, planTier, policy, setPolicy, token]);
 
   return {
     acceptBillingAccess,
@@ -66,7 +67,8 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
   };
 }
 
-export function applySuggestions(policy: Policy, result: OnboardingBudgetEstimates, levels: AlertLevel[]): { policy: Policy; notice: string } {
+export function applySuggestions(policy: Policy, result: OnboardingBudgetEstimates, levels: AlertLevel[], planTier?: PlanTier): { policy: Policy; notice: string } {
+  if (planTier === "enterprise") return { policy, notice: ENTERPRISE_COST_NOTICE };
   const familySuggestions = Object.entries(result.families).filter(([family]) => family in policy.familyDailySpend);
   const assetSuggestions = Object.entries(result.assets).filter(([key]) => key in policy.assetDailySpend);
   const familyDailySpend = { ...policy.familyDailySpend };

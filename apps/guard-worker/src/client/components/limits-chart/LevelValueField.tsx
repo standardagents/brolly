@@ -18,6 +18,10 @@ export interface LevelValueFieldProps {
   step?(value: number): number;
 }
 
+// Chip inputs hug their text exactly where field-sizing is supported; the
+// ch-based width below is the approximate fallback for other engines.
+const CHIP_AUTO_SIZE = typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
+
 /** One alert-level value editor shared by chart fields, tracks, rows, and risk tolerance. */
 export function LevelValueField({ level, unit, value, enabled, onCommit, onToggle, variant = "boxed", highlight = false, step }: LevelValueFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -55,8 +59,8 @@ export function LevelValueField({ level, unit, value, enabled, onCommit, onToggl
   const toggle = onToggle ? <Switch label={`Use ${level.label} level`} on={enabled} onChange={onToggle} title={enabled ? `${level.label} is active. Switch off to skip it.` : `${level.label} is off.`} /> : null;
   const input = onCommit ? (
     <input
-      className={`min-w-[2ch] max-w-full border-0 bg-transparent p-0 font-[740] tabular-nums outline-none disabled:cursor-default ${variant === "chip" ? "text-[10.5px] text-muted" : "text-[15px] text-ink"}`}
-      style={{ width: `calc(${Math.max(variant === "chip" ? 3 : 2, shown.length)}ch + 2px)` }}
+      className={`min-w-[2ch] max-w-full border-0 bg-transparent p-0 font-[740] tabular-nums outline-none disabled:cursor-default ${variant === "chip" ? "[field-sizing:content] text-[10.5px] text-muted" : "text-[15px] text-ink"}`}
+      style={variant === "chip" && CHIP_AUTO_SIZE ? undefined : { width: `calc(${Math.max(variant === "chip" ? 1 : 2, shown.length)}ch + 2px)` }}
       inputMode="decimal"
       disabled={!enabled}
       value={shown}
@@ -72,7 +76,7 @@ export function LevelValueField({ level, unit, value, enabled, onCommit, onToggl
     />
   ) : <span className={variant === "chip" ? "text-[10.5px] text-muted" : "text-[15px] font-[740] text-ink"}>{shown}</span>;
   const valueEditor = (
-    <span className={`flex w-max items-baseline gap-[3px] text-ink ${variant === "chip" ? "rounded-[3px] border border-transparent px-0.5 hover:border-line focus-within:border-orange focus-within:bg-field" : "-ml-1 rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field"}`}>
+    <span className={`flex w-max items-baseline text-ink ${variant === "chip" ? "gap-0 rounded-[3px] border border-transparent px-0.5 hover:border-line focus-within:border-orange focus-within:bg-field" : "gap-[3px] -ml-1 rounded-[4px] border border-transparent px-1 hover:border-line focus-within:border-orange focus-within:bg-field"}`}>
       {unit === "USD" && <b className={variant === "chip" ? "text-[10.5px] text-faint" : "text-[13px] text-faint"}>$</b>}
       {input}
       {unit !== "USD" && <small className="flex-none text-[10.5px] font-medium text-faint">{unitLabel(unit)}</small>}

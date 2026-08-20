@@ -3,8 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/client/App", () => ({ default: () => <div>Dashboard</div> }));
-vi.mock("../src/client/limits-chart-preview", () => ({ LimitsChartPreview: () => <div>Limits chart preview</div> }));
+vi.mock("../src/client/App", () => ({ default: () => <div data-view="app" /> }));
+vi.mock("../src/client/limits-chart-preview", () => ({ LimitsChartPreview: () => <div data-view="preview" /> }));
 
 import { ClientRoot } from "../src/client/ClientRoot";
 
@@ -20,12 +20,12 @@ afterEach(() => {
 describe("ClientRoot", () => {
   it("renders the isolated chart preview at its internal route", async () => {
     await render(<ClientRoot pathname="/__limits-chart-preview" />);
-    expect(document.body.textContent).toContain("Limits chart preview");
+    expect(document.querySelector("[data-view='preview']")).not.toBeNull();
   });
 
   it("renders the application at other routes", async () => {
     await render(<ClientRoot pathname="/" />);
-    expect(document.body.textContent).toContain("Dashboard");
+    expect(document.querySelector("[data-view='app']")).not.toBeNull();
   });
 });
 

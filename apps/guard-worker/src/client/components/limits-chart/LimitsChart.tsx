@@ -1,12 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money, number as formatNumber } from "../../format";
 import { ProductIcon } from "../ui";
-import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
+import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults } from "./defaults";
 import { formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
-import { type Axis, chooseAxis, snapStep, snapToNice } from "./scale";
+import { type Axis, chooseAxisWithIncluded, includedBandGeometry, snapStep, snapToNice } from "./scale";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
 
@@ -19,6 +19,10 @@ export interface LimitsChartProps {
   window: "day" | "cycle";
   /** Per-day values, ascending by day. Gaps are rendered as zero. */
   series: DayPoint[];
+  /** Optional per-day comparison rendered as a fixed secondary line. */
+  secondarySeries?: DayPoint[];
+  /** Legend label for the secondary line. */
+  secondaryLabel?: string;
   /** Billing cycle bounds. When empty, UTC calendar months are used. */
   cycles?: CycleBounds[];
   /** ISO day of "today"; defaults to the last day in the series. */
@@ -37,6 +41,10 @@ export interface LimitsChartProps {
   resetToTolerance?: LevelValues;
   /** Daily values shown as a non-blocking reference on cycle charts. */
   reference?: LevelValues;
+  /** Included account allotment for this usage metric's billing cycle. */
+  includedPerCycle?: number;
+  /** Boundary label override for an enterprise baseline allotment. */
+  includedBoundaryLabel?: string;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
   /** levelId → active on this chart. Missing ids are active. Inactive levels keep their value but draw no line. */
@@ -46,6 +54,8 @@ export interface LimitsChartProps {
   label?: string;
   /** Optional heading rendered above the chart. */
   title?: string;
+  /** Indent the title to the plot's left edge so it aligns with the x axis. */
+  titleIndent?: boolean;
   /** Product family glyph rendered before the heading. */
   family?: string;
   /** Undo/redo store shared with a parent (survives unmount). Defaults to a private one. */
@@ -61,6 +71,8 @@ export interface LimitsChartProps {
 
 const EASE = "cubic-bezier(.2,.7,.2,1)";
 const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
+/** Left plot-area edge, exported so headings above a chart can align with its x axis. */
+export const CHART_PLOT_LEFT = PLOT.left;
 /** Floating readouts over the chart: the day tooltip and the axis value chip share one look. */
 const FLOAT_CHIP = "pointer-events-none absolute z-10 whitespace-nowrap rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
 /** Bar accents sit outside the warm level ramp: cool blue for cost, teal for usage. */
@@ -77,7 +89,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, onChange, readOnly = false, label, title, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, secondarySeries, secondaryLabel, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, includedBoundaryLabel = "Billable usage starts", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -95,20 +107,27 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const window = useMemo(() => visibleWindow(series, cycles, today), [series, cycles, today]);
   const dense = useMemo(() => denseSeries(series, window.fromDay, window.toDay), [series, window]);
   const cumulative = useMemo(() => cycleCumulative(dense, cycles), [dense, cycles]);
+  const secondaryDense = useMemo(() => secondarySeries ? denseSeries(secondarySeries, window.fromDay, window.toDay) : [], [secondarySeries, window]);
+  const secondaryCumulative = useMemo(() => cycleCumulative(secondaryDense, cycles), [secondaryDense, cycles]);
   const projection = useMemo(() => projectCycle(dense, cycles, today), [dense, cycles, today]);
   const observedMax = useMemo(() => Math.max(0, ...dense.map(point => point.value)), [dense]);
   const seriesValues = useMemo(() => dense.map(point => point.value), [dense]);
+  const cycleMode = limitWindow === "cycle";
+  // Allotments are cycle-scoped usage quantities. Callers only provide an
+  // allotment for account-scope usage, but keeping the guard here prevents a
+  // cost or day chart from acquiring quota geometry through composition.
+  const chartIncluded = kind === "usage" && cycleMode && Number.isFinite(includedPerCycle) && includedPerCycle! > 0 ? includedPerCycle : undefined;
   // The daily chart is about days: its axis fits the bars and levels, and the
   // cumulative background may run off the top. The cycle chart's axis must
   // hold the running total and the projection.
   const heightValues = useMemo(() => (limitWindow === "cycle"
-    ? [...seriesValues, ...cumulative.map(point => point.cumulative), projection?.projected ?? 0]
-    : seriesValues), [seriesValues, cumulative, projection, limitWindow]);
+    ? [...seriesValues, ...cumulative.map(point => point.cumulative), ...secondaryCumulative.map(point => point.cumulative), projection?.projected ?? 0]
+    : [...seriesValues, ...secondaryDense.map(point => point.value)]), [seriesValues, cumulative, secondaryCumulative, secondaryDense, projection, limitWindow]);
 
   // The axis extends to keep every level visible, but stays frozen while a
   // handle is dragged so the chart does not rescale under the pointer.
   const [frozenAxis, setFrozenAxis] = useState<Axis | null>(null);
-  const liveAxis = useMemo(() => chooseAxis(heightValues, order.map(id => value[id] ?? 0)), [heightValues, order, value]);
+  const liveAxis = useMemo(() => chooseAxisWithIncluded(heightValues, order.map(id => value[id] ?? 0), chartIncluded), [heightValues, order, value, chartIncluded]);
   const axis = frozenAxis ?? liveAxis;
 
   // Fill in defaults for levels that have no value yet. The defaults are
@@ -136,6 +155,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const plotHeight = PLOT.height - PLOT.top - PLOT.bottom;
   const yFor = (item: number) => PLOT.top + (1 - axis.position(item)) * plotHeight;
   const valueForY = (y: number) => axis.invert(1 - (y - PLOT.top) / plotHeight);
+  const includedBand = includedBandGeometry(axis, chartIncluded);
+  const projectedCrossing = useMemo(
+    () => cycleMode ? projectedCrossingDate(dense, cycles, today, chartIncluded) : null,
+    [cycleMode, dense, cycles, today, chartIncluded],
+  );
   // Reserve room for the rest of the current cycle so the projection has
   // somewhere to go.
   const remainingDays = projection ? Math.max(0, projection.totalDays - projection.elapsedDays) : 0;
@@ -253,7 +277,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const sawtooth = useMemo(() => cyclePolygons(cumulative, xFor, yFor, PLOT.top + plotHeight, barSlot), [cumulative, axis, plotWidth, plotHeight, barSlot]);
-  const cycleMode = limitWindow === "cycle";
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const secondaryLines = useMemo(() => chartLinePoints(cycleMode ? secondaryCumulative.map(point => ({ ...point, value: point.cumulative })) : secondaryDense, cycleMode, xFor, yFor), [secondaryCumulative, secondaryDense, cycleMode, axis, plotWidth, barSlot]);
   // Horizontal color bands for the cycle sawtooth: accent under the lowest
   // line, then each level's color up to the next line, the top one open.
   const bands = useMemo(() => {
@@ -277,6 +302,21 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   };
   const highlightLevel = dragging ?? hoverLevel;
   const hovered = hoverDay && !dragging && !hoverLevel ? dense[hoverDay.index] : null;
+  // Bars are memoized on data and geometry only, so per-pointer-move hover
+  // state re-renders the overlay and tooltip, never the full bar set. The
+  // hovered bar's lit look is an overlay rect drawn above this layer.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const barsLayer = useMemo(() => dense.map((point, index) => {
+    const crossed = crossedLevel(activeOrder, shown, point.value);
+    const color = (crossed && colorById.get(crossed)) || accent;
+    const top = yFor(point.value);
+    const base = PLOT.top + plotHeight;
+    return (
+      <rect key={point.day} x={xFor(index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
+        pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.16 : crossed ? 1 : 0.9}
+        style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, opacity 120ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }} />
+    );
+  }), [dense, activeOrder, shown, colorById, accent, cycleMode, dragging, axis, plotWidth, plotHeight, barSlot, barWidth]);
 
   const belowReference = limitWindow === "cycle" && reference
     ? activeLevels.find(level => (shown[level.id] ?? Number.POSITIVE_INFINITY) < (reference[level.id] ?? Number.NEGATIVE_INFINITY))
@@ -286,7 +326,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     <div ref={containerRef} className="@container min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
       {(title || headerContent || !readOnly) && (
         <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
-          {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold">{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
+          {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold" style={titleIndent ? { paddingLeft: PLOT.left } : undefined}>{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance) && order.some(id => resetToTolerance![id] !== complete[id])} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
             {headerContent}
@@ -311,6 +351,19 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {/* Axes */}
         <line x1={PLOT.left} x2={PLOT.left} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" />
         <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={PLOT.top + plotHeight} y2={PLOT.top + plotHeight} className="stroke-line-strong" />
+        {cycleMode && includedBand && (
+          <rect
+            data-included-band
+            data-clamped={includedBand.clamped ? "true" : undefined}
+            x={PLOT.left}
+            y={PLOT.top + (1 - includedBand.top) * plotHeight}
+            width={plotWidth}
+            height={Math.max(0, (includedBand.top - includedBand.bottom) * plotHeight)}
+            fill="currentColor"
+            opacity=".055"
+            pointerEvents="none"
+          />
+        )}
         {/* Y ticks */}
         {axis.ticks.map(tick => (
           <g key={tick}>
@@ -352,6 +405,22 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="currentColor" opacity=".4" strokeDasharray="2 3" strokeWidth="1" />
           </g>;
         })()}
+        {secondaryLines.length > 0 && (
+          <g data-secondary-cost-series pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
+            {secondaryLines.map((points, index) => <polyline key={index} points={points} fill="none" stroke="#7c5cc4" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+          </g>
+        )}
+        {cycleMode && includedBand && includedBand.boundary !== null && includedPerCycle !== undefined && (
+          <g data-included-boundary pointerEvents="none">
+            <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(includedPerCycle)} y2={yFor(includedPerCycle)} stroke="currentColor" opacity=".62" strokeDasharray="5 4" strokeWidth="1.25" />
+            <text x={PLOT.left + 7} y={yFor(includedPerCycle) - 6} className="fill-faint text-[10.5px]">{includedBoundaryLabel}</text>
+          </g>
+        )}
+        {cycleMode && projectedCrossing && remainingDays > 0 && (
+          <text data-projected-crossing data-day={projectedCrossing} x={PLOT.left + plotWidth - 4} y={PLOT.top + 13} textAnchor="end" className="fill-faint text-[10.5px]" pointerEvents="none">
+            projected billable from {dayLabel(projectedCrossing)}
+          </text>
+        )}
 
         {/* Cycle boundaries */}
         {cycleStarts.map(cycle => {
@@ -372,19 +441,19 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           <rect data-hover-band x={xFor(hoverDay!.index) - barSlot / 2} y={PLOT.top} width={barSlot} height={plotHeight} fill="currentColor" opacity={cycleMode ? ".045" : ".07"} pointerEvents="none" />
         )}
 
-        {/* Bars */}
-        {dense.map((point, index) => {
+        {/* Bars (memoized) plus a lit overlay copy of the hovered day's bar. */}
+        {barsLayer}
+        {hovered && (() => {
+          const point = dense[hoverDay!.index]!;
           const crossed = crossedLevel(activeOrder, shown, point.value);
           const color = (crossed && colorById.get(crossed)) || accent;
           const top = yFor(point.value);
           const base = PLOT.top + plotHeight;
-          const lit = hovered !== null && hoverDay?.index === index;
           return (
-            <rect key={point.day} x={xFor(index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
-              pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? (lit ? 0.38 : 0.16) : lit || crossed ? 1 : 0.9}
-              style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, opacity 120ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }} />
+            <rect x={xFor(hoverDay!.index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
+              pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.26 : 1} />
           );
-        })}
+        })()}
 
         {/* Day hover tracking: sits above the bars, below the level lines. */}
         <rect data-hover-layer x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} fill="transparent"
@@ -444,6 +513,13 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       )}
       </div>
 
+      {secondaryLines.length > 0 && secondaryLabel && (
+        <div data-cost-series-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
+          <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px] bg-[#2f6fd6]" aria-hidden="true" />Cost series</span>
+          <span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-3 rounded bg-[#7c5cc4]" aria-hidden="true" />{secondaryLabel}</span>
+        </div>
+      )}
+
       {!fields ? null : readOnly ? (
         <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
@@ -486,12 +562,14 @@ function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { histor
     <div className="inline-flex items-center gap-1" role="group" aria-label="Chart history">
       {canReset && <button
         type="button"
+        data-action="reset-tolerance"
         className="h-7 cursor-pointer rounded border border-line bg-panel px-2 text-[10.5px] font-bold text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange"
         onClick={onReset}
       >Reset to tolerance</button>}
       <button
         type="button"
         className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+        data-action="undo"
         aria-label="Undo last limit change"
         title="Undo (Cmd/Ctrl+Z)"
         disabled={!history.canUndo}
@@ -504,6 +582,7 @@ function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { histor
       <button
         type="button"
         className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+        data-action="redo"
         aria-label="Redo limit change"
         title="Redo (Cmd/Ctrl+Shift+Z)"
         disabled={!history.canRedo}
@@ -559,4 +638,23 @@ function cyclePolygons(
     const last = points[lastIndex]!;
     return [...list, `${lastX},${yFor(last.cumulative)}`, `${lastX},${baseline}`].join(" ");
   });
+}
+
+/** Polyline point lists, split at cycle boundaries for cumulative charts. */
+function chartLinePoints(
+  points: Array<DayPoint & { cycle?: number }>,
+  splitCycles: boolean,
+  xFor: (index: number) => number,
+  yFor: (value: number) => number,
+): string[] {
+  if (!points.length) return [];
+  if (!splitCycles) return [points.map((point, index) => `${xFor(index)},${yFor(point.value)}`).join(" ")];
+  const groups = new Map<number, string[]>();
+  points.forEach((point, index) => {
+    const cycle = point.cycle ?? -1;
+    const group = groups.get(cycle) ?? [];
+    group.push(`${xFor(index)},${yFor(point.value)}`);
+    groups.set(cycle, group);
+  });
+  return [...groups.values()].map(group => group.join(" "));
 }

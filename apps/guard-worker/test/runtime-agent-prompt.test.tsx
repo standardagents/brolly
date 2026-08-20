@@ -36,14 +36,11 @@ describe("runtime coding-agent handoff", () => {
     expect(prompt).toContain("Do not claim quarantine is configured until that verification passes");
   });
 
-  it("shows one copy action and recognizable agent choices", () => {
+  it("shows one copy action, one collapse toggle, and four agent chips", () => {
     const html = renderToStaticMarkup(<RuntimeAgentHandoff assets={assets} />);
 
-    expect(html).toContain("Hand this to your coding agent");
-    expect(html).toContain("Claude Code");
-    expect(html).toContain("Codex");
-    expect(html).toContain("Cursor");
-    expect(html.match(/Copy agent prompt/g)).toHaveLength(1);
-    expect(html).toContain("Show full prompt");
+    expect(html.match(/data-action="copy-prompt"/g)).toHaveLength(1);
+    expect(html.match(/data-action="toggle-prompt"/g)).toHaveLength(1);
+    expect(html.match(/data-agent-chip="/g)).toHaveLength(4);
   });
 });

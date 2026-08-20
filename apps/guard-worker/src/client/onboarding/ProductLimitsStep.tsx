@@ -16,6 +16,26 @@ type SectionInfo = { items: SidebarItem[]; hasUsage: boolean; deviated: string[]
 /** Fallback offset (single merged header row) when the header cannot be measured. */
 const DEFAULT_STICKY_TOP = 60;
 
+/**
+ * True once the element has come within 800px of the viewport. Offscreen
+ * product sections defer their chart tables; mounting every section's
+ * charts at once costs many seconds of React commit time on this page.
+ */
+function useNearViewport(ref: { current: HTMLElement | null }): boolean {
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || near) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) setNear(true);
+    }, { rootMargin: "800px 0px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the ref object is stable
+  }, [near]);
+  return near;
+}
+
 /** Bottom edge of the wizard's sticky step rail, so sticky parts sit right under it. */
 function useStickyTop(): number {
   const [top, setTop] = useState(DEFAULT_STICKY_TOP);
@@ -47,7 +67,9 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const families = data.families;
   const STICKY_TOP = useStickyTop();
   const chartLevels = useMemo(() => levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) })), [levels]);
-  const [openByScope, setOpenByScope] = useState<Record<string, OpenState>>({});
+  // One open row across the whole step: opening a row anywhere closes the
+  // previously open row, even in another product section.
+  const [openRow, setOpenRow] = useState<{ scope: string; item: string } | null>(null);
   const [infoByScope, setInfoByScope] = useState<Record<string, SectionInfo>>({});
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
   // Order: products with detected historical usage first, then products
@@ -106,8 +128,8 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
     });
   }, []);
   // Product sections start collapsed; the sidebar or a row click opens one row.
-  const openFor = (scope: string): OpenState => openByScope[scope] ?? null;
-  const setOpenFor = useCallback((scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next })), []);
+  const openFor = (scope: string): OpenState => (openRow?.scope === scope ? openRow.item : null);
+  const setOpenFor = useCallback((scope: string, next: OpenState) => setOpenRow(next ? { scope, item: next } : null), []);
   const jumpTo = (scope: string, item?: string) => {
     if (item) setOpenFor(scope, item);
     const section = sectionRefs.current[scope];
@@ -174,7 +196,9 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
           </div>
         ))}
       </nav>
-      <div className="grid min-w-0 gap-12">
+      {/* No grid gap: the spacing lives inside each section (pb-12) so a
+          section's sticky header stays pinned until the next header touches it. */}
+      <div className="grid min-w-0">
         {ordered.map(family => {
           const scope = `family:${family.family}`;
           return (
@@ -223,6 +247,9 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
 }) {
   const usage = useUsageSeries(token, scope);
   const STICKY_TOP = useStickyTop();
+  const elementRef = useRef<HTMLElement | null>(null);
+  const near = useNearViewport(elementRef);
+  const setRefs = useCallback((element: HTMLElement | null) => { elementRef.current = element; ref(element); }, [ref]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const [deviatedRows, setDeviatedRows] = useState<ReadonlySet<string>>(() => new Set());
   const familyEnabled = dayLimits?.enabled ?? true;
@@ -238,25 +265,29 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     // An item is "deviated" when either window's saved values differ from
     // its defaults: tolerance for the day window, the daily multiple for the
     // cycle window.
-    const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle") => {
+    const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle", includedPerCycle?: number) => {
       if (!saved || !order.every(id => Number.isFinite(saved[id]))) return false;
-      const expected = windowDefaults(series, data.cycles, data.today, order, window, tolerance, dailySaved);
+      const expected = windowDefaults(series, data.cycles, data.today, order, window, tolerance, dailySaved, includedPerCycle);
       return !!expected && order.some(id => expected[id] !== saved[id]);
     };
     const deviated: string[] = [];
     if (deviates(costSeries(data), dayLimits?.cost, undefined, "day") || deviates(costSeries(data), cycleLimits?.cost, dayLimits?.cost, "cycle")) deviated.push("cost");
     for (const id of metricIds) {
-      if (deviates(metricSeries(data, id), dayLimits?.usage?.[id], undefined, "day") || deviates(metricSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle")) deviated.push(id);
+      if (deviates(metricSeries(data, id), dayLimits?.usage?.[id], undefined, "day", undefined) || deviates(metricSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle", undefined)) deviated.push(id);
     }
     setDeviatedRows(current => (deviated.length === current.size && deviated.every(id => current.has(id)) ? current : new Set(deviated)));
     onInfo(scope, { hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
   }, [usage.data, onInfo, scope, order, tolerance, dayLimits, cycleLimits]);
   const control = familyControl(family);
 
+  // content-visibility keeps offscreen product sections out of layout and
+  // paint, so expanding a row reflows only the visible part of the page.
   return (
-    <section ref={ref} className="min-w-0" style={{ scrollMarginTop: STICKY_TOP + 8 }} aria-label={`${label} limits`}>
+    <section ref={setRefs} className="min-w-0 pb-12 [contain-intrinsic-size:auto_500px] [content-visibility:auto] last:pb-0" style={{ scrollMarginTop: STICKY_TOP + 8 }} aria-label={`${label} limits`}>
       {/* Sticky under the page header and step rail; the next product's header pushes it away. */}
-      <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel px-2 pt-4 pb-3" style={{ top: STICKY_TOP }}>
+      {/* pr-5 with the -mx-2 bleed puts the Monitored switch on the same right
+          edge as the px-3-inset row switches below it. */}
+      <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel pl-2 pr-5 pt-4 pb-3" style={{ top: STICKY_TOP }}>
         <ProductIcon family={family} />
         <h3 className="text-[17px] font-[750]">{label}</h3>
         <span className="ml-1 inline-flex items-center gap-1.5">
@@ -270,8 +301,9 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
       </header>
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
       {usage.error && <p className="text-[13px] text-faint">Usage history is unavailable. {usage.error}</p>}
-      {usage.data && (
-        <div className={familyEnabled ? "" : "pointer-events-none opacity-50"} aria-disabled={!familyEnabled}>
+      {usage.data && !near && <div className="h-[320px]" aria-hidden="true" />}
+      {usage.data && near && (
+        <div className={familyEnabled ? "" : "pointer-events-none opacity-55 saturate-0"} aria-disabled={!familyEnabled}>
         <LimitsChartDual
           data={usage.data}
           levels={levels}
@@ -282,6 +314,7 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
           deviated={deviatedRows}
           open={familyEnabled ? open : null}
           onOpenChange={next => onOpenChange(scope, next)}
+          separators
         />
         </div>
       )}

@@ -1,4 +1,4 @@
-import { DAY_MS, type CycleBounds, type DayPoint, cycleCumulative, dayStart, daysBetween, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
+import { DAY_MS, type CycleBounds, type DayPoint, cycleCumulative, cycleIndexFor, dayStart, daysBetween, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
 import { type LevelValues, completeLevels, pushLevels } from "./levels";
 import { chooseAxis, median, niceLadder, snapToNice } from "./scale";
 
@@ -7,7 +7,21 @@ import { chooseAxis, median, niceLadder, snapToNice } from "./scale";
  * dense day list, running totals, and the projection. Shared by the chart
  * and by the row list so unexpanded rows can show the same defaults.
  */
-export function deriveSeries(series: DayPoint[], cyclesProp: CycleBounds[] | undefined, todayProp?: string) {
+
+type DerivedSeries = ReturnType<typeof deriveSeriesImpl>;
+// Cached per series-array identity: the same series is derived by charts,
+// defaults, and deviation checks many times per render pass.
+const deriveCache = new WeakMap<DayPoint[], Map<string, DerivedSeries>>();
+
+export function deriveSeries(series: DayPoint[], cyclesProp: CycleBounds[] | undefined, todayProp?: string): DerivedSeries {
+  let byKey = deriveCache.get(series);
+  if (!byKey) { byKey = new Map(); deriveCache.set(series, byKey); }
+  const key = `${todayProp ?? ""}|${cyclesProp ? cyclesProp.map(cycle => cycle.startsAt).join(",") : ""}`;
+  let derived = byKey.get(key);
+  if (!derived) { derived = deriveSeriesImpl(series, cyclesProp, todayProp); byKey.set(key, derived); }
+  return derived;
+}
+function deriveSeriesImpl(series: DayPoint[], cyclesProp: CycleBounds[] | undefined, todayProp?: string) {
   const today = todayProp ?? series.at(-1)?.day ?? new Date().toISOString().slice(0, 10);
   const cycles = cyclesProp?.length ? cyclesProp : monthlyCycles(series[0]?.day ?? today, today);
   const window = visibleWindow(series, cycles, today);
@@ -85,6 +99,67 @@ export function dailyMultiple(daily: LevelValues | undefined, order: readonly st
 }
 
 /**
+ * Median observed cycle usage, excluding the current partial cycle when a
+ * completed cycle is available. The current cycle remains a fallback so a
+ * first-run account that has already crossed its allotment does not receive a
+ * fresh warning below its present usage.
+ */
+export function typicalCycleUsage(series: DayPoint[], cycles: CycleBounds[] | undefined, today: string): number {
+  const bounds = cycles?.length ? cycles : monthlyCycles(series[0]?.day ?? today, today);
+  const todayAt = dayStart(today);
+  const current = cycleIndexFor(bounds, today);
+  const totals = new Map<number, number>();
+  for (const point of series) {
+    if (dayStart(point.day) > todayAt) continue;
+    const cycle = cycleIndexFor(bounds, point.day);
+    if (cycle < 0) continue;
+    totals.set(cycle, (totals.get(cycle) ?? 0) + Math.max(0, point.value));
+  }
+  const all = [...totals.values()].filter(value => value > 0);
+  const completed = [...totals.entries()]
+    .filter(([cycle]) => cycle !== current)
+    .map(([, value]) => value)
+    .filter(value => value > 0);
+  return median(completed.length ? completed : all);
+}
+
+/**
+ * Account-cycle defaults anchored to a Workers Paid included allotment. The
+ * first two alert levels represent the 80% warning and 100% billable boundary;
+ * the third level keeps its tolerance-derived value with the boundary as its
+ * lower bound. A typical cycle already above the allotment returns undefined,
+ * allowing the caller to use its existing tolerance defaults.
+ */
+export function includedCycleDefaults(
+  series: DayPoint[],
+  cycles: CycleBounds[] | undefined,
+  today: string,
+  order: readonly string[],
+  tolerance: LevelValues | undefined,
+  daily: LevelValues | undefined,
+  includedPerCycle: number | undefined,
+): LevelValues | undefined {
+  if (!(includedPerCycle && Number.isFinite(includedPerCycle) && includedPerCycle > 0) || !order.length) return undefined;
+  if (typicalCycleUsage(series, cycles, today) > includedPerCycle) return undefined;
+  const cycleDays = cycleDaysFor(cycles, today);
+  const dailyDefault = tolerance
+    ? defaultLevelValues(series, cycles, today, order, {}, undefined, undefined, toleranceDefaults(series, today, order, tolerance))
+    : daily;
+  const toleranceCycle = dailyMultiple(dailyDefault, order, cycleDays);
+  const seed: LevelValues = {};
+  order.forEach((id, index) => {
+    if (index === 0) seed[id] = includedPerCycle * 0.8;
+    else if (index === 1) seed[id] = includedPerCycle;
+    else if (index === 2) seed[id] = Math.max(includedPerCycle, toleranceCycle?.[id] ?? includedPerCycle);
+    else seed[id] = toleranceCycle?.[id] ?? includedPerCycle;
+  });
+  const axis = chooseAxis(series.map(point => point.value), Object.values(seed));
+  let result: LevelValues = Object.fromEntries(order.map(id => [id, seed[id] ?? includedPerCycle]));
+  for (const id of order) result = pushLevels(axis, order, result, id, result[id]!);
+  return result;
+}
+
+/**
  * The map a window sits on when nobody has edited it. Daily maps follow the
  * risk tolerance; billing-cycle maps are the tolerance-derived daily default
  * times the days in the current cycle (a hand-edited day map never moves the
@@ -102,11 +177,14 @@ export function windowDefaults(
   window: "day" | "cycle",
   tolerance: LevelValues | undefined,
   daily: LevelValues | undefined,
+  includedPerCycle?: number,
 ): LevelValues | undefined {
   const dayDefault = tolerance
     ? defaultLevelValues(series, cycles, today, order, {}, undefined, undefined, toleranceDefaults(series, today, order, tolerance))
     : undefined;
   if (window === "day") return dayDefault;
+  const included = includedCycleDefaults(series, cycles, today, order, tolerance, daily, includedPerCycle);
+  if (included) return included;
   const seed = dailyMultiple(dayDefault ?? daily, order, cycleDaysFor(cycles, today));
   if (!seed) return undefined;
   return defaultLevelValues(series, cycles, today, order, {}, undefined, seed);

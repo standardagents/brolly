@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { chooseAxis, niceCeil, niceFloor, niceLadder, snapToNice, snapUpToNice } from "../src/client/components/limits-chart/scale";
+import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, snapToNice, snapUpToNice } from "../src/client/components/limits-chart/scale";
 import { GAP_FRACTION, GAP_RATIO, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
-import { cycleCumulative, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "../src/client/components/limits-chart/cycles";
+import { cycleCumulative, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "../src/client/components/limits-chart/cycles";
 
 const ORDER = ["warn", "critical", "emergency"];
 
@@ -39,6 +39,24 @@ describe("axis selection", () => {
     expect(axis.max).toBeGreaterThan(0);
     expect(Number.isFinite(axis.position(0))).toBe(true);
     expect(axis.ticks.every(Number.isFinite)).toBe(true);
+  });
+
+  it("keeps a nearby included boundary in the domain and exposes its band geometry", () => {
+    const axis = chooseAxisWithIncluded([10, 20, 30], [40], 100);
+    expect(axis.max).toBeGreaterThanOrEqual(100);
+    const band = includedBandGeometry(axis, 100);
+    expect(band?.clamped).toBe(false);
+    expect(band?.boundary).toBeGreaterThan(0);
+    expect(band?.top).toBe(band?.boundary);
+  });
+
+  it("clamps a distant allotment instead of flattening the data", () => {
+    const axis = chooseAxisWithIncluded([10, 20, 30], [40], 1_000);
+    expect(axis.max).toBeLessThan(1_000);
+    const band = includedBandGeometry(axis, 1_000);
+    expect(band?.clamped).toBe(true);
+    expect(band?.boundary).toBeNull();
+    expect(band?.top).toBe(1);
   });
 });
 
@@ -156,6 +174,11 @@ describe("billing cycles", () => {
     expect(projection?.elapsedDays).toBe(2);
     expect(projection?.totalDays).toBe(31);
     expect(projection?.projected).toBe(310);
+  });
+
+  it("finds the projected crossing day for a cycle allotment", () => {
+    expect(projectedCrossingDate(series, cycles, "2026-08-02", 25)).toBe("2026-08-03");
+    expect(projectedCrossingDate(series, cycles, "2026-08-02", 400)).toBeNull();
   });
 
   it("windows to the current cycle plus two prior cycles, clamped to available data", () => {

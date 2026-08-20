@@ -1,11 +1,12 @@
 import { DEFAULT_FAMILY_DAILY_SPEND, DEFAULT_POLICY, METRIC_CATALOG, assetBudgetKey, type Policy } from "@standardagents/brolly-core";
 import type { Env } from "./env.js";
+import { planStateResponse, readPlanState } from "./plan-tier.js";
 
 type Row = Record<string, unknown>;
 
 export async function dashboardData(env: Env): Promise<Record<string, unknown>> {
   const now = Date.now();
-  const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, currentSpendResult, actionResult] = await Promise.all([
+  const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, currentSpendResult, actionResult, planState] = await Promise.all([
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(
       `SELECT i.*,a.name AS asset_name,a.parent_id,a.scope,a.tier,a.metadata_json,
@@ -40,6 +41,7 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
        ORDER BY local_day ASC,updated_at ASC LIMIT 1000`,
     ).all<Row>(),
     env.DB.prepare(`SELECT id,incident_id,family,asset_id,kind,state,reason,error,created_at,updated_at FROM actions ORDER BY updated_at DESC LIMIT 20`).all<Row>(),
+    readPlanState(env.DB),
   ]);
   const policy = readPolicy(policyRow?.value);
   const incidents = incidentResult.results.map(incidentView);
@@ -66,6 +68,7 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
   return {
     generatedAt: now,
     account: { id: env.BROLLY_ACCOUNT_ID, timezone: env.BROLLY_TIMEZONE ?? "UTC" },
+    ...planStateResponse(planState),
     policy: { version: policy.version, accountDailySpend: policy.accountDailySpend, familyDailySpend: policy.familyDailySpend ?? DEFAULT_FAMILY_DAILY_SPEND, assetDailySpend: policy.assetDailySpend ?? {}, riskTolerance: policy.riskTolerance, limits: policy.limits },
     summary: {
       openIncidents: incidents.filter(item => item.status === "open").length,
@@ -92,18 +95,20 @@ export async function dashboardData(env: Env): Promise<Record<string, unknown>> 
 }
 
 export async function onboardingData(env: Env): Promise<Record<string, unknown>> {
-  const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
+  const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult, planState] = await Promise.all([
     env.DB.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT value FROM settings WHERE key='account_name' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first<{ value: string }>(),
     env.DB.prepare(`SELECT family,metric,state FROM metric_coverage`).all<{ family: string; metric: string; state: string }>(),
     env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all<{ family: "workers" | "durable_objects"; asset_id: string; name: string | null; scope: "resource" | "namespace"; metadata_json: string }>(),
+    readPlanState(env.DB),
   ]);
   const policy = readPolicy(policyRow?.value);
   const coverage = coverageResult.results;
   return {
     accountId: env.BROLLY_ACCOUNT_ID,
     accountName: accountNameRow?.value ?? null,
+    ...planStateResponse(planState),
     complete: completeRow?.value === "true",
     policy: { ...policy, familyDailySpend: { ...DEFAULT_FAMILY_DAILY_SPEND, ...policy.familyDailySpend }, assetDailySpend: policy.assetDailySpend ?? {} },
     families: METRIC_CATALOG.map(definition => ({

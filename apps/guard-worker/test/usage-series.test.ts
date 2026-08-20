@@ -26,16 +26,16 @@ describe("usage series", () => {
     ).bind(id, ACCOUNT, NOW).run();
     await d1.db.prepare(
       `INSERT INTO metric_definitions(id,product_family,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key,finest_scope,catalog_version)
-       VALUES('workers.requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1')`,
+      VALUES('workers:requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1')`,
     ).run();
     await d1.db.prepare(
       `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
-       VALUES(?1,'2026-08-15',0,0,'{"workers.requests":1000}',0.30,'complete',1,?2)`,
+       VALUES(?1,'2026-08-15',0,0,'{"workers:requests":1000}',0.30,'complete',1,?2)`,
     ).bind(id, NOW).run();
     await d1.db.prepare(
       `INSERT INTO usage_accumulator_shards(account_id,product_family,scope_type,local_day,billing_cycle_id,resource_hash_bucket,payload_json,updated_at)
        VALUES(?1,'workers','product','2026-08-17','cycle-1',0,?2,?3)`,
-    ).bind(ACCOUNT, JSON.stringify({ resources: { [id]: { metrics: { "workers.requests": { day: 250, estimatedDayUsd: 0.075, quality: "complete", sampleInterval: 1 } } } } }), NOW).run();
+    ).bind(ACCOUNT, JSON.stringify({ resources: { [id]: { metrics: { "workers:requests": { day: 250, estimatedDayUsd: 0.075, quality: "complete", sampleInterval: 1 } } } } }), NOW).run();
     await d1.db.prepare(
       `INSERT INTO billing_cycles(id,account_id,starts_at,ends_at,status,currency,approximate)
        VALUES('cycle-1',?1,?2,?3,'open','USD',1)`,
@@ -46,12 +46,40 @@ describe("usage series", () => {
     const body = await response.json() as UsageSeriesResponse;
     expect(body.found).toBe(true);
     expect(body.today).toBe("2026-08-17");
-    expect(body.series.map(point => [point.day, point.costUsd, point.metrics["workers.requests"], point.sealed])).toEqual([
+    expect(body.series.map(point => [point.day, point.costUsd, point.metrics["workers:requests"], point.sealed])).toEqual([
       ["2026-08-15", 0.3, 1000, true],
       ["2026-08-17", 0.075, 250, false],
     ]);
-    expect(body.metrics["workers.requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", billable: true });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", billable: true });
+    expect(body.includedQuotaCatalogVersion).toBe("2026-08");
+    expect(body.planTier).toBe("unknown");
+    expect(body.planTierSource).toBe("api");
     expect(body.cycles).toEqual([{ startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1), approximate: true }]);
+    expect(body.estimatedBillableCostSeries).toEqual([]);
+  });
+
+  it("adds estimated billable cost for account usage above the included allotment", async () => {
+    const id = resourceId(ACCOUNT, "account", "account", ACCOUNT);
+    await d1.db.prepare(
+      `INSERT INTO resources(id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,first_seen_at,last_seen_at)
+       VALUES(?1,?2,NULL,'account','account',?2,'Account',?3,?3)`,
+    ).bind(id, ACCOUNT, NOW).run();
+    await d1.db.prepare(
+      `INSERT INTO metric_definitions(id,product_family,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key,finest_scope,catalog_version)
+       VALUES('workers:requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1')`,
+    ).run();
+    await d1.db.prepare(
+      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
+       VALUES(?1,'2026-08-15',0,0,'{"workers:requests":11000000}',3.30,'complete',1,?2)`,
+    ).bind(id, NOW).run();
+    await d1.db.prepare(
+      `INSERT INTO billing_cycles(id,account_id,starts_at,ends_at,status,currency,approximate)
+       VALUES('cycle-1',?1,?2,?3,'open','USD',0)`,
+    ).bind(ACCOUNT, Date.UTC(2026, 7, 1), Date.UTC(2026, 8, 1)).run();
+
+    const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=account"), NOW)).json() as UsageSeriesResponse;
+    expect(body.metrics["workers:requests"]?.includedPerCycle).toBe(10_000_000);
+    expect(body.estimatedBillableCostSeries).toEqual([{ day: "2026-08-15", costUsd: 0.3 }]);
   });
 
   it("rejects malformed scopes and reports unknown resources as not found", async () => {
@@ -59,5 +87,32 @@ describe("usage series", () => {
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=account"), NOW)).json() as UsageSeriesResponse;
     expect(body.found).toBe(false);
     expect(body.series).toEqual([]);
+    expect(body.includedQuotaCatalogVersion).toBe("2026-08");
+    expect(body.planTier).toBe("unknown");
+    expect(body.planTierSource).toBe("api");
+  });
+
+  it("omits allotments for a detected free tier", async () => {
+    await d1.db.prepare(
+      `INSERT INTO settings(key,value,updated_at) VALUES('plan_tier',?1,?2)`,
+    ).bind(JSON.stringify({ detectedTier: "free", overrideTier: null, checkedAt: NOW, error: null }), NOW).run();
+    const id = resourceId(ACCOUNT, "workers", "product", "workers");
+    await d1.db.prepare(
+      `INSERT INTO resources(id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,first_seen_at,last_seen_at)
+       VALUES(?1,?2,NULL,'workers','product','workers','Workers',?3,?3)`,
+    ).bind(id, ACCOUNT, NOW).run();
+    await d1.db.prepare(
+      `INSERT INTO metric_definitions(id,product_family,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key,finest_scope,catalog_version)
+       VALUES('workers:requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1')`,
+    ).run();
+    await d1.db.prepare(
+      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
+       VALUES(?1,'2026-08-15',0,0,'{"workers:requests":1000}',0.30,'complete',1,?2)`,
+    ).bind(id, NOW).run();
+    const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:workers"), NOW)).json() as UsageSeriesResponse;
+    expect(body.planTier).toBe("free");
+    expect(body.planTierSource).toBe("api");
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", billable: true });
+    expect(body.estimatedBillableCostSeries).toEqual([]);
   });
 });

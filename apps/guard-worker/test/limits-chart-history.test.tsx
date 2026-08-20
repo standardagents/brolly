@@ -64,7 +64,7 @@ describe("LimitsChart history shortcuts", () => {
     const reset = { warning: 15, critical: 35 };
     const container = await renderChart(onChange, false, reset);
     const chart = container.querySelector("[data-limits-chart]") as HTMLDivElement;
-    const button = [...container.querySelectorAll("button")].find(element => element.textContent === "Reset to tolerance")!;
+    const button = container.querySelector("[data-action='reset-tolerance']") as HTMLButtonElement;
 
     await act(async () => button.click());
     expect(onChange).toHaveBeenLastCalledWith(reset);

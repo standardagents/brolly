@@ -9,6 +9,13 @@
 
 export const OUTLIER_RATIO = 10;
 
+/**
+ * A quota above this multiple of the data and configured levels is kept out
+ * of the plotted domain. A distant boundary would compress ordinary usage
+ * into an unreadable strip at the baseline.
+ */
+export const INCLUDED_QUOTA_CLAMP_RATIO = 3;
+
 export interface Axis {
   kind: "linear" | "symlog";
   /** Top of the visible domain (data value). Always > 0. */
@@ -117,6 +124,47 @@ export function chooseAxis(series: number[], extra: number[] = []): Axis {
   // them, while the linear stretch under the knee keeps zeros readable.
   return symlogAxis(top, middle);
 }
+
+/**
+ * Choose an axis for a usage chart with an optional cycle allotment. The
+ * allotment joins the domain while it is close enough to the observed data to
+ * be useful. A distant allotment remains available to the caller as an
+ * off-scale boundary instead of flattening the history.
+ */
+export function chooseAxisWithIncluded(series: number[], extra: number[] = [], includedPerCycle?: number): Axis {
+  const included = includedPerCycle;
+  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return chooseAxis(series, extra);
+  const referenceMax = Math.max(0, ...series.filter(value => Number.isFinite(value) && value >= 0), ...extra.filter(value => Number.isFinite(value) && value >= 0));
+  const includeBoundary = referenceMax === 0 || included <= referenceMax * INCLUDED_QUOTA_CLAMP_RATIO;
+  return chooseAxis(series, includeBoundary ? [...extra, included] : extra);
+}
+
+export interface IncludedBandGeometry {
+  /** Normalized axis position of the zero baseline. */
+  bottom: number;
+  /** Normalized axis position of the visible band edge. */
+  top: number;
+  /** Normalized axis position of the boundary, or null when it is off-scale. */
+  boundary: number | null;
+  /** True when the allotment is above the visible domain. */
+  clamped: boolean;
+}
+
+/**
+ * Geometry for the included region in normalized axis coordinates. The chart
+ * maps these positions to SVG y coordinates, which keeps this calculation
+ * independent of its plot dimensions.
+ */
+export function includedBandGeometry(axis: Axis, includedPerCycle?: number): IncludedBandGeometry | null {
+  const included = includedPerCycle;
+  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return null;
+  const clamped = included > axis.max;
+  const top = clamped ? 1 : axis.position(included);
+  return { bottom: axis.position(0), top, boundary: clamped ? null : top, clamped };
+}
+
+/** Alias with quota terminology for callers that do not use the API field name. */
+export const quotaBandGeometry = includedBandGeometry;
 
 export function linearAxis(top: number): Axis {
   const max = niceCeil(top > 0 ? top * 1.05 : 1) || 1;

@@ -40,6 +40,19 @@ export interface BillingUsageRecord {
   ChargeDescription?: string;
 }
 
+export interface CloudflareSubscription {
+  id?: string;
+  state?: string;
+  rate_plan?: {
+    id?: string;
+    public_name?: string;
+    scope?: string;
+    is_contract?: boolean;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 interface PaygoBillingUsageRecord {
   BilledCost: number;
   ChargePeriodStart: string;
@@ -857,6 +870,26 @@ export class CloudflareClient {
       const aligned = billingAlignedStart(alignedRecords, since, until);
       if (aligned !== null) return (await this.getPaygoBillingUsage(aligned, until, token)).map(normalizePaygoBillingRecord);
       return alignedRecords;
+    }
+  }
+
+  /**
+   * Read account subscriptions with the operational credential first. The
+   * OAuth scope used for monitoring often cannot read billing subscriptions,
+   * so a 403 is retried with the configured Billing Read credential. Endpoint:
+   * https://developers.cloudflare.com/api/resources/accounts/subresources/subscriptions/
+   */
+  async subscriptions(): Promise<unknown> {
+    const path = `/accounts/${this.env.BROLLY_ACCOUNT_ID}/subscriptions`;
+    let operational: string | undefined;
+    try {
+      operational = await this.token();
+      return await this.get<unknown>(path, operational);
+    } catch (error) {
+      if (!(error instanceof CloudflareApiError) || error.status !== 403) throw error;
+      const billing = await configuredBillingToken(this.env);
+      if (!billing || billing === operational) throw error;
+      return await this.get<unknown>(path, billing);
     }
   }
 

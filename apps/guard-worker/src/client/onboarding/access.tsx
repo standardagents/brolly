@@ -3,7 +3,8 @@ import { familyControl } from "@standardagents/brolly-core";
 import { api } from "../api";
 import { Button, Icon, InfoTip, Input, Modal, Notice, ProductIcon, Spinner } from "../components/ui";
 import { billingTokenTemplateUrl } from "../lib/billing";
-import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
+import { ENTERPRISE_COST_NOTICE } from "../plan-tier";
+import type { OnboardingBudgetEstimates, OnboardingData, PlanTier } from "../types";
 
 /**
  * Anchor styled exactly like <Button>. Access setup leaves the app for
@@ -23,9 +24,10 @@ function ButtonLink({ variant, className = "", ...rest }: AnchorHTMLAttributes<H
   );
 }
 
-export function AccessActions({ accountId, families, busy, result, notice, error, token, billingDialogOpen, onCheckComplete, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
+export function AccessActions({ accountId, families, planTier = "unknown", busy, result, notice, error, token, billingDialogOpen, onCheckComplete, onCloseBilling, onOpenBilling, onVerify, onVerified }: {
   accountId: string;
   families: OnboardingData["families"];
+  planTier?: PlanTier;
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
   notice: string;
@@ -38,6 +40,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   onVerify: () => void;
   onVerified: (result: OnboardingBudgetEstimates) => void;
 }) {
+  const billingUnavailable = planTier === "free" ? "Unavailable on Free plans" : planTier === "enterprise" ? "Unavailable for Enterprise plans" : "";
   const [billingToken, setBillingToken] = useState("");
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
@@ -50,7 +53,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   const checkComplete = !busy && result !== null && revealed >= ACCESS_CAPABILITIES.length;
   useEffect(() => { onCheckComplete?.(checkComplete); }, [checkComplete, onCheckComplete]);
   const monitoringDetected = !busy && result !== null && revealed >= 1 && capabilityStatus("monitoring", result).state === "ready";
-  const billingDetected = !busy && result !== null && revealed >= 2 && capabilityStatus("billing", result).state === "ready";
+  const billingDetected = !billingUnavailable && !busy && result !== null && revealed >= 2 && capabilityStatus("billing", result).state === "ready";
 
   async function saveBillingAccess() {
     setBillingBusy(true);
@@ -89,9 +92,12 @@ export function AccessActions({ accountId, families, busy, result, notice, error
         </Notice>
       )}
 
-      {(busy || result) && <UsageAccessResults result={result} checking={busy} revealed={revealed} onConnectBilling={onOpenBilling} />}
-
-      {(busy || result) && <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />}
+      {(busy || result) && (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)] xl:items-start">
+          <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />
+          <UsageAccessResults result={result} checking={busy} revealed={revealed} billingUnavailable={billingUnavailable} onConnectBilling={onOpenBilling} />
+        </div>
+      )}
 
       {analyticsNeedsReconnect && (
         <article className="rounded-panel border border-warn-line bg-warn-bg p-4">
@@ -101,7 +107,7 @@ export function AccessActions({ accountId, families, busy, result, notice, error
         </article>
       )}
 
-      {billingDialogOpen && result?.access.billing.state !== "connected" && (
+      {billingDialogOpen && !billingUnavailable && result?.access.billing.state !== "connected" && (
         <BillingAccessSetup
           accountId={accountId}
           token={billingToken}
@@ -116,8 +122,8 @@ export function AccessActions({ accountId, families, busy, result, notice, error
   );
 }
 
-export function GrantBillingAccessButton({ disabled = false, onClick }: { disabled?: boolean; onClick: () => void }) {
-  return <Button variant="primary" className="shrink-0" disabled={disabled} onClick={onClick}><Icon name="wallet" />Grant billing access</Button>;
+export function GrantBillingAccessButton({ disabled = false, variant = "primary", onClick }: { disabled?: boolean; variant?: "primary" | "secondary"; onClick: () => void }) {
+  return <Button variant={variant} className="shrink-0" disabled={disabled} onClick={onClick}><Icon name="wallet" />Grant billing access</Button>;
 }
 
 function BillingAccessSetup({ accountId, token, busy, error, onClose, onToken, onSubmit }: {
@@ -175,11 +181,12 @@ function BillingStep({ index, label, hint, children }: { index: number; label: s
   );
 }
 
-export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
+export function RecentUsageEstimator({ busy, result, notice, onSuggest, disabled = false }: {
   busy: boolean;
   result: OnboardingBudgetEstimates | null;
   notice: string;
   onSuggest: () => void;
+  disabled?: boolean;
 }) {
   return (
     <section className="mb-5 flex flex-col gap-4 rounded-panel border border-line bg-panel-soft p-4 sm:flex-row sm:items-center sm:justify-between" aria-labelledby="recent-usage-estimator-title">
@@ -191,11 +198,11 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest }: {
             <InfoTip label="How recent-usage suggestions work">Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.</InfoTip>
           </div>
           <p className="mt-1 max-w-[62ch] text-xs leading-5 text-muted">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
-          {notice && <p className="mt-2 text-xs font-semibold text-good" role="status">{notice}</p>}
+          {disabled ? <p className="mt-2 text-xs text-muted" role="status">{ENTERPRISE_COST_NOTICE}</p> : notice && <p className="mt-2 text-xs font-semibold text-good" role="status">{notice}</p>}
           {result && <p className="mt-1 text-[11px] text-faint">{result.cached ? "Reused the 15-minute cache" : `${result.apiCalls} bounded Cloudflare API ${result.apiCalls === 1 ? "request" : "requests"}`} · Window ended {new Date(result.windowEndAt).toLocaleString()}</p>}
         </div>
       </div>
-      <Button className="shrink-0" disabled={busy} onClick={onSuggest}><Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}</Button>
+      <Button className="shrink-0" disabled={disabled || busy} onClick={onSuggest}><Icon name="trend" />{busy ? "Reading usage…" : result ? "Fill suggested limits" : "Read usage & fill limits"}</Button>
     </section>
   );
 }
@@ -282,14 +289,15 @@ function useStaggeredReveal(checking: boolean, result: OnboardingBudgetEstimates
  * matter how long a detail line runs. The cards never unmount or re-animate
  * between the checking and resolved states.
  */
-function UsageAccessResults({ result, checking, revealed, onConnectBilling }: {
+function UsageAccessResults({ result, checking, revealed, billingUnavailable, onConnectBilling }: {
   result: OnboardingBudgetEstimates | null;
   checking: boolean;
   revealed: number;
+  billingUnavailable: string;
   onConnectBilling: () => void;
 }) {
   return (
-    <div className="grid gap-2 xl:grid-cols-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
+    <div className="grid content-start gap-2" aria-label="Verified Cloudflare permissions" aria-live="polite">
       {ACCESS_CAPABILITIES.map((row, index) => {
         const status: CapabilityStatus = !checking && result && index < revealed ? capabilityStatus(row.key, result) : { state: "checking" };
         return (
@@ -301,12 +309,19 @@ function UsageAccessResults({ result, checking, revealed, onConnectBilling }: {
               <strong className="block text-sm leading-5">{row.label}</strong>
               <span className="block text-xs leading-4 text-muted">{row.detail}</span>
             </div>
-            {row.key === "billing" && status.state === "attention"
-              ? <span className="animate-access-resolve motion-reduce:animate-none"><GrantBillingAccessButton onClick={onConnectBilling} /></span>
+            {row.key === "billing" && billingUnavailable
+              ? <span className="inline-flex min-h-7 items-center rounded-full border border-line bg-panel-soft px-2.5 text-xs font-semibold leading-none text-muted">{billingUnavailable}</span>
+              : row.key === "billing" && status.state === "attention"
+              ? <span className="animate-access-resolve motion-reduce:animate-none"><GrantBillingAccessButton variant="secondary" onClick={onConnectBilling} /></span>
               : <CapabilityPill status={status} />}
           </article>
         );
       })}
+      {!billingUnavailable && !checking && result && revealed >= 2 && result.access.billing.state !== "connected" && (
+        <p className="animate-access-resolve px-1 text-[12px] leading-5 text-muted motion-reduce:animate-none">
+          <strong className="text-ink">Why Brolly requests this:</strong> Cloudflare keeps billing behind a separate token, and Brolly&apos;s access is <strong className="text-ink">read-only</strong>. Brolly reads your actual billable charges, reconciles spend against your invoice every hour, and triggers alerts and actions in real dollars. It cannot change your billing.
+        </p>
+      )}
     </div>
   );
 }
@@ -361,7 +376,7 @@ function ServiceCoverageGrid({ families, monitored, capped }: { families: Onboar
           <span className="flex items-center gap-1.5"><Icon name={QUARANTINE_MARKER.icon} /> {QUARANTINE_MARKER.label}</span>
         </span>
       </header>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3">
         {families.map(family => {
           const control = familyControl(family.family);
           return (

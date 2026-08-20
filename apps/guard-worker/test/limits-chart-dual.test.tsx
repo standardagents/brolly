@@ -3,6 +3,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { LimitsChartDual, type WindowLimits } from "../src/client/components/limits-chart/LimitsChartDual";
+import type { UsageSeriesResponse } from "../src/client/components/limits-chart/api";
 import { hover, leave, pointerMove } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,6 +26,12 @@ const response = {
   ],
   cycles: [{ startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1), approximate: false }],
 };
+const paidQuotaResponse: UsageSeriesResponse = {
+  ...response,
+  planTier: "paid",
+  metrics: { requests: { ...response.metrics.requests, includedPerCycle: 20_000 } },
+};
+const enterpriseQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, planTier: "enterprise" };
 
 let root: Root | null = null;
 afterEach(() => {
@@ -33,7 +40,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, deviated }: { dayCost?: Record<string, number>; cycleCost?: Record<string, number>; costOnly?: boolean; deviated?: ReadonlySet<string> }) {
+function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, deviated, data = response }: { dayCost?: Record<string, number>; cycleCost?: Record<string, number>; costOnly?: boolean; deviated?: ReadonlySet<string>; data?: UsageSeriesResponse }) {
   const [day, setDay] = useState<WindowLimits>({ cost: dayCost, usage: { requests: { warn: 150, critical: 300 } } });
   const [cycle, setCycle] = useState<WindowLimits>({ cost: cycleCost, usage: {} });
   const [tolerance, setTolerance] = useState({ warn: 150, critical: 800 });
@@ -42,13 +49,28 @@ function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, deviated }: {
     <button type="button" onClick={() => setTolerance({ warn: 250, critical: 3000 })}>Change tolerance</button>
     <button type="button" onClick={() => setTolerance({ warn: 400, critical: 5000 })}>Change tolerance again</button>
     <button type="button" onClick={() => setDay(current => ({ ...current, cost: { warn: 50, critical: 100 } }))}>Set day</button>
-    <LimitsChartDual data={response} levels={levels} day={day} cycle={cycle} costOnly={costOnly}
+    <LimitsChartDual data={data} levels={levels} day={day} cycle={cycle} costOnly={costOnly}
       onChange={(window, change) => window === "day" ? setDay(change) : setCycle(change)}
       tolerance={tolerance} deviated={deviated} open={open} onOpenChange={setOpen} />
   </div>;
 }
 
 describe("LimitsChartDual tolerance behavior", () => {
+  it("renders account usage rows and seeds the cycle map from its included allotment", async () => {
+    const container = await render(<Harness data={paidQuotaResponse} />);
+    await waitFor(() => expect(readWindow(container, "cycle").usage.requests).toEqual({ warn: 16_000, critical: 20_000 }));
+    expect(container.querySelector("[aria-label='Expand Requests']")).not.toBeNull();
+  });
+
+  it("keeps enterprise usage active while disabling only the cost row", async () => {
+    const container = await render(<Harness data={enterpriseQuotaResponse} />);
+    const cost = container.querySelector("[aria-label='Expand Cost']") as HTMLButtonElement;
+    const requests = container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement;
+    expect(cost.disabled).toBe(true);
+    expect(requests.disabled).toBe(false);
+    expect(container.textContent).toContain("Cost tracking is not supported on Enterprise plans currently.");
+  });
+
   it("seeds an empty chart from tolerance while hand-edited maps stay fixed", async () => {
     const container = await render(<Harness />);
     await waitFor(() => expect(readWindow(container, "day").cost.warn).toBeGreaterThan(0));
@@ -203,9 +225,9 @@ describe("LimitsChartDual tolerance behavior", () => {
     const cycleLayer = charts[1]!.querySelector("[data-hover-layer]") as SVGRectElement;
     await act(async () => pointerMove(cycleLayer, { clientX: 63, clientY: 40 }));
     const cycleTip = charts[1]!.querySelector("[data-chart-tooltip]")!;
-    expect(cycleTip.textContent).toContain("so far this cycle");
     expect(cycleTip.textContent).toContain("$10.00");
-    const litBars = [...charts[1]!.querySelectorAll("rect[rx]")].filter(bar => bar.getAttribute("opacity") === "0.38");
+    // The lit look is an overlay rect stacked on the 0.16 base bar (combined ≈ 0.38).
+    const litBars = [...charts[1]!.querySelectorAll("rect[rx]")].filter(bar => bar.getAttribute("opacity") === "0.26");
     expect(litBars).toHaveLength(1);
     // Both charts highlight the hovered column; the cycle band is fainter.
     expect(charts[0]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".07");

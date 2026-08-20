@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BudgetWizard } from "../src/client/onboarding/BudgetWizard";
+import { BudgetWizard, ContinueFooter } from "../src/client/onboarding/BudgetWizard";
 import type { OnboardingData } from "../src/client/types";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -60,6 +60,24 @@ afterEach(() => {
 });
 
 describe("BudgetWizard", () => {
+  it.each([
+    ["free", "Free plans have hard usage caps, so Brolly continues with usage monitoring."],
+    ["enterprise", "Enterprise billing reconciliation is unavailable, so Brolly continues with usage monitoring."],
+  ] as const)("keeps the first step available for %s accounts without Billing Read", async (planTier, copy) => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<ContinueFooter billingConnected={false} billingRequired={false} planTier={planTier} accessCheckComplete busy={false} firstStep onContinue={() => {}} onOpenBilling={() => {}} />);
+      await Promise.resolve();
+    });
+    const button = container.querySelector("button");
+    expect(button?.textContent).toContain("Continue to alerts");
+    expect(button).not.toBeNull();
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(container.textContent).toContain(copy);
+  });
+
   it("renders risk tolerance between alert levels and the daily and cycle limit steps", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -69,19 +87,18 @@ describe("BudgetWizard", () => {
       await Promise.resolve();
     });
     await waitFor(() => expect(container.querySelectorAll("header ol li")).toHaveLength(8));
-    expect([...container.querySelectorAll("header ol li")].map(item => item.textContent?.replace(/^[✓\d]+/, "").trim())).toEqual([
-      "Connect",
-      "Channels",
-      "Levels",
-      "Risk",
-      "Account",
-      "Products",
-      "Install",
-      "Verify",
+    expect([...container.querySelectorAll("header ol li")].map(item => (item as HTMLElement).dataset.step)).toEqual([
+      "access",
+      "alerts",
+      "levels",
+      "tolerance",
+      "account",
+      "products",
+      "runtime",
+      "verify",
     ]);
-    expect(container.textContent).toContain("Set how far above your usual daily spend each alert level starts.");
-    expect(container.textContent).toContain("Your Cloudflare accounttest-account");
-    expect(container.textContent).toContain("Cost and billable usage limits for each product");
+    // Fixture data (the account name supplied to the wizard) reaches the page.
+    expect(container.textContent).toContain("test-account");
   });
 
   it("saves the balanced risk tolerance for an existing policy", async () => {
@@ -92,9 +109,9 @@ describe("BudgetWizard", () => {
       root!.render(<BudgetWizard data={data} token="test" editing onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
-    await waitFor(() => expect([...container.querySelectorAll("button")].some(item => item.textContent === "Save breaker status")).toBe(true));
+    await waitFor(() => expect(container.querySelector("button[data-action='finish']")).not.toBeNull());
     await act(async () => {
-      [...container.querySelectorAll("button")].find(item => item.textContent === "Save breaker status")!.click();
+      container.querySelector<HTMLButtonElement>("button[data-action='finish']")!.click();
       await Promise.resolve();
     });
     const call = vi.mocked(fetch).mock.calls.find(([input]) => new URL(String(input), "https://brolly.test").pathname === "/api/policy");

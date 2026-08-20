@@ -6,6 +6,7 @@ import { actionKindLabel, actionStateTitle } from "../components/ActionDrawer";
 import { compactId, measurement, money, relativeTime } from "../format";
 import type { ConnectionHealth } from "../lib/health";
 import { categoryColor } from "../lib/meta";
+import { ENTERPRISE_COST_NOTICE, ENTERPRISE_QUOTA_NOTICE, FREE_PLAN_NOTICE, effectivePlanTier } from "../plan-tier";
 import type { Route } from "../router";
 import type { AlertLevel, ConfigurationData, DashboardData, Incident, SpendLimits } from "../types";
 
@@ -21,6 +22,8 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
 }) {
   const [readiness, setReadiness] = useState<ConfigurationData["summary"] | null>(null);
   const preview = connection.kind !== "connected";
+  const tier = effectivePlanTier(data);
+  const enterprise = tier === "enterprise";
   const attention = buildAttentionQueue(data);
 
   useEffect(() => {
@@ -48,9 +51,11 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
           <span>{scanSummary}</span>
         </p>
       )}
+      {tier === "free" && <PlanTierNotice>{FREE_PLAN_NOTICE}</PlanTierNotice>}
+      {enterprise && <PlanTierNotice>{ENTERPRISE_QUOTA_NOTICE} {ENTERPRISE_COST_NOTICE}</PlanTierNotice>}
 
       <section className="mb-[18px] grid grid-cols-[1.3fr_1fr_1fr_1fr] gap-3 max-xl:grid-cols-2 max-md:grid-cols-1" aria-label="Account status">
-        <SpendStat data={data} preview={preview} />
+        <SpendStat data={data} preview={preview} disabled={enterprise} />
         <StatTile
           tone={data.summary.openIncidents ? (data.summary.emergencyIncidents ? "danger" : "warning") : "good"}
           label="Open incidents"
@@ -82,7 +87,7 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
         </StatTile>
       </section>
 
-      <Panel aria-label="Spend detail">
+      <Panel aria-label="Spend detail" className={enterprise ? "opacity-60" : undefined}>
         <PanelHead
           title={preview ? "Example daily spend — not live" : "Estimated daily spend"}
           titleExtra={
@@ -102,9 +107,9 @@ export function OverviewPage({ data, connection, token, scanError, scanSummary, 
         />
         <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-[22px] px-5 pt-1 pb-4 max-xl:grid-cols-[minmax(0,1fr)]">
           <div className="min-w-0">
-            <SpendChart points={data.spend.history} />
+              <SpendChart points={data.spend.history} disabled={enterprise} />
           </div>
-          <div className="flex flex-col border-l border-line-soft pl-[22px] max-xl:border-l-0 max-xl:pl-0">
+          <div className={`flex flex-col border-l border-line-soft pl-[22px] max-xl:border-l-0 max-xl:pl-0 ${enterprise ? "pointer-events-none saturate-0" : ""}`} aria-disabled={enterprise || undefined}>
             <table className="w-full border-collapse text-[13px]">
               <caption className="sr-only">Estimated daily spend by product category</caption>
               <thead>
@@ -318,14 +323,15 @@ function AttentionRow({ lead, title, detail, onClick }: { lead: ReactNode; title
   );
 }
 
-function SpendStat({ data, preview }: { data: DashboardData; preview: boolean }) {
+function SpendStat({ data, preview, disabled = false }: { data: DashboardData; preview: boolean; disabled?: boolean }) {
   const delta = spendDelta(data.spend.history);
   const hours = delta ? Math.max(1, Math.round(delta.sinceMs / 3_600_000)) : 0;
   return (
-    <div className={`${TILE_BASE} ${TILE_ACCENT.hero} cursor-default`}>
+    <div className={`${TILE_BASE} ${TILE_ACCENT.hero} cursor-default ${disabled ? "opacity-55 saturate-0" : ""}`} aria-disabled={disabled || undefined}>
       <StatLabel arrow={false}>{preview ? "Example spend (not live)" : "Estimated spend · rolling 24 h"}</StatLabel>
-      <strong className="text-[27px] leading-[1.1] tracking-[-.02em] tabular-nums">{data.spend.updatedAt ? money(data.spend.estimatedTotalUsd) : "—"}</strong>
-      {delta && Math.abs(delta.deltaUsd) >= 0.01 ? (
+      <strong className="text-[27px] leading-[1.1] tracking-[-.02em] tabular-nums">{disabled ? "Unsupported" : data.spend.updatedAt ? money(data.spend.estimatedTotalUsd) : "—"}</strong>
+      {disabled && <small className="text-[12px] text-muted">{ENTERPRISE_COST_NOTICE}</small>}
+      {!disabled && delta && Math.abs(delta.deltaUsd) >= 0.01 ? (
         <small className={`inline-flex items-center gap-[5px] text-[12px] font-[680] ${delta.deltaUsd > 0 ? "text-danger" : "text-good [&>svg]:-scale-y-100"}`}>
           <Icon name="trend" className="size-[13px]" /> {delta.deltaUsd > 0 ? "+" : "−"}{money(Math.abs(delta.deltaUsd))} vs {hours} h ago
         </small>
@@ -334,6 +340,10 @@ function SpendStat({ data, preview }: { data: DashboardData; preview: boolean })
       )}
     </div>
   );
+}
+
+function PlanTierNotice({ children }: { children: ReactNode }) {
+  return <div className="mb-3.5 rounded-field border border-warn-line bg-warn-bg px-3 py-2.5 text-[12.5px] leading-[1.5] text-muted" role="status">{children}</div>;
 }
 
 function LocalPreviewPanel({ connection, scanError, onNavigate }: {

@@ -93,14 +93,21 @@ const EXPAND_MS = 260;
  */
 export function Expander({ open, children, innerClassName = "" }: { open: boolean; children: () => ReactNode; innerClassName?: string }) {
   const [mounted, setMounted] = useState(open);
+  // Clip only while animating; a settled-open region must not clip chart tooltips.
+  const [settled, setSettled] = useState(open);
   useEffect(() => {
-    if (open) { setMounted(true); return; }
+    if (open) {
+      setMounted(true);
+      const timer = setTimeout(() => setSettled(true), EXPAND_MS);
+      return () => clearTimeout(timer);
+    }
+    setSettled(false);
     const timer = setTimeout(() => setMounted(false), EXPAND_MS);
     return () => clearTimeout(timer);
   }, [open]);
   return (
     <div className="grid" style={{ gridTemplateRows: open ? "1fr" : "0fr", transition: `grid-template-rows ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }} aria-hidden={!open}>
-      <div className="min-h-0 overflow-hidden">
+      <div className={`min-h-0 ${open && settled ? "overflow-visible" : "overflow-hidden"}`}>
         <div className={innerClassName} style={{ opacity: open ? 1 : 0, transition: `opacity ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }}>
           {mounted && children()}
         </div>

@@ -1,4 +1,7 @@
 import { resourceId } from "@standardagents/brolly-core";
+import { INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
+import { estimatedBillableCostSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
+import { readPlanState } from "./plan-tier.js";
 
 /**
  * Daily cost and usage series for one policy scope, read from the ledger the
@@ -23,9 +26,13 @@ export interface UsageSeriesResponse {
   found: boolean;
   today: string;
   /** Metric id → { key, label, unit } for the metrics present in the series. */
-  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean }>;
+  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number }>;
   series: UsageSeriesPoint[];
+  estimatedBillableCostSeries?: EstimatedBillableCostPoint[];
   cycles: Array<{ startsAt: number; endsAt: number; approximate: boolean }>;
+  includedQuotaCatalogVersion: string;
+  planTier: PlanTier;
+  planTierSource: PlanTierSource;
 }
 
 export function scopeResourceId(accountId: string, scope: string): string | null {
@@ -45,7 +52,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const today = new Date(now).toISOString().slice(0, 10);
   const from = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
 
-  const [resource, daily, shards, definitions, cycles] = await Promise.all([
+  const [resource, daily, shards, definitions, cycles, planState] = await Promise.all([
     db.prepare(`SELECT id,product_family FROM resources WHERE id=?1 LIMIT 1`).bind(id).first<{ id: string; product_family: string }>(),
     db.prepare(
       `SELECT local_day,metrics_json,estimated_cost_usd,authoritative_allocated_cost_usd,sealed
@@ -59,6 +66,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
     db.prepare(`SELECT id,metric_key,display_name,unit,billing_mapping FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; billing_mapping: string | null }>(),
     db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`)
       .bind(accountId, now - (days + 31) * 86_400_000).all<{ starts_at: number; ends_at: number; approximate: number }>(),
+    readPlanState(db),
   ]);
 
   const byDay = new Map<string, UsageSeriesPoint>();
@@ -86,13 +94,32 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   }
   const series = [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
   const present = new Set(series.flatMap(point => Object.keys(point.metrics)));
+  const includedAllotments = includedAllotmentsForTier(planState.planTier);
+  const includedByMetric = new Map((scope === "account" ? includedAllotments : []).map(item => [item.metricId, item.includedPerCycle]));
   const metrics = Object.fromEntries(definitions.results
     .filter(definition => present.has(definition.id))
-    .map(definition => [definition.id, { key: definition.metric_key, label: definition.display_name, unit: definition.unit, billable: Boolean(definition.billing_mapping) }]));
+    .map(definition => {
+      const included = includedByMetric.get(definition.id);
+      return [definition.id, {
+        key: definition.metric_key,
+        label: definition.display_name,
+        unit: definition.unit,
+        billable: Boolean(definition.billing_mapping),
+        ...(included === undefined ? {} : { includedPerCycle: included }),
+      }];
+    }));
 
+  const cycleRows = cycles.results.map(cycle => ({ startsAt: cycle.starts_at, endsAt: cycle.ends_at, approximate: cycle.approximate === 1 }));
+  const billableCost = scope === "account"
+    ? estimatedBillableCostSeries(series, cycleRows, includedAllotments, planState.planTier)
+    : [];
   const body: UsageSeriesResponse = {
     scope, resourceId: id, found: Boolean(resource), today, metrics, series,
-    cycles: cycles.results.map(cycle => ({ startsAt: cycle.starts_at, endsAt: cycle.ends_at, approximate: cycle.approximate === 1 })),
+    estimatedBillableCostSeries: billableCost,
+    cycles: cycleRows,
+    includedQuotaCatalogVersion: INCLUDED_QUOTA_CATALOG_VERSION,
+    planTier: planState.planTier,
+    planTierSource: planState.planTierSource,
   };
   return Response.json(body);
 }

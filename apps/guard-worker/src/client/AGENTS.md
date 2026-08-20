@@ -38,6 +38,17 @@ directory.
   chart maps into ledger alert rules.
 - Read-only charts expose labels and lines without handles, fields, history
   controls, or history keyboard shortcuts.
+- Account billing-cycle usage charts may include a release-owned Cloudflare
+  allotment band. Its fixed boundary remains outside level hit testing and
+  chart history. Daily charts use a cycle-to-date quota readout without a
+  quota band.
+- Account-cycle Warning and Critical defaults use 80 and 100 percent of an
+  included allotment when typical usage remains below the allotment. A metric
+  whose typical cycle usage exceeds the allotment uses the complete
+  tolerance-derived map.
+- Paid and unknown account cost charts may include an estimated billable-cost
+  comparison line. It remains separate from the primary cost series and has no
+  threshold handles or history state.
 
 ## Limits UI
 
@@ -46,7 +57,8 @@ directory.
   value. Use `chip` for compact row values, `bare` below expanded charts, and
   `boxed` when a standalone chart needs cards.
 - `components/limits-chart/LimitsChartDual.tsx` owns the daily and billing-cycle
-  shell for one policy scope. Account limits use its `costOnly` mode.
+  shell for one policy scope. Account limits include cost and account-wide
+  billable usage rows so included allotments can seed cycle thresholds.
 - `onboarding/limits-policy.ts` owns scope updates and the daily legacy-map
   mirroring required by server and dashboard readers.
 - New limit editors must compose these components and helpers.

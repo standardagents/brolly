@@ -8,6 +8,58 @@ The resources table is a hierarchy with one account root, product nodes, service
 
 The metric_definitions table is a versioned catalog. It contains detailed usage meters, synthetic estimated-cost meters, authoritative billed-cost meters, and account/product catchalls for billing lines without a detailed collector. Collector capability records state the finest available scope, retention, sampling behavior, current watermark, and a human-readable gap.
 
+## Workers Paid included quotas and plan tiers
+
+Brolly maintains a release-versioned Workers Paid included-quota catalog in
+`apps/guard-worker/src/included-quota.ts`. Catalog metric IDs resolve against
+the ledger metric definitions. Each catalog change requires a version bump and
+fresh verification against Cloudflare's Workers, Workers KV, D1, Durable
+Objects, R2, and Queues pricing pages. The catalog remains code-owned because
+Cloudflare's billing records and supported APIs provide no included-quantity
+field.
+
+The hourly reconciliation cadence reads the account subscriptions endpoint.
+An exact `workers_paid` account rate plan selects the paid tier, and an exact
+Enterprise rate plan selects the enterprise tier. A successful response with
+neither plan selects the free tier. Failed detection records the unknown tier.
+The operational credential is tried first, with the Billing Read credential as
+the fallback for a forbidden response. An operator override stored in D1 takes
+precedence over detection and remains visible with its source in the dashboard,
+onboarding, and usage-series responses.
+
+Paid and unknown tiers use the shipped catalog. Enterprise uses the same
+values as a standard paid-plan baseline because Cloudflare exposes no
+contract-specific allotments or rates. Enterprise cost controls and cost
+visualizations remain disabled while usage alerts and controls continue to
+operate. Free-tier accounts receive no included-quota boundaries or
+allotment-derived defaults because Cloudflare enforces hard usage caps before
+spend can accrue.
+
+`GET /api/usage-series` adds an optional `includedPerCycle` value to eligible
+account-scope metric definitions. The response also includes the effective
+plan tier, its source, and the catalog version. Account responses include an
+`estimatedBillableCostSeries` for paid and unknown tiers. This additive series
+prices daily usage above each catalog allotment at Brolly's existing gross
+rates and resets at each billing-cycle boundary. The primary cost series keeps
+its existing authoritative-then-estimated selection. Free and Enterprise tiers
+return no estimated billable-cost points.
+
+Billing-cycle usage charts shade the included
+range and draw a fixed system boundary at the allotment. The line is outside
+threshold interaction and chart history. Daily charts omit the cycle-scoped
+band and retain a cycle-to-date percent readout. A boundary more than three
+times the visible data and configured levels stays outside the scale so usage
+remains legible. The readout continues to report the allotment and billable
+state.
+
+Fresh account-cycle usage limits use 80 percent of the allotment for Warning
+and 100 percent for Critical. Emergency retains its tolerance-derived value
+with Critical as its minimum. A metric whose typical cycle usage exceeds the
+catalog value keeps the tolerance-derived defaults so onboarding does not seed
+thresholds that are breached at creation time. Day limits, resource limits,
+metrics without an allotment, and free-tier accounts keep tolerance-derived
+defaults.
+
 Brolly stores these quality states:
 
 | State | Meaning |
