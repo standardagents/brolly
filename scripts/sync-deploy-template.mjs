@@ -1,5 +1,6 @@
 import { copyFileSync, cpSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { templateRelease } from "./template-release.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,8 +27,7 @@ copyFileSync(path.join(repositoryRoot, "scripts/update-from-upstream.mjs"), path
 copyFileSync(path.join(repositoryRoot, "scripts/verify-deploy-template.mjs"), path.join(templateRoot, "scripts/verify-template.mjs"));
 copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(templateRoot, "LICENSE"));
 
-const release = process.env.GITHUB_SHA
-  ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: repositoryRoot, encoding: "utf8" }).trim();
+const release = templateRelease(repositoryRoot);
 const publishedAt = execFileSync("git", ["show", "-s", "--format=%cI", release], { cwd: repositoryRoot, encoding: "utf8" }).trim();
 const date = new Date(publishedAt);
 const displayVersion = `${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}-${release.slice(0, 7)}`;

@@ -1,11 +1,15 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+// @ts-expect-error -- plain-JS module shared with the template scripts
+import { templateRelease } from "../../scripts/template-release.mjs";
 
-const release = process.env.GITHUB_SHA
-  ?? execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+// Baked from the last commit that touched a template input, not the build
+// HEAD, so rebuilding an unchanged worker reproduces the same bytes.
+const release: string = templateRelease(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."));
 
 export default defineConfig(({ command }) => {
   // A caller's development NODE_ENV must not leak React's development transform,
