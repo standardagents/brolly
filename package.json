@@ -11,10 +11,11 @@
     "deploy": "pnpm build && pnpm --filter @standardagents/brolly-guard db:migrate:remote && pnpm --filter @standardagents/brolly-guard deploy:built",
     "deploy:docs": "node scripts/deploy-docs.mjs",
     "dev": "pnpm --filter @standardagents/brolly-guard dev",
-    "dev:demo": "pnpm --filter @standardagents/brolly-guard dev:demo",
+    "dev:demo": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-guard dev:demo",
     "release:runtime": "node scripts/release-runtime.mjs",
     "release:runtime:dev": "node scripts/release-runtime.mjs --tag=dev",
     "test": "vitest run",
+    "typecheck:guard": "tsc -p apps/guard-worker/tsconfig.json --noEmit",
     "typecheck": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm -r typecheck",
     "verify:runtime-release": "pnpm --filter @standardagents/brolly-runtime build && pnpm --filter @standardagents/brolly-runtime typecheck && pnpm exec vitest run packages/runtime/test/runtime.test.ts"
   },

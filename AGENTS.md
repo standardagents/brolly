@@ -74,6 +74,7 @@ calculation), never to preserve coverage numbers.
 ```bash
 pnpm install
 pnpm typecheck
+pnpm typecheck:guard   # fast guard-dashboard-only typecheck, no dependency builds
 pnpm test
 pnpm dev
 pnpm dev:demo
@@ -88,6 +89,14 @@ pnpm release:runtime patch --dry-run --yes
 <http://localhost:5199> against an in-process mock API
 (`apps/guard-worker/vite.demo.config.ts`). It needs no Cloudflare account, no
 OAuth client, and no D1 database. Use it for any dashboard UI work or review.
+The root script builds `packages/core` and `packages/notifiers` first, so a
+fresh checkout or merge cannot start the demo against stale `dist` output.
+
+`BROLLY_DEMO_FIRST_RUN=1 pnpm dev:demo` reports onboarding as incomplete, so
+the preview opens on the first-run setup wizard instead of the dashboard. In
+development the wizard also accepts a `?step=<n>` deep link (for example
+`http://localhost:5199/?step=6`) that opens with the earlier steps completed;
+production builds ignore the parameter.
 
 `pnpm dev` boots the real Worker instead. That path requires Cloudflare OAuth
 and permanent account binding before any page past the login screen renders, so
