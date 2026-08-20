@@ -133,7 +133,6 @@ function BaselinePanel({ state, series, typical, windowDays, accountName, accoun
             Brolly read {daysWithSpend} {daysWithSpend === 1 ? "day" : "days"} of spend from this account, {shortDate(first)} to {shortDate(last)}, and took the median.
           </p>
           <Sparkline points={windowed} median={typical} />
-          <p className="mt-3 border-t border-line-soft pt-3 text-[12.5px] leading-[1.55] text-ink">Each alert level is a multiple of this number.</p>
         </>
       )}
       {!state.loading && !state.error && typical === 0 && (
