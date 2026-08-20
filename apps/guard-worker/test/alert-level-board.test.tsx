@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useNotificationTargets } from "../src/client/components/notifications.js";
 import { AlertLevelsStep, useAlertLevels } from "../src/client/onboarding/levels.js";
 import type { AlertLevel } from "../src/client/types.js";
+import { pointer } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -126,13 +127,13 @@ describe("alert level board drag and drop", () => {
     // Drag Critical's handle left of Warning: every slot rect is 0×0 in this DOM, so the pointer lands at index 0.
     const handle = levelColumn("Critical").querySelector("button[aria-label='Drag Critical to reorder']") as HTMLButtonElement;
     await act(async () => {
-      handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 400, clientY: 20, button: 0, pointerId: 1 }));
-      handle.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 300, clientY: 20, pointerId: 1 }));
-      handle.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: -100, clientY: 20, pointerId: 1 }));
+      pointer(handle, "pointerdown", { clientX: 400, clientY: 20, button: 0, pointerId: 1 });
+      pointer(handle, "pointermove", { clientX: 300, clientY: 20, pointerId: 1 });
+      pointer(handle, "pointermove", { clientX: -100, clientY: 20, pointerId: 1 });
     });
     expect(document.querySelector("[aria-hidden='true'].border-dashed")).not.toBeNull();
     // The handle unmounts once its column becomes a placeholder; the browser still delivers pointerup to the document.
-    await act(async () => { document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: -100, clientY: 20, pointerId: 1 })); });
+    await act(async () => { pointer(document.documentElement, "pointerup", { clientX: -100, clientY: 20, pointerId: 1 }); });
     await waitFor(() => expect(calls.some(call => call.method === "PATCH" && call.path === "/api/alert-levels/critical" && call.body.position === 0)).toBe(true));
   });
 });

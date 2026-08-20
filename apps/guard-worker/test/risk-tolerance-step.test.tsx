@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RiskToleranceStep } from "../src/client/onboarding/RiskToleranceStep";
 import type { AlertLevel, Policy } from "../src/client/types";
+import { pointer } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,9 +89,9 @@ describe("RiskToleranceStep", () => {
     await render();
     const slider = document.querySelector("[role='slider']")!;
     await act(async () => {
-      slider.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 300 }));
-      slider.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 340 }));
-      slider.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 340 }));
+      pointer(slider, "pointerdown", { clientX: 300 });
+      pointer(slider, "pointermove", { clientX: 340 });
+      pointer(slider, "pointerup", { clientX: 340 });
     });
     expect(document.querySelector("[data-preset]")?.getAttribute("data-preset")).toBe("custom");
     expect(document.body.textContent).toContain("Custom");

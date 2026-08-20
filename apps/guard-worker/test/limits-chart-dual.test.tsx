@@ -3,6 +3,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { LimitsChartDual, type WindowLimits } from "../src/client/components/limits-chart/LimitsChartDual";
+import { hover, leave, pointerMove } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -195,12 +196,12 @@ describe("LimitsChartDual tolerance behavior", () => {
     expect(container.querySelector("svg title")).toBeNull();
     // Day chart: hovering the first day column shows its date and value.
     const dayLayer = charts[0]!.querySelector("[data-hover-layer]") as SVGRectElement;
-    await act(async () => dayLayer.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 63, clientY: 40 })));
+    await act(async () => pointerMove(dayLayer, { clientX: 63, clientY: 40 }));
     const dayTip = charts[0]!.querySelector("[data-chart-tooltip]")!;
     expect(dayTip.textContent).toContain("$10.00");
     // Cycle chart: hovering shows the cycle-to-date total and lights the day.
     const cycleLayer = charts[1]!.querySelector("[data-hover-layer]") as SVGRectElement;
-    await act(async () => cycleLayer.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 63, clientY: 40 })));
+    await act(async () => pointerMove(cycleLayer, { clientX: 63, clientY: 40 }));
     const cycleTip = charts[1]!.querySelector("[data-chart-tooltip]")!;
     expect(cycleTip.textContent).toContain("so far this cycle");
     expect(cycleTip.textContent).toContain("$10.00");
@@ -210,11 +211,11 @@ describe("LimitsChartDual tolerance behavior", () => {
     expect(charts[0]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".07");
     expect(charts[1]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".045");
     // Leaving the plot removes the tooltip and the band.
-    await act(async () => cycleLayer.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
+    await act(async () => leave(cycleLayer));
     expect(charts[1]!.querySelector("[data-chart-tooltip]")).toBeNull();
     // Hovering a level line shows its live value on the line.
     const slider = charts[0]!.querySelector("[role='slider']") as SVGGElement;
-    await act(async () => slider.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
+    await act(async () => hover(slider));
     const badge = charts[0]!.querySelector("[data-line-value]")!;
     expect(badge.textContent).toBe("$40.00");
     await act(async () => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
