@@ -151,10 +151,13 @@ not part of the customer Deploy to Cloudflare build in `pnpm build`.
 `deploy/` is the canonical, fully isolated generated release template used by
 the Deploy to Cloudflare button. Cloudflare's installer failed to clone this
 repository's nested template reliably, so `.github/workflows/deploy-docs.yml`
-builds and verifies `deploy/` on Linux, commits any platform-normalized release
-output inside the CI checkout, and publishes it as the root of the
-`deploy-template` branch before updating the public site. Run
-`pnpm build:deploy-template` after guard Worker changes and commit the resulting
-Worker, assets, migrations, and deploy helpers. The dashboard and README must
-link to the `deploy-template` branch URL, never the monorepo root or `deploy/`
-subdirectory URL.
+builds and verifies `deploy/` on Linux and publishes it as the root of the
+`deploy-template` branch after updating the public site. Template builds are
+reproducible: the baked release and `brolly-release.json` derive from the last
+commit that touched a template input (`scripts/template-release.mjs`), never
+from the build-time HEAD, so a rebuild of unchanged inputs is byte-identical
+and the committed `deploy/` is authoritative. Commit guard Worker changes
+first, then run `pnpm build:deploy-template` and commit the regenerated
+Worker, assets, migrations, and deploy helpers; CI's publish step commits only
+on genuine drift. The dashboard and README must link to the `deploy-template`
+branch URL, never the monorepo root or `deploy/` subdirectory URL.
