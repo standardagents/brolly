@@ -1173,13 +1173,13 @@ function productDatasetVariables(source, accountId, startsAt, endsAt, zoneIds = 
 function normalizeProductDataset(definition, source, roots, accountId, startsAt, endsAt) {
 	const samples = /* @__PURE__ */ new Map();
 	for (const root of roots) {
-		const zoneTag = stringValue$1(root.zoneTag);
+		const zoneTag = stringValue$2(root.zoneTag);
 		const rows = Array.isArray(root[source.alias]) ? root[source.alias] : [];
 		for (const row of rows) {
 			const dimensions = recordValue(row.dimensions);
-			const action = stringValue$1(dimensions.actionType)?.toLowerCase();
-			const resource = source.resourceDimension ? stringValue$1(dimensions[source.resourceDimension]) : void 0;
-			const parent = source.parentDimension ? stringValue$1(dimensions[source.parentDimension]) : void 0;
+			const action = stringValue$2(dimensions.actionType)?.toLowerCase();
+			const resource = source.resourceDimension ? stringValue$2(dimensions[source.resourceDimension]) : void 0;
+			const parent = source.parentDimension ? stringValue$2(dimensions[source.parentDimension]) : void 0;
 			const scope = zoneTag ? "zone" : resource ? definition.scope : "account";
 			const id = zoneTag ?? resource ?? definition.family;
 			const asset = {
@@ -1232,7 +1232,7 @@ function definition(family, label, retentionDays, scope, datasets, billingOnlyMe
 function recordValue(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
-function stringValue$1(value) {
+function stringValue$2(value) {
 	return typeof value === "string" && value.length ? value : void 0;
 }
 function numberValue(value) {
@@ -1257,8 +1257,8 @@ var CloudflareClient = class {
 	}
 	async zones() {
 		return (await this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`)).rows.flatMap((row) => {
-			const id = stringValue(row.id);
-			const name = stringValue(row.name);
+			const id = stringValue$1(row.id);
+			const name = stringValue$1(row.name);
 			return id && name ? [{
 				id,
 				name
@@ -1328,20 +1328,20 @@ var CloudflareClient = class {
 				const listed = await this.listRows(path);
 				const assets = [];
 				for (const row of listed.rows) {
-					const id = stringValue(row.id) ?? stringValue(row.uuid) ?? stringValue(row.queue_id) ?? stringValue(row.name) ?? stringValue(row.namespace_id);
+					const id = stringValue$1(row.id) ?? stringValue$1(row.uuid) ?? stringValue$1(row.queue_id) ?? stringValue$1(row.name) ?? stringValue$1(row.namespace_id);
 					if (!id) continue;
-					const name = stringValue(row.name) ?? stringValue(row.queue_name) ?? stringValue(row.title) ?? id;
+					const name = stringValue$1(row.name) ?? stringValue$1(row.queue_name) ?? stringValue$1(row.title) ?? id;
 					const tags = {};
 					if (family === "durable_objects") {
-						const workerScript = stringValue(row.script);
-						const className = stringValue(row.class);
+						const workerScript = stringValue$1(row.script);
+						const className = stringValue$1(row.class);
 						if (workerScript) tags.cloudflareWorkerScript = workerScript;
 						if (className) tags.durableObjectClass = className;
 						if (typeof row.use_sqlite === "boolean") tags.durableObjectStorage = row.use_sqlite ? "SQLite" : "key-value";
 					}
 					if (family === "workers") {
-						const etag = stringValue(row.etag);
-						const modifiedOn = stringValue(row.modified_on);
+						const etag = stringValue$1(row.etag);
+						const modifiedOn = stringValue$1(row.modified_on);
 						if (etag) tags.cloudflareEtag = etag;
 						if (modifiedOn) tags.cloudflareModifiedOn = modifiedOn;
 					}
@@ -2148,6 +2148,25 @@ var CloudflareClient = class {
 			return alignedRecords;
 		}
 	}
+	/**
+	* Read account subscriptions with the operational credential first. The
+	* OAuth scope used for monitoring often cannot read billing subscriptions,
+	* so a 403 is retried with the configured Billing Read credential. Endpoint:
+	* https://developers.cloudflare.com/api/resources/accounts/subresources/subscriptions/
+	*/
+	async subscriptions() {
+		const path = `/accounts/${this.env.BROLLY_ACCOUNT_ID}/subscriptions`;
+		let operational;
+		try {
+			operational = await this.token();
+			return await this.get(path, operational);
+		} catch (error) {
+			if (!(error instanceof CloudflareApiError) || error.status !== 403) throw error;
+			const billing = await configuredBillingToken(this.env);
+			if (!billing || billing === operational) throw error;
+			return await this.get(path, billing);
+		}
+	}
 	async getBillingUsage(since, until, token) {
 		const from = new Date(since).toISOString().slice(0, 10);
 		const to = new Date(until).toISOString().slice(0, 10);
@@ -2199,7 +2218,7 @@ var CloudflareClient = class {
 		return envelope;
 	}
 	zoneIds() {
-		this.zoneIdsPromise ??= this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`).then((result) => result.rows.map((row) => stringValue(row.id)).filter((value) => Boolean(value)));
+		this.zoneIdsPromise ??= this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`).then((result) => result.rows.map((row) => stringValue$1(row.id)).filter((value) => Boolean(value)));
 		return this.zoneIdsPromise;
 	}
 	token() {
@@ -2305,7 +2324,7 @@ function authHeaders(token) {
 		"content-type": "application/json"
 	};
 }
-function stringValue(value) {
+function stringValue$1(value) {
 	return typeof value === "string" && value.length > 0 ? value : void 0;
 }
 function withPage(path, page, perPage) {
@@ -5701,6 +5720,274 @@ async function saveLedgerRunLimits(db, input) {
 	return limits;
 }
 //#endregion
+//#region src/included-quota.ts
+var INCLUDED_QUOTA_CATALOG_VERSION = "2026-08";
+/** Workers Paid allotments verified against the Workers pricing table above. */
+var WORKERS_PAID_WORKERS = [{
+	metricId: "workers:requests",
+	includedPerCycle: 1e7,
+	unit: "requests"
+}, {
+	metricId: "workers:cpu_ms",
+	includedPerCycle: 3e7,
+	unit: "milliseconds"
+}];
+var WORKERS_PAID_KV = [
+	{
+		metricId: "kv:reads",
+		includedPerCycle: 1e7,
+		unit: "count"
+	},
+	{
+		metricId: "kv:writes",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "kv:deletes",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "kv:lists",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "kv:storage_bytes",
+		includedPerCycle: 1e9,
+		unit: "bytes"
+	}
+];
+var WORKERS_PAID_D1 = [
+	{
+		metricId: "d1:rows_read",
+		includedPerCycle: 25e9,
+		unit: "rows"
+	},
+	{
+		metricId: "d1:rows_written",
+		includedPerCycle: 5e7,
+		unit: "rows"
+	},
+	{
+		metricId: "d1:storage_bytes",
+		includedPerCycle: 5e9,
+		unit: "bytes"
+	}
+];
+var WORKERS_PAID_DURABLE_OBJECTS = [{
+	metricId: "durable_objects:requests",
+	includedPerCycle: 1e6,
+	unit: "requests"
+}, {
+	metricId: "durable_objects:duration_gb_seconds",
+	includedPerCycle: 4e5,
+	unit: "gb_seconds"
+}];
+var WORKERS_PAID_R2 = [
+	{
+		metricId: "r2:class_a",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "r2:class_b",
+		includedPerCycle: 1e7,
+		unit: "count"
+	},
+	{
+		metricId: "r2:storage_bytes",
+		includedPerCycle: 1e10,
+		unit: "bytes"
+	}
+];
+var WORKERS_PAID_QUEUES = [{
+	metricId: "queues:operations",
+	includedPerCycle: 1e6,
+	unit: "count"
+}];
+var WORKERS_PAID_INCLUDED = [
+	...WORKERS_PAID_WORKERS,
+	...WORKERS_PAID_KV,
+	...WORKERS_PAID_D1,
+	...WORKERS_PAID_DURABLE_OBJECTS,
+	...WORKERS_PAID_R2,
+	...WORKERS_PAID_QUEUES
+];
+var ACTIVE_SUBSCRIPTION_STATES = /* @__PURE__ */ new Set([
+	"active",
+	"awaitingpayment",
+	"complete",
+	"current",
+	"enabled",
+	"paid",
+	"provisioned",
+	"trial"
+]);
+var INACTIVE_SUBSCRIPTION_STATES = /* @__PURE__ */ new Set([
+	"canceled",
+	"cancelled",
+	"expired",
+	"failed",
+	"terminated"
+]);
+var WORKERS_PAID_RATE_PLAN_IDS = /* @__PURE__ */ new Set(["workers_paid"]);
+var ENTERPRISE_RATE_PLAN_IDS = /* @__PURE__ */ new Set(["enterprise"]);
+/**
+* Classify a successful account-subscriptions payload without making API
+* assumptions outside the response. Invalid or error-shaped payloads are
+* unknown so a failed probe never masquerades as a free account.
+*/
+function classifyPlanTier(payload) {
+	const subscriptions = subscriptionRows(payload);
+	if (!subscriptions) return "unknown";
+	const active = subscriptions.filter(isActiveSubscription);
+	if (active.some(isEnterpriseSubscription)) return "enterprise";
+	if (active.some(isWorkersPaidSubscription)) return "paid";
+	return "free";
+}
+/** Return the catalog for tiers whose charts use the regular paid baseline. */
+function includedAllotmentsForTier(tier) {
+	return tier === "free" ? [] : WORKERS_PAID_INCLUDED;
+}
+/** Resolve an operator override over the most recent API detection. */
+function effectivePlanTier(detectedTier, overrideTier) {
+	return overrideTier ?? detectedTier;
+}
+/** Return the API-visible source for a resolved plan tier. */
+function planTierSource(overrideTier) {
+	return overrideTier === null ? "api" : "override";
+}
+function subscriptionRows(payload) {
+	if (Array.isArray(payload)) return payload.filter(isObject);
+	if (!isObject(payload)) return null;
+	if (payload.success === false) return null;
+	if (Array.isArray(payload.result)) return payload.result.filter(isObject);
+	if (Array.isArray(payload.subscriptions)) return payload.subscriptions.filter(isObject);
+	if (isObject(payload.result) && Array.isArray(payload.result.subscriptions)) return payload.result.subscriptions.filter(isObject);
+	return null;
+}
+function isActiveSubscription(subscription) {
+	const raw = subscription.state ?? subscription.status;
+	if (raw == null) return true;
+	const state = normalize(raw);
+	if (INACTIVE_SUBSCRIPTION_STATES.has(state)) return false;
+	return ACTIVE_SUBSCRIPTION_STATES.has(state);
+}
+function isEnterpriseSubscription(subscription) {
+	const ratePlan = isObject(subscription.rate_plan) ? subscription.rate_plan : isObject(subscription.ratePlan) ? subscription.ratePlan : {};
+	if (!isAccountScopedRatePlan(subscription, ratePlan)) return false;
+	return ratePlanIdentifiers(subscription, ratePlan).some((value) => ENTERPRISE_RATE_PLAN_IDS.has(normalizeIdentifier(value)));
+}
+function isWorkersPaidSubscription(subscription) {
+	const ratePlan = isObject(subscription.rate_plan) ? subscription.rate_plan : isObject(subscription.ratePlan) ? subscription.ratePlan : {};
+	if (!isAccountScopedRatePlan(subscription, ratePlan)) return false;
+	return ratePlanIdentifiers(subscription, ratePlan).some((value) => WORKERS_PAID_RATE_PLAN_IDS.has(normalizeIdentifier(value)));
+}
+function isAccountScopedRatePlan(subscription, ratePlan) {
+	const scope = ratePlan.scope ?? subscription.scope;
+	return scope === void 0 || normalize(scope) === "account";
+}
+function ratePlanIdentifiers(subscription, ratePlan) {
+	return [
+		stringValue(ratePlan.id),
+		stringValue(ratePlan.product),
+		stringValue(ratePlan.product_id),
+		stringValue(ratePlan.productId),
+		stringValue(subscription.product),
+		stringValue(subscription.product_id),
+		stringValue(subscription.productId)
+	].filter((value) => Boolean(value));
+}
+function normalize(value) {
+	return String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+function normalizeIdentifier(value) {
+	return value.trim().toLowerCase();
+}
+function stringValue(value) {
+	return typeof value === "string" && value.trim() ? value : void 0;
+}
+function isObject(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+new Set(METRIC_DEFINITIONS.map((definition) => definition.id));
+//#endregion
+//#region src/plan-tier.ts
+var PLAN_TIER_SETTING_KEY = "plan_tier";
+var DEFAULT_PLAN_STATE = {
+	detectedTier: "unknown",
+	overrideTier: null,
+	checkedAt: null,
+	error: null
+};
+async function readPlanState(db) {
+	return materializePlanState(parseStoredPlanState((await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(PLAN_TIER_SETTING_KEY).first())?.value));
+}
+async function saveDetectedPlan(db, detectedTier, checkedAt, error = null) {
+	const next = {
+		...await readStoredPlanState(db),
+		detectedTier,
+		checkedAt,
+		error: error?.slice(0, 2e3) ?? null
+	};
+	await writePlanState(db, next, checkedAt);
+	return materializePlanState(next);
+}
+async function savePlanOverride(db, overrideTier, updatedAt = Date.now()) {
+	const next = {
+		...await readStoredPlanState(db),
+		overrideTier
+	};
+	await writePlanState(db, next, updatedAt);
+	return materializePlanState(next);
+}
+function materializePlanState(stored) {
+	return {
+		...stored,
+		planTier: effectivePlanTier(stored.detectedTier, stored.overrideTier),
+		planTierSource: planTierSource(stored.overrideTier)
+	};
+}
+function planStateResponse(state) {
+	return {
+		planTier: state.planTier,
+		planTierSource: state.planTierSource,
+		detectedPlanTier: state.detectedTier,
+		planTierOverride: state.overrideTier,
+		planTierCheckedAt: state.checkedAt,
+		planTierError: state.error
+	};
+}
+function isPlanTier(value) {
+	return validTier(value);
+}
+async function readStoredPlanState(db) {
+	return parseStoredPlanState((await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(PLAN_TIER_SETTING_KEY).first())?.value);
+}
+async function writePlanState(db, state, updatedAt) {
+	await db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(PLAN_TIER_SETTING_KEY, JSON.stringify(state), updatedAt).run();
+}
+function parseStoredPlanState(value) {
+	if (!value) return { ...DEFAULT_PLAN_STATE };
+	try {
+		const parsed = JSON.parse(value);
+		return {
+			detectedTier: validTier(parsed.detectedTier) ? parsed.detectedTier : "unknown",
+			overrideTier: parsed.overrideTier === null || parsed.overrideTier === void 0 ? null : validTier(parsed.overrideTier) ? parsed.overrideTier : null,
+			checkedAt: typeof parsed.checkedAt === "number" && Number.isFinite(parsed.checkedAt) ? parsed.checkedAt : null,
+			error: typeof parsed.error === "string" && parsed.error ? parsed.error : null
+		};
+	} catch {
+		return { ...DEFAULT_PLAN_STATE };
+	}
+}
+function validTier(value) {
+	return value === "free" || value === "paid" || value === "enterprise" || value === "unknown";
+}
+//#endregion
 //#region src/monitor.ts
 async function runMonitor(env, options = {}) {
 	const ledgerBudget = new LedgerRunBudget(await configuredLedgerRunLimits(env.DB));
@@ -5754,6 +6041,7 @@ async function runMonitor(env, options = {}) {
 		const billingDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", 36e5, now, options.force === true);
 		const retentionDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "retention-maintenance", 36e5, now, options.force === true);
 		if (capabilityDue) await ledger.syncMetricCatalog();
+		if (billingDue) await refreshPlanTier(env, client, now);
 		const inventory = inventoryDue ? await client.inventory() : {
 			assets: [],
 			coverage: []
@@ -6094,6 +6382,15 @@ async function runMonitor(env, options = {}) {
 		await writeSentinelIncident(env.DB, env.BROLLY_ACCOUNT_ID, message);
 	}
 }
+async function refreshPlanTier(env, client, checkedAt) {
+	try {
+		const payload = await client.subscriptions();
+		await saveDetectedPlan(env.DB, classifyPlanTier(payload), checkedAt);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		await saveDetectedPlan(env.DB, "unknown", checkedAt, detail);
+	}
+}
 function collectorWindow(stored, fallbackStart, fallbackEnd) {
 	if (stored && Number.isFinite(stored.startAt) && Number.isFinite(stored.endAt) && stored.startAt < stored.endAt) return stored;
 	return {
@@ -6298,7 +6595,7 @@ function isDailySummaryHour(env) {
 //#region src/dashboard-api.ts
 async function dashboardData(env) {
 	const now = Date.now();
-	const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, currentSpendResult, actionResult] = await Promise.all([
+	const [policyRow, incidentResult, coverageResult, assetFamilyResult, tierResult, spendResult, currentSpendResult, actionResult, planState] = await Promise.all([
 		env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT i.*,a.name AS asset_name,a.parent_id,a.scope,a.tier,a.metadata_json,
         p.tier AS parent_tier,p.metadata_json AS parent_metadata_json,
@@ -6324,7 +6621,8 @@ async function dashboardData(env) {
 		env.DB.prepare(`SELECT product_family AS family,local_day,payload_json,updated_at
        FROM usage_accumulator_shards WHERE scope_type='product'
        ORDER BY local_day ASC,updated_at ASC LIMIT 1000`).all(),
-		env.DB.prepare(`SELECT id,incident_id,family,asset_id,kind,state,reason,error,created_at,updated_at FROM actions ORDER BY updated_at DESC LIMIT 20`).all()
+		env.DB.prepare(`SELECT id,incident_id,family,asset_id,kind,state,reason,error,created_at,updated_at FROM actions ORDER BY updated_at DESC LIMIT 20`).all(),
+		readPlanState(env.DB)
 	]);
 	const policy = readPolicy(policyRow?.value);
 	const incidents = incidentResult.results.map(incidentView);
@@ -6361,6 +6659,7 @@ async function dashboardData(env) {
 			id: env.BROLLY_ACCOUNT_ID,
 			timezone: env.BROLLY_TIMEZONE ?? "UTC"
 		},
+		...planStateResponse(planState),
 		policy: {
 			version: policy.version,
 			accountDailySpend: policy.accountDailySpend,
@@ -6403,18 +6702,20 @@ async function dashboardData(env) {
 	};
 }
 async function onboardingData(env) {
-	const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult] = await Promise.all([
+	const [completeRow, accountNameRow, policyRow, coverageResult, scopedAssetResult, planState] = await Promise.all([
 		env.DB.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT value FROM settings WHERE key='account_name' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT value FROM settings WHERE key='policy' LIMIT 1`).first(),
 		env.DB.prepare(`SELECT family,metric,state FROM metric_coverage`).all(),
-		env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all()
+		env.DB.prepare(`SELECT family,asset_id,name,scope,metadata_json FROM assets WHERE (family='workers' AND scope='resource') OR (family='durable_objects' AND scope='namespace') ORDER BY family,name,asset_id LIMIT 2500`).all(),
+		readPlanState(env.DB)
 	]);
 	const policy = readPolicy(policyRow?.value);
 	const coverage = coverageResult.results;
 	return {
 		accountId: env.BROLLY_ACCOUNT_ID,
 		accountName: accountNameRow?.value ?? null,
+		...planStateResponse(planState),
 		complete: completeRow?.value === "true",
 		policy: {
 			...policy,
@@ -7563,7 +7864,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "c255004e9c61cf378a231f66184326fe3b285215";
+var BROLLY_RELEASE = "ba39c4598f01beb2d82914771cae140c0c8ea0ad";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -7714,6 +8015,81 @@ function emptyStatus(repository, extra) {
 	};
 }
 //#endregion
+//#region src/estimated-billable-cost.ts
+/**
+* Gross unit prices used by the existing Workers and Durable Objects
+* collectors in cloudflare.ts. These are deliberately keyed by the full
+* metric-definition ids used by the ledger. Only sum metrics with a
+* corresponding hardcoded collector rate are included; storage/max metrics
+* need a different time-based pricing model.
+*/
+var ESTIMATED_BILLABLE_GROSS_RATES = {
+	"workers:requests": .3 / 1e6,
+	"workers:cpu_ms": .02 / 1e6,
+	"durable_objects:requests": .15 / 1e6,
+	"durable_objects:duration_gb_seconds": 12.5 / 1e6,
+	"durable_objects:incoming_websocket_messages": .15 / 1e6 / 20,
+	"durable_objects:rows_read": .001 / 1e6,
+	"durable_objects:rows_written": 1 / 1e6,
+	"durable_objects:kv_read_units": .2 / 1e6,
+	"durable_objects:kv_write_units": 1 / 1e6,
+	"durable_objects:kv_delete_requests": 1 / 1e6
+};
+/**
+* Derive the daily cost attributable to usage above each metric's included
+* quantity. The included quantity is tracked independently for every metric
+* and reset at every billing-cycle boundary.
+*
+* `paid` and `unknown` use the regular paid-plan baseline. Free and Enterprise
+* plans have no supported list-rate estimate, so they return an empty series.
+* Authoritative billing costs remain the caller's responsibility.
+*/
+function estimatedBillableCostSeries(points, cycles, allotments, planTier) {
+	if (planTier !== "paid" && planTier !== "unknown") return [];
+	const includedByMetric = /* @__PURE__ */ new Map();
+	for (const allotment of allotments) if (Number.isFinite(allotment.includedPerCycle) && allotment.includedPerCycle >= 0) includedByMetric.set(allotment.metricId, allotment.includedPerCycle);
+	const orderedCycles = cycles.map((cycle, index) => ({
+		cycle,
+		index
+	})).filter(({ cycle }) => Number.isFinite(cycle.startsAt) && Number.isFinite(cycle.endsAt) && cycle.endsAt > cycle.startsAt).sort((left, right) => left.cycle.startsAt - right.cycle.startsAt || left.cycle.endsAt - right.cycle.endsAt || left.index - right.index);
+	const orderedPoints = points.map((point, index) => ({
+		point,
+		index
+	})).sort((left, right) => left.point.day.localeCompare(right.point.day) || left.index - right.index);
+	const cycleUsage = /* @__PURE__ */ new Map();
+	return orderedPoints.map(({ point }) => {
+		const cycle = cycleForDay(orderedCycles, point.day);
+		if (!cycle) return {
+			day: point.day,
+			costUsd: 0
+		};
+		const usageByMetric = cycleUsage.get(cycle.index) ?? /* @__PURE__ */ new Map();
+		cycleUsage.set(cycle.index, usageByMetric);
+		let costUsd = 0;
+		for (const [metricId, rawValue] of Object.entries(point.metrics)) {
+			const included = includedByMetric.get(metricId);
+			const grossRate = ESTIMATED_BILLABLE_GROSS_RATES[metricId];
+			if (included === void 0 || grossRate === void 0) continue;
+			const value = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+			const previousUsage = usageByMetric.get(metricId) ?? 0;
+			const currentUsage = previousUsage + value;
+			const previousBillable = Math.max(0, previousUsage - included);
+			const currentBillable = Math.max(0, currentUsage - included);
+			costUsd += (currentBillable - previousBillable) * grossRate;
+			usageByMetric.set(metricId, currentUsage);
+		}
+		return {
+			day: point.day,
+			costUsd
+		};
+	});
+}
+function cycleForDay(cycles, day) {
+	const timestamp = Date.parse(`${day}T00:00:00.000Z`);
+	if (!Number.isFinite(timestamp)) return null;
+	return cycles.find(({ cycle }) => timestamp >= cycle.startsAt && timestamp < cycle.endsAt) ?? null;
+}
+//#endregion
 //#region src/usage-series.ts
 function scopeResourceId(accountId, scope) {
 	if (scope === "account") return resourceId(accountId, "account", "account", accountId);
@@ -7730,7 +8106,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 120)));
 	const today = new Date(now).toISOString().slice(0, 10);
 	const from = (/* @__PURE__ */ new Date(now - days * 864e5)).toISOString().slice(0, 10);
-	const [resource, daily, shards, definitions, cycles] = await Promise.all([
+	const [resource, daily, shards, definitions, cycles, planState] = await Promise.all([
 		db.prepare(`SELECT id,product_family FROM resources WHERE id=?1 LIMIT 1`).bind(id).first(),
 		db.prepare(`SELECT local_day,metrics_json,estimated_cost_usd,authoritative_allocated_cost_usd,sealed
        FROM usage_daily WHERE resource_id=?1 AND local_day>=?2 AND local_day<=?3 ORDER BY local_day ASC`).bind(id, from, today).all(),
@@ -7738,7 +8114,8 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
        WHERE account_id=?1 AND local_day>=?2 AND local_day<=?3
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`).bind(accountId, from, today).all(),
 		db.prepare(`SELECT id,metric_key,display_name,unit,billing_mapping FROM metric_definitions WHERE active=1`).all(),
-		db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`).bind(accountId, now - (days + 31) * 864e5).all()
+		db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`).bind(accountId, now - (days + 31) * 864e5).all(),
+		readPlanState(db)
 	]);
 	const byDay = /* @__PURE__ */ new Map();
 	for (const row of daily.results) byDay.set(row.local_day, {
@@ -7766,12 +8143,24 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	}
 	const series = [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
 	const present = new Set(series.flatMap((point) => Object.keys(point.metrics)));
-	const metrics = Object.fromEntries(definitions.results.filter((definition) => present.has(definition.id)).map((definition) => [definition.id, {
-		key: definition.metric_key,
-		label: definition.display_name,
-		unit: definition.unit,
-		billable: Boolean(definition.billing_mapping)
-	}]));
+	const includedAllotments = includedAllotmentsForTier(planState.planTier);
+	const includedByMetric = new Map((scope === "account" ? includedAllotments : []).map((item) => [item.metricId, item.includedPerCycle]));
+	const metrics = Object.fromEntries(definitions.results.filter((definition) => present.has(definition.id)).map((definition) => {
+		const included = includedByMetric.get(definition.id);
+		return [definition.id, {
+			key: definition.metric_key,
+			label: definition.display_name,
+			unit: definition.unit,
+			billable: Boolean(definition.billing_mapping),
+			...included === void 0 ? {} : { includedPerCycle: included }
+		}];
+	}));
+	const cycleRows = cycles.results.map((cycle) => ({
+		startsAt: cycle.starts_at,
+		endsAt: cycle.ends_at,
+		approximate: cycle.approximate === 1
+	}));
+	const billableCost = scope === "account" ? estimatedBillableCostSeries(series, cycleRows, includedAllotments, planState.planTier) : [];
 	const body = {
 		scope,
 		resourceId: id,
@@ -7779,11 +8168,11 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		today,
 		metrics,
 		series,
-		cycles: cycles.results.map((cycle) => ({
-			startsAt: cycle.starts_at,
-			endsAt: cycle.ends_at,
-			approximate: cycle.approximate === 1
-		}))
+		estimatedBillableCostSeries: billableCost,
+		cycles: cycleRows,
+		includedQuotaCatalogVersion: INCLUDED_QUOTA_CATALOG_VERSION,
+		planTier: planState.planTier,
+		planTierSource: planState.planTierSource
 	};
 	return Response.json(body);
 }
@@ -8950,6 +9339,25 @@ var src_default = {
 				return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
 			}
 		}
+		const planRoute = url.pathname === "/api/plan" || url.pathname === "/api/plan-tier";
+		if (planRoute && request.method === "GET") return Response.json(planStateResponse(await readPlanState(env.DB)), { headers: { "cache-control": "no-store" } });
+		if (planRoute && request.method === "PUT") {
+			const body = await request.json();
+			if (!(Object.hasOwn(body, "planTierOverride") || Object.hasOwn(body, "override") || Object.hasOwn(body, "tier"))) return Response.json({ error: "planTierOverride is required" }, { status: 400 });
+			const raw = Object.hasOwn(body, "planTierOverride") ? body.planTierOverride : Object.hasOwn(body, "override") ? body.override : body.tier;
+			const override = raw === null || raw === void 0 ? null : raw;
+			if (override !== null && !isPlanTier(override)) return Response.json({ error: "planTierOverride must be free, paid, enterprise, unknown, or null" }, { status: 400 });
+			const state = await savePlanOverride(env.DB, override, Date.now());
+			await audit(env.DB, actor.actor, "plan-tier.override", env.BROLLY_ACCOUNT_ID, {
+				planTier: state.planTier,
+				planTierSource: state.planTierSource,
+				planTierOverride: state.overrideTier
+			});
+			return Response.json({
+				ok: true,
+				...planStateResponse(state)
+			}, { headers: { "cache-control": "no-store" } });
+		}
 		if (url.pathname === "/api/assets" && request.method === "GET") return Response.json(await assetList(request, env));
 		if (url.pathname === "/api/cloudflare-zones" && request.method === "GET") {
 			const budget = new RunBudget({
@@ -9059,11 +9467,12 @@ var src_default = {
 			});
 		}
 		if (url.pathname === "/api/status" && request.method === "GET") {
-			const [incidentRows, coverageRow, assetRow, sampleRow] = await Promise.all([
+			const [incidentRows, coverageRow, assetRow, sampleRow, planState] = await Promise.all([
 				env.DB.prepare(`SELECT severity,family,asset_id,reason,observed,last_seen FROM incidents WHERE status='open' AND metric!='telemetry_coverage' ORDER BY CASE severity WHEN 'emergency' THEN 0 WHEN 'critical' THEN 1 ELSE 2 END,last_seen DESC LIMIT 100`).all(),
 				env.DB.prepare(`SELECT SUM(CASE WHEN state!='healthy' THEN 1 ELSE 0 END) AS c,MAX(checked_at) AS at FROM metric_coverage`).first(),
 				env.DB.prepare(`SELECT COUNT(*) AS c FROM assets`).first(),
-				env.DB.prepare(`SELECT MAX(end_at) AS at FROM metric_samples`).first()
+				env.DB.prepare(`SELECT MAX(end_at) AS at FROM metric_samples`).first(),
+				readPlanState(env.DB)
 			]);
 			return Response.json({
 				openIncidents: incidentRows.results.length,
@@ -9071,7 +9480,8 @@ var src_default = {
 				assets: assetRow?.c ?? 0,
 				lastCheckAt: coverageRow?.at ?? null,
 				lastSampleAt: sampleRow?.at ?? null,
-				incidents: incidentRows.results
+				incidents: incidentRows.results,
+				...planStateResponse(planState)
 			});
 		}
 		if (url.pathname === "/api/incidents" && request.method === "GET") {
