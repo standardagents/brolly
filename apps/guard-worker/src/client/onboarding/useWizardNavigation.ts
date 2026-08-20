@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/**
+ * Development-only deep link: `?step=4` opens the wizard with steps 1-3 done.
+ * Vite drops the branch from production builds, so deployed wizards ignore it.
+ */
+function devInitialStep(stepCount: number): number | null {
+  if (!import.meta.env.DEV) return null;
+  const raw = new URLSearchParams(window.location.search).get("step");
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed)) return null;
+  return Math.min(Math.max(parsed - 1, 0), stepCount - 1);
+}
+
 export function useWizardNavigation(stepCount: number, initialStep: number, editing: boolean) {
-  const [unlocked, setUnlocked] = useState(editing ? stepCount - 1 : initialStep);
-  const [active, setActive] = useState(initialStep);
+  const start = devInitialStep(stepCount) ?? initialStep;
+  const [unlocked, setUnlocked] = useState(editing ? stepCount - 1 : start);
+  const [active, setActive] = useState(start);
   const sectionRefs = useRef<Array<HTMLElement | null>>([]);
 
   const scrollToSection = useCallback((index: number) => {
@@ -17,8 +31,8 @@ export function useWizardNavigation(stepCount: number, initialStep: number, edit
   }, [scrollToSection, stepCount, unlocked]);
 
   useEffect(() => {
-    if (initialStep > 0) scrollToSection(initialStep);
-  }, [initialStep, scrollToSection]);
+    if (start > 0) scrollToSection(start);
+  }, [start, scrollToSection]);
 
   useEffect(() => {
     const onScroll = () => {
