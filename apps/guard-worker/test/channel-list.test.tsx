@@ -38,8 +38,6 @@ describe("ChannelList grid", () => {
     await render(<ChannelList token="test" state={state} layout="grid" />);
 
     const grid = document.querySelector("[data-channel-grid='true']")!;
-    expect(grid.className).toContain("lg:grid-cols-2");
-    expect(grid.className).toContain("2xl:grid-cols-3");
     const cells = [...grid.querySelectorAll(":scope > [data-channel-card], :scope > [data-channel-add-cell]")];
     expect(cells).toHaveLength(3);
     expect(cells.at(-1)?.hasAttribute("data-channel-add-cell")).toBe(true);

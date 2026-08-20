@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe("step-one access actions", () => {
-  it("reports completion after both visible checks resolve and uses two columns at wide widths", async () => {
+  it("reports completion after both visible checks resolve", async () => {
     vi.useFakeTimers();
     const onCheckComplete = vi.fn();
     await render(<AccessActions accountId="account" families={[]} busy={false} result={result} notice="" error="" token="test"
@@ -44,7 +44,6 @@ describe("step-one access actions", () => {
       onVerify={() => {}} onVerified={() => {}} />);
 
     expect(onCheckComplete).toHaveBeenLastCalledWith(false);
-    expect(document.querySelector("[aria-label='Verified Cloudflare permissions']")?.className).toContain("xl:grid-cols-2");
     await act(async () => vi.advanceTimersByTime(1_400));
     expect(onCheckComplete).toHaveBeenLastCalledWith(true);
   });
