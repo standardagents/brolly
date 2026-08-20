@@ -39,17 +39,21 @@ jobs:
           pnpm --filter @standardagents/brolly-docs typecheck
           pnpm build:docs
 
-      - name: Build and verify isolated Deploy Button template
-        run: |
-          pnpm build:deploy-template
-          npm --prefix deploy run build
-          pnpm exec vitest run apps/guard-worker/test/deploy-button.test.ts
-
       - name: Deploy to Cloudflare Workers
         run: pnpm --filter @standardagents/brolly-docs deploy:ci
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Everything below dirties the checkout (the template restamps
+      # brolly-release.json with GITHUB_SHA on every run), and the deploy
+      # guard above requires a clean tree at HEAD == GITHUB_SHA, so all
+      # template work runs after the site deployment.
+      - name: Build and verify isolated Deploy Button template
+        run: |
+          pnpm build:deploy-template
+          npm --prefix deploy run build
+          pnpm exec vitest run apps/guard-worker/test/deploy-button.test.ts
 
       # Publishing last: this step commits the restamped template inside the
       # checkout, and the deploy guard above requires HEAD == GITHUB_SHA.
