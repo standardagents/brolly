@@ -1,4 +1,4 @@
-import { DAY_MS, type CycleBounds, type DayPoint, cycleCumulative, cycleIndexFor, dayStart, daysBetween, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
+import { DAY_MS, type CycleBounds, type DayPoint, cycleCumulative, dayStart, daysBetween, denseSeries, monthlyCycles, projectCycle, visibleWindow } from "./cycles";
 import { type LevelValues, completeLevels, pushLevels } from "./levels";
 import { chooseAxis, median, niceLadder, snapToNice } from "./scale";
 
@@ -50,37 +50,64 @@ export function pushLevelValue(series: DayPoint[], cycles: CycleBounds[] | undef
 }
 
 /**
- * Default level values derived from a scope's typical historical usage.
- * Daily limits use the median nonzero day. Cycle limits use that
- * daily median multiplied by the current cycle length, so an anomalous past
- * cycle never becomes the norm.
+ * Default daily level values derived from a scope's typical historical usage:
+ * the median nonzero day times each level's tolerance percent. Billing-cycle
+ * values never come from tolerance directly; see `windowDefaults`.
  */
 export function toleranceDefaults(
   series: DayPoint[],
-  cyclesProp: CycleBounds[] | undefined,
   today: string,
   order: readonly string[],
   percent: LevelValues,
-  window: "day" | "cycle",
   windowDays = 90,
 ): LevelValues {
   const cutoff = dayStart(today) - Math.max(0, windowDays - 1) * DAY_MS;
   const inWindow = series.filter(point => dayStart(point.day) >= cutoff && dayStart(point.day) <= dayStart(today));
-  const dailyTypical = median(inWindow.map(point => point.value).filter(value => value > 0));
-  const cycles = cyclesProp?.length ? cyclesProp : monthlyCycles(inWindow[0]?.day ?? today, today);
-  let baseline = dailyTypical;
-
-  if (window === "cycle") {
-    // Cycle baseline = the daily typical × days in the current cycle. A
-    // median of past cycle totals would let one runaway cycle set the norm.
-    const currentIndex = cycleIndexFor(cycles, today);
-    const current = cycles[currentIndex] ?? cycles.at(-1);
-    baseline = dailyTypical * (current ? daysBetween(current.startsAt, current.endsAt) : 30);
-  }
-
+  const baseline = median(inWindow.map(point => point.value).filter(value => value > 0));
   if (!(baseline > 0)) return Object.fromEntries(order.map((id, index) => [id, niceLadder(0, order.length)[index]!])) as LevelValues;
   let values: LevelValues = Object.fromEntries(order.map(id => [id, snapToNice(baseline * Math.max(1, percent[id] ?? 100) / 100)]));
   const axis = chooseAxis(inWindow.map(point => point.value), Object.values(values));
   for (const id of order) values = pushLevels(axis, order, values, id, values[id]!);
   return values;
+}
+
+/** Days in the billing cycle that contains `today`; 30 when no cycle covers it. */
+export function cycleDaysFor(cycles: CycleBounds[] | undefined, today: string): number {
+  const todayAt = dayStart(today);
+  const current = cycles?.find(cycle => todayAt >= cycle.startsAt && todayAt < cycle.endsAt);
+  return current ? Math.max(1, daysBetween(current.startsAt, current.endsAt)) : 30;
+}
+
+/** A complete daily map scaled to the billing cycle, or undefined while a level is still missing. */
+export function dailyMultiple(daily: LevelValues | undefined, order: readonly string[], cycleDays: number): LevelValues | undefined {
+  if (!daily || !order.every(id => Number.isFinite(daily[id]))) return undefined;
+  return Object.fromEntries(order.map(id => [id, daily[id]! * cycleDays]));
+}
+
+/**
+ * The map a window sits on when nobody has edited it. Daily maps follow the
+ * risk tolerance; billing-cycle maps are the tolerance-derived daily default
+ * times the days in the current cycle (a hand-edited day map never moves the
+ * cycle default), falling back to the given daily map when no tolerance is
+ * known. Returns undefined when the basis is not available yet. The chart
+ * reset action, the collapsed-row seeding, the follow-through on tolerance
+ * changes, and the "differs from defaults" marker all compare against this
+ * one function.
+ */
+export function windowDefaults(
+  series: DayPoint[],
+  cycles: CycleBounds[] | undefined,
+  today: string,
+  order: readonly string[],
+  window: "day" | "cycle",
+  tolerance: LevelValues | undefined,
+  daily: LevelValues | undefined,
+): LevelValues | undefined {
+  const dayDefault = tolerance
+    ? defaultLevelValues(series, cycles, today, order, {}, undefined, undefined, toleranceDefaults(series, today, order, tolerance))
+    : undefined;
+  if (window === "day") return dayDefault;
+  const seed = dailyMultiple(dayDefault ?? daily, order, cycleDaysFor(cycles, today));
+  if (!seed) return undefined;
+  return defaultLevelValues(series, cycles, today, order, {}, undefined, seed);
 }

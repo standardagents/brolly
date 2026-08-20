@@ -45,7 +45,9 @@ describe("account and product limit fields", () => {
     expect(fieldVariants(account, "bare")).toEqual(fieldVariants(product, "bare"));
 
     for (const chip of container.querySelectorAll("[data-level-field][data-variant='chip']")) {
-      expect(chip.querySelector("[data-level-label], [role='switch']")).toBeNull();
+      expect(chip.querySelector("[data-level-label]")).toBeNull();
+      // The diamond is the row-level toggle.
+      expect(chip.querySelector("button[role='switch']")).not.toBeNull();
     }
     for (const field of container.querySelectorAll("[data-level-field][data-variant='bare']")) {
       expect(field.querySelector("[data-level-label]")).not.toBeNull();

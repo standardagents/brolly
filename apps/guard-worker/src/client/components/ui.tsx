@@ -70,16 +70,42 @@ export function Brand({ large = false }: { large?: boolean }) {
   );
 }
 
-/** Cloudflare product glyph, rendered from the local docs icon set via a mask so it inherits color. */
+/** Cloudflare product glyph, rendered bare from the local docs icon set via a mask so it inherits color. */
 export function ProductIcon({ family, tone = "neutral", size = "md" }: { family: string; tone?: "neutral" | "orange"; size?: "sm" | "md" }) {
   const icon = PRODUCT_ICON[family] ?? "dns";
   const compact = size === "sm";
   return (
     <span
-      className={`product-glyph relative inline-block ${compact ? "size-[22px] rounded-[5px]" : "size-[34px] rounded-[7px]"} flex-none ${tone === "orange" ? "bg-orange-soft text-orange-deep" : "bg-[#edf0f3] text-[#566070] dark:bg-[#252b32] dark:text-[#aab3bd]"}`}
+      className={`product-glyph relative inline-block ${compact ? "size-[18px]" : "size-[26px]"} flex-none ${tone === "orange" ? "text-orange-deep" : "text-[#566070] dark:text-[#aab3bd]"}`}
       style={{ "--product-icon": `url(/cloudflare-icons/${icon}.svg)` } as React.CSSProperties}
       aria-hidden="true"
     />
+  );
+}
+
+const EXPAND_MS = 260;
+
+/**
+ * Height + opacity transition on one clock. The content stays mounted while
+ * it collapses, so open and close both animate over the same duration and the
+ * closing region never snaps. Children render lazily: closed regions pay
+ * nothing.
+ */
+export function Expander({ open, children, innerClassName = "" }: { open: boolean; children: () => ReactNode; innerClassName?: string }) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) { setMounted(true); return; }
+    const timer = setTimeout(() => setMounted(false), EXPAND_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  return (
+    <div className="grid" style={{ gridTemplateRows: open ? "1fr" : "0fr", transition: `grid-template-rows ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }} aria-hidden={!open}>
+      <div className="min-h-0 overflow-hidden">
+        <div className={innerClassName} style={{ opacity: open ? 1 : 0, transition: `opacity ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }}>
+          {mounted && children()}
+        </div>
+      </div>
+    </div>
   );
 }
 

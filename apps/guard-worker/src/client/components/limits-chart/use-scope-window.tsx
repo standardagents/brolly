@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
-import { defaultLevelValues, pushLevelValue, toleranceDefaults } from "./defaults";
+import { cycleDaysFor, dailyMultiple, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
 import type { LevelValues } from "./levels";
 import { LevelTrack } from "./LevelTrack";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
@@ -16,10 +16,10 @@ export interface ScopeWindowInput {
   onCostChange(next: LevelValues): void;
   usage: UsageLimitValues;
   onUsageChange(next: UsageLimitValues): void;
-  /** Daily maps, for the cycle window: they seed cycle defaults and show as a reference. */
+  /** Daily maps, for the cycle window: cycle defaults are daily × cycle days, and they show as a reference. */
   costFloor?: LevelValues;
   usageFloor?: UsageLimitValues;
-  /** Global tolerance: levelId → percent of typical. */
+  /** Global tolerance: seeds the day window; the cycle window uses it only to recognize an untouched seeded multiple. */
   tolerance?: LevelValues;
   readOnly?: boolean;
   costLevelEnabled?: Record<string, boolean>;
@@ -31,8 +31,8 @@ export interface ScopeWindowInput {
 export interface ScopeWindow {
   metricIds: string[];
   order: string[];
-  /** The cost chart for this window (or a note while cycle waits for daily values). */
-  costChart: ReactNode;
+  /** The cost chart for this window (or a note while cycle waits for daily values). Built lazily: only the open row pays for it. */
+  costChart(): ReactNode;
   usageChart(id: string): ReactNode;
   /** Chip edits: push the value like a drag would and record undo history. */
   commitCost(levelId: string, next: number): void;
@@ -43,7 +43,7 @@ export interface ScopeWindow {
 
 /**
  * Everything one window (day or cycle) of a scope needs behind its rows:
- * default seeding for collapsed rows, tolerance follow-through, per-chart
+ * default seeding for collapsed rows, per-chart
  * undo history, chart nodes, and chip edit handlers. Layouts decide how the
  * rows look; this decides what they contain.
  */
@@ -58,14 +58,12 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   const publishUsage = (next: UsageLimitValues) => { usageRef.current = next; onUsageChange(next); };
   const changeUsage = (id: string, next: LevelValues) => publishUsage({ ...usageRef.current, [id]: next });
 
-  const cycleDays = useMemo(() => {
-    if (!data) return 30;
-    const todayAt = Date.parse(`${data.today}T00:00:00Z`);
-    const current = data.cycles.find(cycle => todayAt >= cycle.startsAt && todayAt < cycle.endsAt);
-    return current ? Math.max(1, Math.round((current.endsAt - current.startsAt) / 86_400_000)) : 30;
-  }, [data]);
-  const scaleFloor = (floor?: LevelValues) => (window === "cycle" && floor ? Object.fromEntries(Object.entries(floor).map(([id, item]) => [id, item * cycleDays])) : undefined);
-  const floorReady = (floor?: LevelValues) => window !== "cycle" || (!!floor && order.every(id => Number.isFinite(floor[id])));
+  const cycleDays = data ? cycleDaysFor(data.cycles, data.today) : 30;
+  const scaleFloor = (floor?: LevelValues) => (window === "cycle" ? dailyMultiple(floor, order, cycleDays) : undefined);
+  const floorReady = (floor?: LevelValues) => window !== "cycle" || !!dailyMultiple(floor, order, cycleDays);
+  const dayTolerance = window === "day" ? tolerance : undefined;
+  const defaultsFor = (series: ReturnType<typeof costSeries>, floor: LevelValues | undefined) =>
+    data ? windowDefaults(series, data.cycles, data.today, order, window, tolerance, floor) : undefined;
 
   // Collapsed rows show the same defaults the chart would compute.
   useEffect(() => {
@@ -73,7 +71,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
     const costMissing = order.some(levelId => !Number.isFinite(costRef.current[levelId])) && floorReady(costFloor);
     if (costMissing) {
       const series = costSeries(data);
-      const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
+      const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
       onCostChange(defaultLevelValues(series, data.cycles, data.today, order, costRef.current, undefined, scaleFloor(costFloor), fromTolerance));
     }
     const missing = metricIds.filter(id => order.some(levelId => !(Number.isFinite(usageRef.current[id]?.[levelId])))).filter(id => floorReady(usageFloor?.[id]));
@@ -81,59 +79,39 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
     const next = { ...usageRef.current };
     for (const id of missing) {
       const series = metricSeries(data, id);
-      const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
+      const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
       next[id] = defaultLevelValues(series, data.cycles, data.today, order, usageRef.current[id] ?? {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance);
     }
     publishUsage(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when data, floors, tolerance, or the level order change
-  }, [data, metricIds, order, usageFloor, costFloor, tolerance, window]);
-
-  // Maps still sitting on the previous tolerance's values follow a tolerance change.
-  const previousTolerance = useRef(tolerance);
-  useEffect(() => {
-    const previous = previousTolerance.current;
-    previousTolerance.current = tolerance;
-    if (!data || !tolerance || !previous || sameMap(previous, tolerance)) return;
-    const resetFor = (series: ReturnType<typeof costSeries>, floor: LevelValues | undefined, percent: LevelValues) =>
-      defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(floor), toleranceDefaults(series, data.cycles, data.today, order, percent, window));
-    const history = costSeries(data);
-    if (sameMap(costRef.current, resetFor(history, costFloor, previous))) onCostChange(resetFor(history, costFloor, tolerance));
-    const nextUsage = { ...usageRef.current };
-    let changed = false;
-    for (const id of metricIds) {
-      const series = metricSeries(data, id);
-      if (nextUsage[id] && sameMap(nextUsage[id]!, resetFor(series, usageFloor?.[id], previous))) { nextUsage[id] = resetFor(series, usageFloor?.[id], tolerance); changed = true; }
-    }
-    if (changed) publishUsage(nextUsage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to tolerance changes only
-  }, [tolerance]);
+  }, [data, metricIds, order, usageFloor, costFloor, dayTolerance, window]);
 
   const waitingNote = <div className="grid h-[120px] place-content-center text-center text-[13px] text-faint">Set the daily limits first. Billing-cycle limits start from them.</div>;
   // A scope with no recorded usage has nothing to plot; its levels are set on
   // a plain track in absolute units instead of a chart.
   const hasUsage = !!data && data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
-  const costChart = (() => {
+  const costChart = (): ReactNode => {
     if (!data) return null;
     if (!floorReady(costFloor)) return waitingNote;
     if (!hasUsage) return <LevelTrack levels={levels} unit="USD" value={cost} onChange={onCostChange} readOnly={readOnly} levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} />;
     const series = costSeries(data);
-    const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
-    const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(costFloor), fromTolerance) : undefined;
+    const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
+    const reset = defaultsFor(series, costFloor);
     return (
       <LimitsChart kind="cost" unit="USD" window={window} series={series} cycles={data.cycles} today={data.today}
         levels={levels} value={cost} seed={scaleFloor(costFloor)} tolerance={fromTolerance} resetToTolerance={reset}
         reference={window === "cycle" ? costFloor : undefined} onChange={onCostChange} readOnly={readOnly}
         levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} history={histories("cost")} fields="inline" />
     );
-  })();
+  };
   const usageChart = (id: string): ReactNode => {
     if (!data) return null;
     if (!floorReady(usageFloor?.[id])) return waitingNote;
     if (!hasUsage) return <LevelTrack levels={levels} unit={data.metrics[id]?.unit ?? ""} value={usage[id] ?? {}} onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined} />;
     const series = metricSeries(data, id);
-    const fromTolerance = tolerance ? toleranceDefaults(series, data.cycles, data.today, order, tolerance, window) : undefined;
-    const reset = fromTolerance ? defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, scaleFloor(usageFloor?.[id]), fromTolerance) : undefined;
+    const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
+    const reset = defaultsFor(series, usageFloor?.[id]);
     return <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={series}
       cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id])}
       tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}

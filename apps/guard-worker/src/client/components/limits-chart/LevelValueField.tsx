@@ -78,10 +78,22 @@ export function LevelValueField({ level, unit, value, enabled, onCommit, onToggl
   );
 
   if (variant === "chip") {
+    // Only the diamond (level toggle) and an editable value catch the
+    // pointer; every other pixel falls through to the row's expand button.
     return (
-      <span data-level-field data-variant="chip" className={`inline-flex min-w-0 items-center gap-1 text-[10.5px] tabular-nums text-muted transition-opacity ${enabled ? "" : "opacity-55 line-through"}`} title={title}>
-        {swatch}
-        {valueEditor}
+      <span data-level-field data-variant="chip" className={`pointer-events-none inline-flex min-w-0 items-center gap-1 text-[10.5px] tabular-nums text-muted transition-opacity ${enabled ? "" : "opacity-55 line-through"}`} title={title}>
+        {onToggle ? (
+          <button
+            type="button"
+            className="pointer-events-auto -m-1 grid flex-none cursor-pointer place-content-center p-1"
+            role="switch"
+            aria-checked={enabled}
+            aria-label={`Use ${level.label} level`}
+            title={enabled ? `${level.label} is active. Click to switch it off.` : `${level.label} is off. Click to switch it on.`}
+            onClick={() => onToggle(!enabled)}
+          >{swatch}</button>
+        ) : swatch}
+        <span className={onCommit ? "pointer-events-auto min-w-0" : "min-w-0"}>{valueEditor}</span>
       </span>
     );
   }

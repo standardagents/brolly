@@ -1,10 +1,11 @@
 import { familyControl } from "@standardagents/brolly-core";
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { LimitsChartDual, levelColor, useUsageSeries } from "../components/limits-chart";
 import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
-import { defaultLevelValues, toleranceDefaults } from "../components/limits-chart/defaults";
-import { Icon, ProductIcon, Spinner, Switch } from "../components/ui";
-import type { AlertLevel, OnboardingData, Policy } from "../types";
+import { windowDefaults } from "../components/limits-chart/defaults";
+import type { LevelValues } from "../components/limits-chart/levels";
+import { Expander, Icon, ProductIcon, Spinner, Switch } from "../components/ui";
+import type { AlertLevel, OnboardingData, Policy, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
 import { emptyScope, updateScope } from "./limits-policy";
 
@@ -64,11 +65,16 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   const undetected = ordered.filter(family => !(infoByScope[`family:${family.family}`]?.hasUsage ?? true));
   const [activeScope, setActiveScope] = useState<string | null>(null);
   const currentActive = activeScope ?? (ordered[0] ? `family:${ordered[0].family}` : null);
+  // A sidebar click pins its product as active until the smooth scroll lands,
+  // so a short section is not immediately out-voted by the next section's
+  // header crossing the spy line.
+  const pinnedScope = useRef<string | null>(null);
 
   // Scroll spy: a product becomes active once its top has risen past a line
   // 30% of the way down the visible area.
   useEffect(() => {
     const update = () => {
+      if (pinnedScope.current) return;
       const line = STICKY_TOP + (window.innerHeight - STICKY_TOP) * 0.3;
       let current: string | null = null;
       for (const family of ordered) {
@@ -84,6 +90,14 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
     return () => { window.removeEventListener("scroll", update); window.removeEventListener("resize", update); };
   }, [ordered, STICKY_TOP]);
 
+  const refFor = useMemo(() => {
+    const cache = new Map<string, (element: HTMLElement | null) => void>();
+    return (scope: string) => {
+      let callback = cache.get(scope);
+      if (!callback) { callback = element => { sectionRefs.current[scope] = element; }; cache.set(scope, callback); }
+      return callback;
+    };
+  }, []);
   const reportInfo = useCallback((scope: string, info: SectionInfo) => {
     setInfoByScope(current => {
       const previous = current[scope];
@@ -93,11 +107,18 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   }, []);
   // Product sections start collapsed; the sidebar or a row click opens one row.
   const openFor = (scope: string): OpenState => openByScope[scope] ?? null;
-  const setOpenFor = (scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next }));
+  const setOpenFor = useCallback((scope: string, next: OpenState) => setOpenByScope(current => ({ ...current, [scope]: next })), []);
   const jumpTo = (scope: string, item?: string) => {
     if (item) setOpenFor(scope, item);
     const section = sectionRefs.current[scope];
-    if (section) window.scrollTo({ top: window.scrollY + section.getBoundingClientRect().top - STICKY_TOP - 8, behavior: "smooth" });
+    if (!section) return;
+    pinnedScope.current = scope;
+    setActiveScope(scope);
+    const release = () => { pinnedScope.current = null; window.removeEventListener("scrollend", release); };
+    window.addEventListener("scrollend", release);
+    // Older engines without scrollend: release after the scroll has had time to settle.
+    setTimeout(release, 1200);
+    window.scrollTo({ top: window.scrollY + section.getBoundingClientRect().top - STICKY_TOP - 8, behavior: "smooth" });
   };
 
   if (!families.length) return <StepIntro title="Product limits">No products with usage were found for this account yet.</StepIntro>;
@@ -127,23 +148,25 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
                       <span className="min-w-0 flex-1 truncate">{family.label}{deviated.size > 0 && <span className="ml-0.5 text-orange" title="Some limits differ from the tolerance defaults">*</span>}</span>
                       {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
                     </button>
-                    {active && items.length > 0 && (
-                      <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
-                        {items.map(item => {
-                          const itemActive = item.id === openItem;
-                          const changed = deviated.has(item.id);
-                          return (
-                            <li key={item.id}>
-                              <button type="button" onClick={() => jumpTo(scope, item.id)} aria-current={itemActive ? "true" : undefined}
-                                className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12.5px] ${changed ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>
-                                <i className={`size-1.5 flex-none rounded-full ${itemActive ? "bg-orange" : "bg-transparent"}`} aria-hidden="true" />
-                                <span className="truncate">{item.label}{changed && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</span>
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    )}
+                    <Expander open={active && items.length > 0}>
+                      {() => (
+                        <ol className="ml-[30px] mt-0.5 mb-1 grid gap-0.5 border-l border-line pl-2.5">
+                          {items.map(item => {
+                            const itemActive = item.id === openItem;
+                            const changed = deviated.has(item.id);
+                            return (
+                              <li key={item.id}>
+                                <button type="button" onClick={() => jumpTo(scope, item.id)} aria-current={itemActive ? "true" : undefined}
+                                  className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12.5px] ${changed ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>
+                                  <i className={`size-1.5 flex-none rounded-full ${itemActive ? "bg-orange" : "bg-transparent"}`} aria-hidden="true" />
+                                  <span className="truncate">{item.label}{changed && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      )}
+                    </Expander>
                   </li>
                 );
               })}
@@ -157,17 +180,19 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
           return (
             <ProductSection
               key={scope}
-              ref={element => { sectionRefs.current[scope] = element; }}
+              ref={refFor(scope)}
               token={token}
               scope={scope}
               family={family.family}
               label={family.label}
               levels={chartLevels}
-              policy={policy}
+              tolerance={policy.riskTolerance?.percentOfTypical}
+              dayLimits={policy.limits?.day?.[scope]}
+              cycleLimits={policy.limits?.cycle?.[scope]}
               setPolicy={setPolicy}
               open={openFor(scope)}
-              onOpenChange={next => setOpenFor(scope, next)}
-              onInfo={info => reportInfo(scope, info)}
+              onOpenChange={setOpenFor}
+              onInfo={reportInfo}
             />
           );
         })}
@@ -176,25 +201,30 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
   </>;
 }
 
-function ProductSection({ ref, token, scope, family, label, levels, policy, setPolicy, open, onOpenChange, onInfo }: {
+/**
+ * Memoized so an edit inside one product re-renders only that product's
+ * section. Every prop is either scope-narrowed policy state (stable identity
+ * for untouched scopes) or a stable callback that takes the scope.
+ */
+const ProductSection = memo(function ProductSection({ ref, token, scope, family, label, levels, tolerance, dayLimits, cycleLimits, setPolicy, open, onOpenChange, onInfo }: {
   ref: (element: HTMLElement | null) => void;
   token: string;
   scope: string;
   family: string;
   label: string;
   levels: Array<{ id: string; label: string; color: string }>;
-  policy: Policy;
+  tolerance: LevelValues | undefined;
+  dayLimits: ScopeLimits | undefined;
+  cycleLimits: ScopeLimits | undefined;
   setPolicy: Dispatch<SetStateAction<Policy>>;
   open: OpenState;
-  onOpenChange: (next: OpenState) => void;
-  onInfo: (info: SectionInfo) => void;
+  onOpenChange: (scope: string, next: OpenState) => void;
+  onInfo: (scope: string, info: SectionInfo) => void;
 }) {
   const usage = useUsageSeries(token, scope);
   const STICKY_TOP = useStickyTop();
   const order = useMemo(() => levels.map(level => level.id), [levels]);
-  const tolerance = policy.riskTolerance?.percentOfTypical;
-  const dayLimits = policy.limits?.day?.[scope];
-  const cycleLimits = policy.limits?.cycle?.[scope];
+  const [deviatedRows, setDeviatedRows] = useState<ReadonlySet<string>>(() => new Set());
   const familyEnabled = dayLimits?.enabled ?? true;
   const policyScope = { key: scope, kind: "family", family } as const;
   const setFamilyEnabled = (next: boolean) => {
@@ -206,21 +236,21 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
     const hasUsage = data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
     const metricIds = billableMetricIds(data);
     // An item is "deviated" when either window's saved values differ from
-    // what the tolerance would set for it.
+    // its defaults: tolerance for the day window, the daily multiple for the
+    // cycle window.
     const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle") => {
-      if (!tolerance || !saved || !order.every(id => Number.isFinite(saved[id]))) return false;
-      const days = (() => { const at = Date.parse(`${data.today}T00:00:00Z`); const cycle = data.cycles.find(item => at >= item.startsAt && at < item.endsAt); return cycle ? Math.max(1, Math.round((cycle.endsAt - cycle.startsAt) / 86_400_000)) : 30; })();
-      const seed = window === "cycle" && dailySaved ? Object.fromEntries(Object.entries(dailySaved).map(([id, value]) => [id, value * days])) : undefined;
-      const expected = defaultLevelValues(series, data.cycles, data.today, order, {}, undefined, seed, toleranceDefaults(series, data.cycles, data.today, order, tolerance, window));
-      return order.some(id => expected[id] !== saved[id]);
+      if (!saved || !order.every(id => Number.isFinite(saved[id]))) return false;
+      const expected = windowDefaults(series, data.cycles, data.today, order, window, tolerance, dailySaved);
+      return !!expected && order.some(id => expected[id] !== saved[id]);
     };
     const deviated: string[] = [];
     if (deviates(costSeries(data), dayLimits?.cost, undefined, "day") || deviates(costSeries(data), cycleLimits?.cost, dayLimits?.cost, "cycle")) deviated.push("cost");
     for (const id of metricIds) {
       if (deviates(metricSeries(data, id), dayLimits?.usage?.[id], undefined, "day") || deviates(metricSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle")) deviated.push(id);
     }
-    onInfo({ hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
-  }, [usage.data, onInfo, order, tolerance, dayLimits, cycleLimits]);
+    setDeviatedRows(current => (deviated.length === current.size && deviated.every(id => current.has(id)) ? current : new Set(deviated)));
+    onInfo(scope, { hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
+  }, [usage.data, onInfo, scope, order, tolerance, dayLimits, cycleLimits]);
   const control = familyControl(family);
 
   return (
@@ -249,14 +279,15 @@ function ProductSection({ ref, token, scope, family, label, levels, policy, setP
           cycle={cycleLimits ?? emptyScope()}
           onChange={(window, change) => setPolicy(previous => updateScope(previous, window, policyScope, change))}
           tolerance={tolerance}
+          deviated={deviatedRows}
           open={familyEnabled ? open : null}
-          onOpenChange={onOpenChange}
+          onOpenChange={next => onOpenChange(scope, next)}
         />
         </div>
       )}
     </section>
   );
-}
+});
 
 function sameItems(left: SidebarItem[] | undefined, right: SidebarItem[]): boolean {
   return !!left && left.length === right.length && left.every((item, index) => item.id === right[index]!.id && item.label === right[index]!.label);

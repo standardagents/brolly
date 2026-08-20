@@ -15,13 +15,24 @@ directory.
   History is per chart, remains in memory, and holds at most 50 snapshots.
 - Usage dimensions require separate chart histories. Preserve the metric key on
   the `LimitsChart` instance when tabs switch.
-- Risk tolerance seeds missing values from the median nonzero history. Saved
-  values remain detached. Reset to tolerance records one undoable chart change.
-- Billing-cycle defaults keep daily limits times the cycle length as a default
-  lower bound. Cycle edits have no hard daily floor. A lower cycle value shows a
+- `components/limits-chart/defaults.ts` `windowDefaults` is the one definition
+  of an unedited map: daily maps come from risk tolerance times the median
+  nonzero history; billing-cycle maps are the tolerance-derived daily default
+  times the days in the current cycle. Editing a day map never moves the cycle
+  default. Reset, follow-through, and the "differs from defaults" marker all
+  compare against this one function.
+- A tolerance change moves a dimension's day and cycle maps together, and only
+  while both still sit on their defaults. Once either is edited, neither
+  follows tolerance until both are reset. Day and cycle edits never move each
+  other's map, and each window's reset returns only its own map to its
+  tolerance base. Reset records one undoable chart change and hides while the
+  map already sits on its default. Adherence moves never record undo steps.
+- Cycle edits have no hard daily floor. A lower cycle value shows a
   non-blocking reference note.
-- Compact row values contain one level swatch and one value. Level labels and
-  per-level switches belong in the expanded chart fields.
+- Compact row values contain one diamond and one value. The diamond toggles
+  its level for that window; level labels and switch controls belong in the
+  expanded chart fields. Every other pixel of a row toggles the row open or
+  closed — new row content must not add pointer-catching dead space.
 - First-run setup saves through the onboarding route. The reopened Budget
   settings flow saves through the policy PUT route. Both paths materialize
   chart maps into ledger alert rules.
@@ -46,7 +57,7 @@ directory.
   SVG under `public/cloudflare-icons/`.
 - Product icons come from Cloudflare's documentation repository. Record each
   upstream filename and retrieval date in `docs/icon-sources.md`.
-- `ProductIcon` uses the 34px row tile by default. Inline headings and compact
-  coverage lists use `size="sm"`.
+- `ProductIcon` renders a bare 26px glyph by default. Inline headings and
+  compact coverage lists use `size="sm"` (18px).
 - Demo fixtures include every catalog family so icon and label coverage can be
   inspected in first-run and returning-operator views.

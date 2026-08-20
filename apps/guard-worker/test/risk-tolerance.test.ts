@@ -7,7 +7,7 @@ import {
   tolerancePresetValues,
   typicalDay,
 } from "../src/client/onboarding/risk-tolerance";
-import { completeWithDefaults, toleranceDefaults } from "../src/client/components/limits-chart/defaults";
+import { completeWithDefaults, cycleDaysFor, toleranceDefaults, windowDefaults } from "../src/client/components/limits-chart/defaults";
 import { preparePolicy } from "../src/client/onboarding/model";
 
 describe("risk tolerance presets", () => {
@@ -106,51 +106,34 @@ describe("risk tolerance baseline", () => {
   });
 
   it("seeds chart defaults from the median instead of a spike", () => {
-    const values = toleranceDefaults(series, undefined, "2026-08-18", ["warn", "critical", "emergency"], { warn: 150, critical: 350, emergency: 800 }, "day");
+    const values = toleranceDefaults(series, "2026-08-18", ["warn", "critical", "emergency"], { warn: 150, critical: 350, emergency: 800 });
     expect(values.warn).toBeLessThan(30);
     expect(values.critical).toBeGreaterThan(values.warn!);
     expect(values.emergency).toBeGreaterThan(values.critical!);
   });
 
-  it("derives cycle defaults from the daily typical times the current cycle length, not from past cycle totals", () => {
+  it("derives cycle defaults from the tolerance daily default times the current cycle length", () => {
     const cycles = [
       { startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 0, 4) },
       { startsAt: Date.UTC(2026, 0, 4), endsAt: Date.UTC(2026, 0, 7) },
       { startsAt: Date.UTC(2026, 0, 7), endsAt: Date.UTC(2026, 0, 12) },
     ];
-    const values = toleranceDefaults([
+    const history = [
       { day: "2026-01-01", value: 2 }, { day: "2026-01-02", value: 2 }, { day: "2026-01-03", value: 2 },
       { day: "2026-01-04", value: 4 }, { day: "2026-01-05", value: 4 }, { day: "2026-01-06", value: 4 },
       { day: "2026-01-07", value: 1000 },
-    ], cycles, "2026-01-08", ["warn"], { warn: 100 }, "cycle");
-    // Daily median of nonzero days is 4; the current cycle spans 5 days.
-    expect(values.warn).toBe(20);
-  });
-
-  it("excludes a completed cycle with an interior coverage gap", () => {
-    const cycles = [
-      { startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 0, 4) },
-      { startsAt: Date.UTC(2026, 0, 4), endsAt: Date.UTC(2026, 0, 7) },
-      { startsAt: Date.UTC(2026, 0, 7), endsAt: Date.UTC(2026, 0, 12) },
     ];
-    const values = toleranceDefaults([
-      { day: "2026-01-01", value: 2 }, { day: "2026-01-02", value: 2 }, { day: "2026-01-03", value: 2 },
-      { day: "2026-01-04", value: 1_000 }, { day: "2026-01-06", value: 1_000 },
-      { day: "2026-01-07", value: 2 },
-    ], cycles, "2026-01-08", ["warn"], { warn: 100 }, "cycle");
-    expect(values.warn).toBeLessThan(100);
-  });
-
-  it("falls back to daily typical multiplied by current cycle days", () => {
-    const cycles = [
-      { startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 0, 4) },
-      { startsAt: Date.UTC(2026, 0, 4), endsAt: Date.UTC(2026, 0, 9) },
-    ];
-    const values = toleranceDefaults([
-      { day: "2026-01-01", value: 10 }, { day: "2026-01-02", value: 10 }, { day: "2026-01-03", value: 10 },
-      { day: "2026-01-04", value: 10 },
-    ], cycles, "2026-01-05", ["warn"], { warn: 150 }, "cycle");
-    expect(values.warn).toBe(76);
+    expect(cycleDaysFor(cycles, "2026-01-08")).toBe(5);
+    // Daily median is 4; the current cycle spans 5 days. A hand-edited daily
+    // map never moves the cycle default while a tolerance is known.
+    expect(windowDefaults(history, cycles, "2026-01-08", ["warn"], "cycle", { warn: 100 }, { warn: 9 })).toEqual({ warn: 20 });
+    // Without a tolerance the daily map is the fallback basis.
+    expect(windowDefaults(history, cycles, "2026-01-08", ["warn"], "cycle", undefined, { warn: 4 })).toEqual({ warn: 20 });
+    // No basis at all, no cycle default.
+    expect(windowDefaults(history, cycles, "2026-01-08", ["warn", "critical"], "cycle", undefined, { warn: 4 })).toBeUndefined();
+    // Day defaults need tolerance.
+    expect(windowDefaults(history, cycles, "2026-01-08", ["warn"], "day", undefined, undefined)).toBeUndefined();
+    expect(windowDefaults(history, cycles, "2026-01-08", ["warn"], "day", { warn: 100 }, undefined)).toEqual({ warn: 4 });
   });
 
   it("uses tolerance only for missing values and keeps the cycle seed as a default lower bound", () => {

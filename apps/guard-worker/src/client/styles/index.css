@@ -202,7 +202,7 @@
   &::after {
     content: "";
     position: absolute;
-    inset: 6px;
+    inset: 0;
     background: currentColor;
     -webkit-mask: var(--product-icon) center / contain no-repeat;
     mask: var(--product-icon) center / contain no-repeat;

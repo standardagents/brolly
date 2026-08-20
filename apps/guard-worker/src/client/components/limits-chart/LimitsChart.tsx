@@ -123,6 +123,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const last = emitted.current;
     if (last && order.every(id => last[id] === value[id])) return;
     emitted.current = value;
+    // A map that lands exactly on this chart's default arrived by following
+    // its basis (a tolerance or daily change), not by an edit: no undo step.
+    if (resetToTolerance && order.every(id => value[id] === resetToTolerance[id])) return;
     history.record(value);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- record only when the map or order changes
   }, [complete, order, value]);

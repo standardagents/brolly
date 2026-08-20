@@ -17,7 +17,6 @@ describe("Cloudflare product icons", () => {
     );
 
     expect((html.match(/product-glyph/g) ?? []).length).toBe(families.length);
-    expect((html.match(/size-\[22px\]/g) ?? []).length).toBe(families.length);
     for (const family of families) {
       const icon = PRODUCT_ICON[family];
       expect(icon, family).toBeTruthy();

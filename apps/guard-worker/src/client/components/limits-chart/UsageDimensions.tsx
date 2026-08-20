@@ -1,34 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { type CycleBounds, type DayPoint } from "./cycles";
 import { deriveSeries } from "./defaults";
 import { type LevelValues, crossedLevel } from "./levels";
 import { chooseAxis } from "./scale";
 import type { LimitsChartLevel } from "./LimitsChart";
-
-const EXPAND_MS = 260;
-
-/**
- * Height + opacity transition on one clock. The chart stays mounted while it
- * collapses, so open and close both animate over the same duration and the
- * closing row never snaps.
- */
-export function Expander({ open, children }: { open: boolean; children: React.ReactNode }) {
-  const [mounted, setMounted] = useState(open);
-  useEffect(() => {
-    if (open) { setMounted(true); return; }
-    const timer = setTimeout(() => setMounted(false), EXPAND_MS);
-    return () => clearTimeout(timer);
-  }, [open]);
-  return (
-    <div className="grid" style={{ gridTemplateRows: open ? "1fr" : "0fr", transition: `grid-template-rows ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }} aria-hidden={!open}>
-      <div className="min-h-0 overflow-hidden">
-        <div className="px-3 pb-3 pt-1" style={{ opacity: open ? 1 : 0, transition: `opacity ${EXPAND_MS}ms cubic-bezier(.2,.7,.2,1)` }}>
-          {mounted && children}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /**
  * Miniature of the main chart: one thin bar per day, colored like the main
@@ -48,7 +23,18 @@ export function MiniChart({ series, cycles, today, window, levels, values, accen
 }) {
   const bars = useMemo(() => {
     const derived = deriveSeries(series, cycles, today);
-    const points = window === "cycle" ? derived.cumulative.map(point => point.cumulative) : derived.dense.map(point => point.value);
+    let points = window === "cycle" ? derived.cumulative.map(point => point.cumulative) : derived.dense.map(point => point.value);
+    // Sub-pixel bars are invisible and expensive across dozens of rows;
+    // bucket long histories to ~60 bars, keeping each bucket's peak.
+    const MAX_BARS = 60;
+    if (points.length > MAX_BARS) {
+      const size = points.length / MAX_BARS;
+      points = Array.from({ length: MAX_BARS }, (_, bucket) => {
+        const from = Math.floor(bucket * size);
+        const to = Math.max(from + 1, Math.floor((bucket + 1) * size));
+        return Math.max(...points.slice(from, to));
+      });
+    }
     const levelValues = levels.map(level => values[level.id] ?? 0);
     // Same axis rule as the full chart: level values extend the domain and
     // the symlog switch depends on the same outlier test.
