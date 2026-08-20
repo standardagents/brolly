@@ -7563,7 +7563,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "65480ee45930e849b3f66bab43a229678f54d566";
+var BROLLY_RELEASE = "58e2620073e537e122d072e8e5f07ac5c4a13828";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
