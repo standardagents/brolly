@@ -4373,42 +4373,11 @@ var ALERT_ENTRY_KINDS = [
 	"auto_pause",
 	"auto_quarantine"
 ];
+var FIXED_BOARD_ERROR = `Brolly uses exactly 3 alert levels`;
 async function alertLevelsApiRoute(request, env, actor) {
 	const url = new URL(request.url);
 	if (url.pathname === "/api/alert-levels" && request.method === "GET") return Response.json({ levels: await loadAlertLevels(env.DB) }, { headers: { "cache-control": "no-store" } });
-	if (url.pathname === "/api/alert-levels" && request.method === "POST") {
-		const body = await request.json();
-		const label = normalizedLabel(body.label);
-		if (!label) return Response.json({ error: "Level name must contain 1 to 40 characters" }, { status: 400 });
-		const levels = await loadAlertLevels(env.DB);
-		if (levels.length >= 8) return Response.json({ error: "Brolly supports up to eight alert levels" }, { status: 400 });
-		if (levels.some((level) => sameLabel(level.label, label))) return Response.json({ error: "Alert level names must be unique" }, { status: 400 });
-		let insertAt = 0;
-		if (body.afterLevelId != null) {
-			const after = levels.findIndex((level) => level.id === body.afterLevelId);
-			if (after === -1) return Response.json({ error: "Previous alert level not found" }, { status: 400 });
-			insertAt = after + 1;
-		}
-		const id = crypto.randomUUID();
-		const now = Date.now();
-		await env.DB.prepare(`INSERT INTO alert_levels(id,position,label,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)`).bind(id, 1e4 + levels.length, label, now).run();
-		const ordered = [...levels];
-		ordered.splice(insertAt, 0, {
-			id,
-			position: insertAt,
-			label,
-			entries: []
-		});
-		await writeLevelPositions(env.DB, ordered.map((level) => level.id), now);
-		await audit$3(env.DB, actor, "alert_level.create", id, {
-			label,
-			position: insertAt
-		});
-		return Response.json({
-			ok: true,
-			level: (await loadAlertLevels(env.DB)).find((level) => level.id === id)
-		}, { status: 201 });
-	}
+	if (url.pathname === "/api/alert-levels" && request.method === "POST") return Response.json({ error: FIXED_BOARD_ERROR }, { status: 405 });
 	const levelMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)$/);
 	if (levelMatch && request.method === "PATCH") {
 		const id = decodeURIComponent(levelMatch[1]);
@@ -4437,22 +4406,7 @@ async function alertLevelsApiRoute(request, env, actor) {
 			level: (await loadAlertLevels(env.DB)).find((level) => level.id === id)
 		});
 	}
-	if (levelMatch && request.method === "DELETE") {
-		const id = decodeURIComponent(levelMatch[1]);
-		const levels = await loadAlertLevels(env.DB);
-		if (!levels.some((level) => level.id === id)) return Response.json({ error: "Alert level not found" }, { status: 404 });
-		if (levels.length === 1) return Response.json({ error: "At least one alert level must remain" }, { status: 409 });
-		const now = Date.now();
-		await env.DB.batch([env.DB.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE level_id=?1`).bind(id, now), env.DB.prepare(`DELETE FROM alert_levels WHERE id=?1`).bind(id)]);
-		const remaining = levels.filter((level) => level.id !== id);
-		await writeLevelPositions(env.DB, remaining.map((level) => level.id), now);
-		await synchronizeLinePriorities(env.DB, remaining, now);
-		await audit$3(env.DB, actor, "alert_level.delete", id, {});
-		return Response.json({
-			ok: true,
-			id
-		});
-	}
+	if (levelMatch && request.method === "DELETE") return Response.json({ error: FIXED_BOARD_ERROR }, { status: 405 });
 	const entriesMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)\/entries(?:\/([^/]+))?$/);
 	if (!entriesMatch) return null;
 	const levelId = decodeURIComponent(entriesMatch[1]);
@@ -5452,9 +5406,24 @@ function parseWorkerCursor(value) {
 //#endregion
 //#region src/policy-migration.ts
 var MAX_BATCH = 100;
+/**
+* Materialized chart rules have their own revision because policy.version is
+* user-controlled and an unchanged policy still needs the quota-scope repair.
+*/
+var POLICY_MIGRATION_REVISION = "included-quota-scopes-v2";
+function productFamilyForMetric(metricDefinitionId) {
+	const family = metricDefinitionId.split(":", 1)[0];
+	return family && METRIC_CATALOG.some((product) => product.family === family) ? family : null;
+}
+function migratedUsageScope(scopeKey, metricDefinitionId) {
+	if (scopeKey !== "account") return scopeKey;
+	const family = productFamilyForMetric(metricDefinitionId);
+	return family ? `family:${family}` : scopeKey;
+}
 async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
-	const state = await db.prepare(`SELECT value FROM settings WHERE key='usage_ledger_policy_version' LIMIT 1`).first();
-	if (!force && state?.value === policy.version) return 0;
+	const stateRows = await db.prepare(`SELECT key,value FROM settings WHERE key IN ('usage_ledger_policy_version','usage_ledger_policy_migration_revision')`).all();
+	const state = new Map(stateRows.results.map((row) => [row.key, row.value]));
+	if (!force && state.get("usage_ledger_policy_version") === policy.version && state.get("usage_ledger_policy_migration_revision") === "included-quota-scopes-v2") return 0;
 	const levels = await loadAlertLevels(db);
 	const now = Date.now();
 	const rootId = resourceId(accountId, "account", "account", accountId);
@@ -5528,43 +5497,58 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 		addUsageRule(db, statements, accountId, product.family, threshold, levels, now);
 		ruleCount += 1;
 	}
-	if (policy.limits) for (const [period, scopes] of [["day", policy.limits.day], ["billing_cycle", policy.limits.cycle]]) for (const [scopeKey, scope] of Object.entries(scopes)) {
-		const target = await resolvePolicyScope(db, accountId, rootId, scopeKey);
-		if (!target) continue;
-		if (period === "billing_cycle" && Object.keys(scope.cost).length) {
-			addRule(db, statements, {
-				id: chartRuleId(period, scopeKey, "cost"),
-				key: `limits:${period}:${scopeKey}:cost`,
-				accountId,
-				targetResourceId: target.resourceId,
-				metricDefinitionId: `${target.family}:estimated_cost_usd`,
-				measurement: "estimated_cost",
-				period,
-				enabled: scope.costEnabled,
-				lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
-				now
-			});
-			ruleCount += 1;
-		}
-		for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
-			if (!Object.keys(limits).length) continue;
-			addRule(db, statements, {
-				id: chartRuleId(period, scopeKey, `usage:${metricDefinitionId}`),
-				key: `limits:${period}:${scopeKey}:usage:${metricDefinitionId}`,
-				accountId,
-				targetResourceId: target.resourceId,
-				metricDefinitionId,
-				measurement: "usage",
-				period,
-				enabled: scope.usageEnabled?.[metricDefinitionId],
-				lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
-				now
-			});
-			ruleCount += 1;
+	for (const [period, scopes] of [["day", policy.limits?.day ?? {}], ["billing_cycle", policy.limits?.cycle ?? {}]]) {
+		const desiredAccountUsageKeys = /* @__PURE__ */ new Set();
+		for (const [scopeKey, scope] of Object.entries(scopes)) for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) if (Object.keys(limits).length && migratedUsageScope(scopeKey, metricDefinitionId) === "account") desiredAccountUsageKeys.add(`limits:${period}:${scopeKey}:usage:${metricDefinitionId}`);
+		const materializedAccountRules = await db.prepare(`SELECT legacy_policy_key FROM alert_rules
+       WHERE account_id=?1 AND retired=0 AND legacy_policy_key LIKE ?2`).bind(accountId, `limits:${period}:account:usage:%`).all();
+		for (const row of materializedAccountRules.results) if (!desiredAccountUsageKeys.has(row.legacy_policy_key)) retireRuleByKey(db, statements, accountId, row.legacy_policy_key, now);
+		for (const [scopeKey, scope] of Object.entries(scopes)) {
+			const target = await resolvePolicyScope(db, accountId, rootId, scopeKey);
+			if (!target) continue;
+			if (period === "billing_cycle" && Object.keys(scope.cost).length) {
+				addRule(db, statements, {
+					id: chartRuleId(period, scopeKey, "cost"),
+					key: `limits:${period}:${scopeKey}:cost`,
+					accountId,
+					targetResourceId: target.resourceId,
+					metricDefinitionId: `${target.family}:estimated_cost_usd`,
+					measurement: "estimated_cost",
+					period,
+					enabled: scope.costEnabled,
+					lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
+					now
+				});
+				ruleCount += 1;
+			}
+			for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
+				if (!Object.keys(limits).length) continue;
+				const materializedScopeKey = migratedUsageScope(scopeKey, metricDefinitionId);
+				if (materializedScopeKey !== scopeKey) {
+					retireRuleByKey(db, statements, accountId, `limits:${period}:${scopeKey}:usage:${metricDefinitionId}`, now);
+					if (hasExplicitFamilyUsage(scopes, materializedScopeKey, metricDefinitionId)) continue;
+				}
+				const usageTarget = materializedScopeKey === scopeKey ? target : await resolvePolicyScope(db, accountId, rootId, materializedScopeKey);
+				if (!usageTarget) continue;
+				addRule(db, statements, {
+					id: chartRuleId(period, materializedScopeKey, `usage:${metricDefinitionId}`),
+					key: `limits:${period}:${materializedScopeKey}:usage:${metricDefinitionId}`,
+					accountId,
+					targetResourceId: usageTarget.resourceId,
+					metricDefinitionId,
+					measurement: "usage",
+					period,
+					enabled: scope.usageEnabled?.[metricDefinitionId],
+					lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
+					now
+				});
+				ruleCount += 1;
+			}
 		}
 	}
 	statements.push(db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('usage_ledger_policy_version',?1,?2)
-       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(policy.version, now), db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(policy.version, now), db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('usage_ledger_policy_migration_revision',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(POLICY_MIGRATION_REVISION, now), db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
        VALUES(?1,'brolly-migration','policy.rules.migrate',?2,?3,?4)`).bind(crypto.randomUUID(), policy.version, JSON.stringify({ rules: ruleCount }), now));
 	await runBatches$1(db, statements);
 	return ruleCount;
@@ -5648,6 +5632,17 @@ function addRule(db, statements, input) {
        ON CONFLICT(alert_rule_id,level_id) DO UPDATE SET
          label=excluded.label,color=excluded.color,priority=excluded.priority,threshold_value=excluded.threshold_value,
          repeat_interval_ms=excluded.repeat_interval_ms,enabled=excluded.enabled,retired=0,updated_at=excluded.updated_at`).bind(`${input.id}:${line.levelId}`, input.id, line.levelId, line.label, line.color, line.priority, line.value, line.enabled ? 1 : 0, input.now));
+}
+function hasExplicitFamilyUsage(scopes, scopeKey, metricDefinitionId) {
+	const limits = scopes[scopeKey]?.usage?.[metricDefinitionId];
+	return Boolean(limits && Object.keys(limits).length);
+}
+function retireRuleByKey(db, statements, accountId, legacyPolicyKey, now) {
+	statements.push(db.prepare(`UPDATE alert_lines SET enabled=0,retired=1,updated_at=?2
+       WHERE alert_rule_id IN (
+         SELECT id FROM alert_rules WHERE account_id=?1 AND legacy_policy_key=?3
+       )`).bind(accountId, now, legacyPolicyKey), db.prepare(`UPDATE alert_rules SET enabled=0,retired=1,updated_at=?3
+       WHERE account_id=?1 AND legacy_policy_key=?2`).bind(accountId, legacyPolicyKey, now));
 }
 function materializedSpendLines(limits, levels, levelEnabled) {
 	return levels.flatMap((level, index) => finiteLimit(limits[level.id]) ? [{
@@ -5776,15 +5771,53 @@ var WORKERS_PAID_D1 = [
 		unit: "bytes"
 	}
 ];
-var WORKERS_PAID_DURABLE_OBJECTS = [{
-	metricId: "durable_objects:requests",
-	includedPerCycle: 1e6,
-	unit: "requests"
-}, {
-	metricId: "durable_objects:duration_gb_seconds",
-	includedPerCycle: 4e5,
-	unit: "gb_seconds"
-}];
+var WORKERS_PAID_DURABLE_OBJECTS = [
+	{
+		metricId: "durable_objects:requests",
+		includedPerCycle: 1e6,
+		unit: "requests"
+	},
+	{
+		metricId: "durable_objects:duration_gb_seconds",
+		includedPerCycle: 4e5,
+		unit: "gb_seconds"
+	},
+	{
+		metricId: "durable_objects:rows_read",
+		includedPerCycle: 25e9,
+		unit: "rows"
+	},
+	{
+		metricId: "durable_objects:rows_written",
+		includedPerCycle: 5e7,
+		unit: "rows"
+	},
+	{
+		metricId: "durable_objects:sql_storage_bytes",
+		includedPerCycle: 5e9,
+		unit: "bytes"
+	},
+	{
+		metricId: "durable_objects:kv_read_units",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "durable_objects:kv_write_units",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "durable_objects:kv_delete_requests",
+		includedPerCycle: 1e6,
+		unit: "count"
+	},
+	{
+		metricId: "durable_objects:kv_storage_bytes",
+		includedPerCycle: 1e9,
+		unit: "bytes"
+	}
+];
 var WORKERS_PAID_R2 = [
 	{
 		metricId: "r2:class_a",
@@ -5807,6 +5840,18 @@ var WORKERS_PAID_QUEUES = [{
 	includedPerCycle: 1e6,
 	unit: "count"
 }];
+/**
+* Metrics that have no meter of their own but bill into another metric's
+* shared allotment. `ratio` source units count as one billed unit of the
+* target meter. The dashboard shows this as a note on the source row, and
+* the billable-cost estimator folds the converted quantity into the target
+* meter's cycle consumption.
+*/
+var BILLED_VIA = { "durable_objects:incoming_websocket_messages": {
+	metricId: "durable_objects:requests",
+	ratio: 20,
+	label: "Durable Objects request"
+} };
 var WORKERS_PAID_INCLUDED = [
 	...WORKERS_PAID_WORKERS,
 	...WORKERS_PAID_KV,
@@ -7864,7 +7909,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "ba39c4598f01beb2d82914771cae140c0c8ea0ad";
+var BROLLY_RELEASE = "644adc2e7176089f8f410e437873a2cedf0ef8c1";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -8028,7 +8073,6 @@ var ESTIMATED_BILLABLE_GROSS_RATES = {
 	"workers:cpu_ms": .02 / 1e6,
 	"durable_objects:requests": .15 / 1e6,
 	"durable_objects:duration_gb_seconds": 12.5 / 1e6,
-	"durable_objects:incoming_websocket_messages": .15 / 1e6 / 20,
 	"durable_objects:rows_read": .001 / 1e6,
 	"durable_objects:rows_written": 1 / 1e6,
 	"durable_objects:kv_read_units": .2 / 1e6,
@@ -8066,7 +8110,7 @@ function estimatedBillableCostSeries(points, cycles, allotments, planTier) {
 		const usageByMetric = cycleUsage.get(cycle.index) ?? /* @__PURE__ */ new Map();
 		cycleUsage.set(cycle.index, usageByMetric);
 		let costUsd = 0;
-		for (const [metricId, rawValue] of Object.entries(point.metrics)) {
+		for (const [metricId, rawValue] of Object.entries(foldBilledVia(point.metrics))) {
 			const included = includedByMetric.get(metricId);
 			const grossRate = ESTIMATED_BILLABLE_GROSS_RATES[metricId];
 			if (included === void 0 || grossRate === void 0) continue;
@@ -8084,6 +8128,23 @@ function estimatedBillableCostSeries(points, cycles, allotments, planTier) {
 		};
 	});
 }
+/**
+* Fold metrics that bill into another meter (see BILLED_VIA) into that
+* meter's quantity, so shared allotments deplete correctly. Incoming
+* WebSocket messages, for example, consume Durable Objects requests at 20:1.
+*/
+function foldBilledVia(metrics) {
+	if (!Object.keys(metrics).some((metricId) => BILLED_VIA[metricId])) return { ...metrics };
+	const folded = { ...metrics };
+	for (const [metricId, target] of Object.entries(BILLED_VIA)) {
+		const value = folded[metricId];
+		if (value === void 0) continue;
+		delete folded[metricId];
+		const converted = Math.max(0, Number.isFinite(value) ? value : 0) / target.ratio;
+		folded[target.metricId] = (folded[target.metricId] ?? 0) + converted;
+	}
+	return folded;
+}
 function cycleForDay(cycles, day) {
 	const timestamp = Date.parse(`${day}T00:00:00.000Z`);
 	if (!Number.isFinite(timestamp)) return null;
@@ -8099,6 +8160,13 @@ function scopeResourceId(accountId, scope) {
 	if (asset) return resourceId(accountId, asset[1], `${asset[1]}:${asset[2]}`, asset[3]);
 	return null;
 }
+function familyScope(scope) {
+	return scope.match(/^family:([^:]+)$/)?.[1] ?? null;
+}
+function metricFamily(metricId) {
+	const separator = metricId.indexOf(":");
+	return separator > 0 ? metricId.slice(0, separator) : null;
+}
 async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const scope = url.searchParams.get("scope") ?? "account";
 	const id = scopeResourceId(accountId, scope);
@@ -8113,7 +8181,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		db.prepare(`SELECT local_day,payload_json FROM usage_accumulator_shards
        WHERE account_id=?1 AND local_day>=?2 AND local_day<=?3
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`).bind(accountId, from, today).all(),
-		db.prepare(`SELECT id,metric_key,display_name,unit,billing_mapping FROM metric_definitions WHERE active=1`).all(),
+		db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping FROM metric_definitions WHERE active=1`).all(),
 		db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`).bind(accountId, now - (days + 31) * 864e5).all(),
 		readPlanState(db)
 	]);
@@ -8144,15 +8212,19 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const series = [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
 	const present = new Set(series.flatMap((point) => Object.keys(point.metrics)));
 	const includedAllotments = includedAllotmentsForTier(planState.planTier);
-	const includedByMetric = new Map((scope === "account" ? includedAllotments : []).map((item) => [item.metricId, item.includedPerCycle]));
+	const family = familyScope(scope);
+	const familyAllotments = family ? includedAllotments.filter((item) => metricFamily(item.metricId) === family) : [];
+	const includedByMetric = new Map(familyAllotments.map((item) => [item.metricId, item.includedPerCycle]));
 	const metrics = Object.fromEntries(definitions.results.filter((definition) => present.has(definition.id)).map((definition) => {
 		const included = includedByMetric.get(definition.id);
 		return [definition.id, {
 			key: definition.metric_key,
 			label: definition.display_name,
 			unit: definition.unit,
-			billable: Boolean(definition.billing_mapping),
-			...included === void 0 ? {} : { includedPerCycle: included }
+			aggregationKind: definition.aggregation_kind,
+			billable: Boolean(definition.billing_mapping) || Boolean(BILLED_VIA[definition.id]),
+			...included === void 0 ? {} : { includedPerCycle: included },
+			...BILLED_VIA[definition.id] ? { billedVia: BILLED_VIA[definition.id] } : {}
 		}];
 	}));
 	const cycleRows = cycles.results.map((cycle) => ({
@@ -8160,7 +8232,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		endsAt: cycle.ends_at,
 		approximate: cycle.approximate === 1
 	}));
-	const billableCost = scope === "account" ? estimatedBillableCostSeries(series, cycleRows, includedAllotments, planState.planTier) : [];
+	const billableCost = scope === "account" || family ? estimatedBillableCostSeries(series, cycleRows, scope === "account" ? includedAllotments : familyAllotments, planState.planTier) : [];
 	const body = {
 		scope,
 		resourceId: id,
