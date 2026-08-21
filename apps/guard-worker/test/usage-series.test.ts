@@ -50,12 +50,15 @@ describe("usage series", () => {
       ["2026-08-15", 0.3, 1000, true],
       ["2026-08-17", 0.075, 250, false],
     ]);
-    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", billable: true });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true, includedPerCycle: 10_000_000 });
     expect(body.includedQuotaCatalogVersion).toBe("2026-08");
     expect(body.planTier).toBe("unknown");
     expect(body.planTierSource).toBe("api");
     expect(body.cycles).toEqual([{ startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1), approximate: true }]);
-    expect(body.estimatedBillableCostSeries).toEqual([]);
+    expect(body.estimatedBillableCostSeries).toEqual([
+      { day: "2026-08-15", costUsd: 0 },
+      { day: "2026-08-17", costUsd: 0 },
+    ]);
   });
 
   it("adds estimated billable cost for account usage above the included allotment", async () => {
@@ -78,8 +81,31 @@ describe("usage series", () => {
     ).bind(ACCOUNT, Date.UTC(2026, 7, 1), Date.UTC(2026, 8, 1)).run();
 
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=account"), NOW)).json() as UsageSeriesResponse;
-    expect(body.metrics["workers:requests"]?.includedPerCycle).toBe(10_000_000);
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true });
+    expect(body.series[0]?.metrics["workers:requests"]).toBe(11_000_000);
+    expect(body.series[0]?.costUsd).toBe(3.3);
     expect(body.estimatedBillableCostSeries).toEqual([{ day: "2026-08-15", costUsd: 0.3 }]);
+  });
+
+  it("exposes maximum aggregation for storage metrics and their family quota", async () => {
+    const id = resourceId(ACCOUNT, "durable_objects", "product", "durable_objects");
+    await d1.db.prepare(
+      `INSERT INTO resources(id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,first_seen_at,last_seen_at)
+       VALUES(?1,?2,NULL,'durable_objects','product','durable_objects','Durable Objects',?3,?3)`,
+    ).bind(id, ACCOUNT, NOW).run();
+    await d1.db.prepare(
+      `INSERT INTO metric_definitions(id,product_family,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key,finest_scope,catalog_version)
+       VALUES('durable_objects:sql_storage_bytes','durable_objects','sql_storage_bytes','SQL storage','bytes','maximum','durable_objects_sql_storage','graphql:durable_objects','resource','v1')`,
+    ).run();
+    await d1.db.prepare(
+      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
+       VALUES(?1,'2026-08-15',0,0,'{"durable_objects:sql_storage_bytes":2000000000}',0.30,'complete',1,?2)`,
+    ).bind(id, NOW).run();
+
+    const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:durable_objects"), NOW)).json() as UsageSeriesResponse;
+    expect(body.metrics["durable_objects:sql_storage_bytes"]).toEqual({
+      key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", aggregationKind: "maximum", billable: true, includedPerCycle: 5_000_000_000,
+    });
   });
 
   it("rejects malformed scopes and reports unknown resources as not found", async () => {
@@ -112,7 +138,7 @@ describe("usage series", () => {
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:workers"), NOW)).json() as UsageSeriesResponse;
     expect(body.planTier).toBe("free");
     expect(body.planTierSource).toBe("api");
-    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", billable: true });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true });
     expect(body.estimatedBillableCostSeries).toEqual([]);
   });
 });

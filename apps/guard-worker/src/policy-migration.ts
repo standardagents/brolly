@@ -3,16 +3,35 @@ import { loadAlertLevels, type AlertLevel } from "./alert-levels.js";
 
 const MAX_BATCH = 100;
 
+/**
+ * Materialized chart rules have their own revision because policy.version is
+ * user-controlled and an unchanged policy still needs the quota-scope repair.
+ */
+export const POLICY_MIGRATION_REVISION = "included-quota-scopes-v2";
+
+export function productFamilyForMetric(metricDefinitionId: string): string | null {
+  const family = metricDefinitionId.split(":", 1)[0];
+  return family && METRIC_CATALOG.some(product => product.family === family) ? family : null;
+}
+
+export function migratedUsageScope(scopeKey: string, metricDefinitionId: string): string {
+  if (scopeKey !== "account") return scopeKey;
+  const family = productFamilyForMetric(metricDefinitionId);
+  return family ? `family:${family}` : scopeKey;
+}
+
 export async function migrateLegacyPolicyRules(
   db: D1Database,
   accountId: string,
   policy: Policy,
   force = false,
 ): Promise<number> {
-  const state = await db.prepare(
-    `SELECT value FROM settings WHERE key='usage_ledger_policy_version' LIMIT 1`,
-  ).first<{ value: string }>();
-  if (!force && state?.value === policy.version) return 0;
+  const stateRows = await db.prepare(
+    `SELECT key,value FROM settings WHERE key IN ('usage_ledger_policy_version','usage_ledger_policy_migration_revision')`,
+  ).all<{ key: string; value: string }>();
+  const state = new Map(stateRows.results.map(row => [row.key, row.value]));
+  if (!force && state.get("usage_ledger_policy_version") === policy.version
+    && state.get("usage_ledger_policy_migration_revision") === POLICY_MIGRATION_REVISION) return 0;
   const levels = await loadAlertLevels(db);
   const now = Date.now();
   const rootId = resourceId(accountId, "account", "account", accountId);
@@ -101,42 +120,65 @@ export async function migrateLegacyPolicyRules(
     }
   }
 
-  if (policy.limits) {
-    for (const [period, scopes] of [["day", policy.limits.day], ["billing_cycle", policy.limits.cycle]] as const) {
-      for (const [scopeKey, scope] of Object.entries(scopes)) {
-        const target = await resolvePolicyScope(db, accountId, rootId, scopeKey);
-        if (!target) continue;
-        if (period === "billing_cycle" && Object.keys(scope.cost).length) {
-          addRule(db, statements, {
-            id: chartRuleId(period, scopeKey, "cost"),
-            key: `limits:${period}:${scopeKey}:cost`,
-            accountId,
-            targetResourceId: target.resourceId,
-            metricDefinitionId: `${target.family}:estimated_cost_usd`,
-            measurement: "estimated_cost",
-            period,
-            enabled: scope.costEnabled,
-            lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
-            now,
-          });
-          ruleCount += 1;
+  for (const [period, scopes] of [["day", policy.limits?.day ?? {}], ["billing_cycle", policy.limits?.cycle ?? {}]] as const) {
+    const desiredAccountUsageKeys = new Set<string>();
+    for (const [scopeKey, scope] of Object.entries(scopes)) {
+      for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
+        if (Object.keys(limits).length && migratedUsageScope(scopeKey, metricDefinitionId) === "account") {
+          desiredAccountUsageKeys.add(`limits:${period}:${scopeKey}:usage:${metricDefinitionId}`);
         }
-        for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
-          if (!Object.keys(limits).length) continue;
-          addRule(db, statements, {
-            id: chartRuleId(period, scopeKey, `usage:${metricDefinitionId}`),
-            key: `limits:${period}:${scopeKey}:usage:${metricDefinitionId}`,
-            accountId,
-            targetResourceId: target.resourceId,
-            metricDefinitionId,
-            measurement: "usage",
-            period,
-            enabled: scope.usageEnabled?.[metricDefinitionId],
-            lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
-            now,
-          });
-          ruleCount += 1;
+      }
+    }
+    const materializedAccountRules = await db.prepare(
+      `SELECT legacy_policy_key FROM alert_rules
+       WHERE account_id=?1 AND retired=0 AND legacy_policy_key LIKE ?2`,
+    ).bind(accountId, `limits:${period}:account:usage:%`).all<{ legacy_policy_key: string }>();
+    for (const row of materializedAccountRules.results) {
+      if (!desiredAccountUsageKeys.has(row.legacy_policy_key)) retireRuleByKey(db, statements, accountId, row.legacy_policy_key, now);
+    }
+
+    for (const [scopeKey, scope] of Object.entries(scopes)) {
+      const target = await resolvePolicyScope(db, accountId, rootId, scopeKey);
+      if (!target) continue;
+      if (period === "billing_cycle" && Object.keys(scope.cost).length) {
+        addRule(db, statements, {
+          id: chartRuleId(period, scopeKey, "cost"),
+          key: `limits:${period}:${scopeKey}:cost`,
+          accountId,
+          targetResourceId: target.resourceId,
+          metricDefinitionId: `${target.family}:estimated_cost_usd`,
+          measurement: "estimated_cost",
+          period,
+          enabled: scope.costEnabled,
+          lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
+          now,
+        });
+        ruleCount += 1;
+      }
+      for (const [metricDefinitionId, limits] of Object.entries(scope.usage)) {
+        if (!Object.keys(limits).length) continue;
+        const materializedScopeKey = migratedUsageScope(scopeKey, metricDefinitionId);
+        if (materializedScopeKey !== scopeKey) {
+          retireRuleByKey(db, statements, accountId, `limits:${period}:${scopeKey}:usage:${metricDefinitionId}`, now);
+          if (hasExplicitFamilyUsage(scopes, materializedScopeKey, metricDefinitionId)) continue;
         }
+        const usageTarget = materializedScopeKey === scopeKey
+          ? target
+          : await resolvePolicyScope(db, accountId, rootId, materializedScopeKey);
+        if (!usageTarget) continue;
+        addRule(db, statements, {
+          id: chartRuleId(period, materializedScopeKey, `usage:${metricDefinitionId}`),
+          key: `limits:${period}:${materializedScopeKey}:usage:${metricDefinitionId}`,
+          accountId,
+          targetResourceId: usageTarget.resourceId,
+          metricDefinitionId,
+          measurement: "usage",
+          period,
+          enabled: scope.usageEnabled?.[metricDefinitionId],
+          lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
+          now,
+        });
+        ruleCount += 1;
       }
     }
   }
@@ -146,6 +188,10 @@ export async function migrateLegacyPolicyRules(
       `INSERT INTO settings(key,value,updated_at) VALUES('usage_ledger_policy_version',?1,?2)
        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
     ).bind(policy.version, now),
+    db.prepare(
+      `INSERT INTO settings(key,value,updated_at) VALUES('usage_ledger_policy_migration_revision',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+    ).bind(POLICY_MIGRATION_REVISION, now),
     db.prepare(
       `INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
        VALUES(?1,'brolly-migration','policy.rules.migrate',?2,?3,?4)`,
@@ -277,6 +323,38 @@ function addRule(db: D1Database, statements: D1PreparedStatement[], input: {
       line.priority, line.value, line.enabled ? 1 : 0, input.now,
     ));
   }
+}
+
+function hasExplicitFamilyUsage(
+  scopes: Record<string, ScopeLimits>,
+  scopeKey: string,
+  metricDefinitionId: string,
+): boolean {
+  const limits = scopes[scopeKey]?.usage?.[metricDefinitionId];
+  return Boolean(limits && Object.keys(limits).length);
+}
+
+function retireRuleByKey(
+  db: D1Database,
+  statements: D1PreparedStatement[],
+  accountId: string,
+  legacyPolicyKey: string,
+  now: number,
+): void {
+  // Retire generated chart rules and lines so alert history and audit records
+  // remain queryable while the stale rule leaves active evaluation.
+  statements.push(
+    db.prepare(
+      `UPDATE alert_lines SET enabled=0,retired=1,updated_at=?2
+       WHERE alert_rule_id IN (
+         SELECT id FROM alert_rules WHERE account_id=?1 AND legacy_policy_key=?3
+       )`,
+    ).bind(accountId, now, legacyPolicyKey),
+    db.prepare(
+      `UPDATE alert_rules SET enabled=0,retired=1,updated_at=?3
+       WHERE account_id=?1 AND legacy_policy_key=?2`,
+    ).bind(accountId, legacyPolicyKey, now),
+  );
 }
 
 export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[], levelEnabled?: Record<string, boolean>): Array<{

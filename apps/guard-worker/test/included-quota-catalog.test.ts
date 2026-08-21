@@ -21,6 +21,18 @@ describe("included quota catalog", () => {
     expect(INCLUDED_QUOTA_CATALOG_VERSION).toMatch(/^\d{4}-\d{2}$/);
   });
 
+  it("uses billed Durable Objects units and omits raw WebSocket messages", () => {
+    const allotments = new Map(WORKERS_PAID_INCLUDED.map(item => [item.metricId, item.includedPerCycle]));
+    expect(allotments.get("durable_objects:rows_read")).toBe(25_000_000_000);
+    expect(allotments.get("durable_objects:rows_written")).toBe(50_000_000);
+    expect(allotments.get("durable_objects:sql_storage_bytes")).toBe(5_000_000_000);
+    expect(allotments.get("durable_objects:kv_read_units")).toBe(1_000_000);
+    expect(allotments.get("durable_objects:kv_write_units")).toBe(1_000_000);
+    expect(allotments.get("durable_objects:kv_delete_requests")).toBe(1_000_000);
+    expect(allotments.get("durable_objects:kv_storage_bytes")).toBe(1_000_000_000);
+    expect(allotments.has("durable_objects:incoming_websocket_messages")).toBe(false);
+  });
+
   it("classifies account subscription fixtures by active exact plan ids", () => {
     expect(classifyPlanTier({ success: true, result: [{ state: "Paid", rate_plan: { id: "enterprise" } }] })).toBe("enterprise");
     expect(classifyPlanTier({ success: true, result: [{ state: "Paid", rate_plan: { id: "workers_paid" } }] })).toBe("paid");

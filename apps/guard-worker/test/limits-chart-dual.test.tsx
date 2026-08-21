@@ -31,7 +31,14 @@ const paidQuotaResponse: UsageSeriesResponse = {
   planTier: "paid",
   metrics: { requests: { ...response.metrics.requests, includedPerCycle: 20_000 } },
 };
-const enterpriseQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, planTier: "enterprise" };
+const familyQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, scope: "family:workers", resourceId: "workers" };
+const resourceQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, scope: "asset:workers:resource:api", resourceId: "api" };
+const storageFamilyResponse: UsageSeriesResponse = {
+  ...familyQuotaResponse,
+  metrics: { storage: { key: "storage", label: "Storage", unit: "bytes", billable: true, includedPerCycle: 100, aggregationKind: "maximum" } },
+  series: familyQuotaResponse.series.map((point, index) => ({ ...point, metrics: { storage: [60, 20, 40, 30][index] ?? 0 } })),
+};
+const enterpriseQuotaResponse: UsageSeriesResponse = { ...familyQuotaResponse, planTier: "enterprise" };
 
 let root: Root | null = null;
 afterEach(() => {
@@ -40,8 +47,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, deviated, data = response }: { dayCost?: Record<string, number>; cycleCost?: Record<string, number>; costOnly?: boolean; deviated?: ReadonlySet<string>; data?: UsageSeriesResponse }) {
-  const [day, setDay] = useState<WindowLimits>({ cost: dayCost, usage: { requests: { warn: 150, critical: 300 } } });
+function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, emptyUsage = false, deviated, data = response }: { dayCost?: Record<string, number>; cycleCost?: Record<string, number>; costOnly?: boolean; emptyUsage?: boolean; deviated?: ReadonlySet<string>; data?: UsageSeriesResponse }) {
+  const [day, setDay] = useState<WindowLimits>({ cost: dayCost, usage: emptyUsage ? {} : { requests: { warn: 150, critical: 300 } } });
   const [cycle, setCycle] = useState<WindowLimits>({ cost: cycleCost, usage: {} });
   const [tolerance, setTolerance] = useState({ warn: 150, critical: 800 });
   const [open, setOpen] = useState<string | null>("cost");
@@ -56,10 +63,12 @@ function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, deviated, dat
 }
 
 describe("LimitsChartDual tolerance behavior", () => {
-  it("renders account usage rows and seeds the cycle map from its included allotment", async () => {
-    const container = await render(<Harness data={paidQuotaResponse} />);
-    await waitFor(() => expect(readWindow(container, "cycle").usage.requests).toEqual({ warn: 16_000, critical: 20_000 }));
+  it("renders family usage rows, the included band, and allotment-anchored cycle seeds", async () => {
+    const container = await render(<Harness data={familyQuotaResponse} />);
+    await waitFor(() => expect(readWindow(container, "cycle").usage.requests).toEqual({ warn: 30_000, critical: 160_000 }));
     expect(container.querySelector("[aria-label='Expand Requests']")).not.toBeNull();
+    await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
+    await waitFor(() => expect(container.querySelector("[data-included-boundary]")).not.toBeNull());
   });
 
   it("keeps enterprise usage active while disabling only the cost row", async () => {
@@ -69,6 +78,28 @@ describe("LimitsChartDual tolerance behavior", () => {
     expect(cost.disabled).toBe(true);
     expect(requests.disabled).toBe(false);
     expect(container.textContent).toContain("Cost tracking is not supported on Enterprise plans currently.");
+  });
+
+  it("keeps resource charts outside included quota placement", async () => {
+    const container = await render(<Harness data={resourceQuotaResponse} />);
+    await waitFor(() => expect(readWindow(container, "cycle").usage.requests).not.toEqual({ warn: 30_000, critical: 160_000 }));
+    await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
+    await waitFor(() => expect(container.querySelectorAll("[data-limits-chart='usage']")).toHaveLength(2));
+    expect(container.querySelector("[data-included-boundary]")).toBeNull();
+  });
+
+  it("uses running maxima for family storage cycle seeds", async () => {
+    const container = await render(<Harness data={storageFamilyResponse} />);
+    await waitFor(() => expect(readWindow(container, "cycle").usage.storage).toEqual({ warn: 150, critical: 800 }));
+    await act(async () => (container.querySelector("[aria-label='Expand Storage']") as HTMLButtonElement).click());
+    await waitFor(() => expect(container.querySelector("[data-included-boundary]")).not.toBeNull());
+  });
+
+  it("keeps account cost-only policy maps free of usage seeds", async () => {
+    const container = await render(<Harness costOnly emptyUsage />);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(readWindow(container, "day").usage).toEqual({});
+    expect(readWindow(container, "cycle").usage).toEqual({});
   });
 
   it("seeds an empty chart from tolerance while hand-edited maps stay fixed", async () => {
@@ -212,7 +243,7 @@ describe("LimitsChartDual tolerance behavior", () => {
     }
   });
 
-  it("shows a cursor tooltip per day and lights hovered cycle days, with no native titles", async () => {
+  it("shows a cursor tooltip per day on both charts, with no native titles", async () => {
     const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} cycleCost={{ warn: 400, critical: 800 }} costOnly />);
     const charts = container.querySelectorAll("[data-limits-chart='cost']");
     expect(container.querySelector("svg title")).toBeNull();
@@ -227,8 +258,8 @@ describe("LimitsChartDual tolerance behavior", () => {
     const cycleTip = charts[1]!.querySelector("[data-chart-tooltip]")!;
     expect(cycleTip.textContent).toContain("$10.00");
     // The lit look is an overlay rect stacked on the 0.16 base bar (combined ≈ 0.38).
-    const litBars = [...charts[1]!.querySelectorAll("rect[rx]")].filter(bar => bar.getAttribute("opacity") === "0.26");
-    expect(litBars).toHaveLength(1);
+    // The cycle chart draws no daily bars, so nothing lights up there.
+    expect(charts[1]!.querySelectorAll("rect[rx]")).toHaveLength(0);
     // Both charts highlight the hovered column; the cycle band is fainter.
     expect(charts[0]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".07");
     expect(charts[1]!.querySelector("[data-hover-band]")!.getAttribute("opacity")).toBe(".045");

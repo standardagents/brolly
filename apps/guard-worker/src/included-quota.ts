@@ -61,12 +61,24 @@ const WORKERS_PAID_D1: IncludedAllotment[] = [
 /*
  * Verification date: 2026-08-20.
  * Durable Objects: https://developers.cloudflare.com/durable-objects/platform/pricing/
- * The Paid plan table lists 1 million requests and 400,000 GB-seconds per
- * month. Only metrics represented by Brolly's billable catalog are included.
+ * The current Paid plan table lists 1 million requests, 400,000 GB-seconds,
+ * 25 billion rows read, 50 million rows written, 5 GB SQL storage, 1 million
+ * KV read/write/delete units, and 1 GB KV storage per month. Its lines 145-183
+ * also describe the 20:1 WebSocket conversion; the raw message metric is
+ * excluded because it is not the billed request unit. Incoming WebSocket
+ * messages instead consume the shared request allotment at 20:1 — BILLED_VIA
+ * below records that fold for the estimator and the dashboard note.
  */
 const WORKERS_PAID_DURABLE_OBJECTS: IncludedAllotment[] = [
   { metricId: "durable_objects:requests", includedPerCycle: 1_000_000, unit: "requests" },
   { metricId: "durable_objects:duration_gb_seconds", includedPerCycle: 400_000, unit: "gb_seconds" },
+  { metricId: "durable_objects:rows_read", includedPerCycle: 25_000_000_000, unit: "rows" },
+  { metricId: "durable_objects:rows_written", includedPerCycle: 50_000_000, unit: "rows" },
+  { metricId: "durable_objects:sql_storage_bytes", includedPerCycle: 5_000_000_000, unit: "bytes" },
+  { metricId: "durable_objects:kv_read_units", includedPerCycle: 1_000_000, unit: "count" },
+  { metricId: "durable_objects:kv_write_units", includedPerCycle: 1_000_000, unit: "count" },
+  { metricId: "durable_objects:kv_delete_requests", includedPerCycle: 1_000_000, unit: "count" },
+  { metricId: "durable_objects:kv_storage_bytes", includedPerCycle: 1_000_000_000, unit: "bytes" },
 ];
 
 /*
@@ -90,6 +102,17 @@ const WORKERS_PAID_R2: IncludedAllotment[] = [
 const WORKERS_PAID_QUEUES: IncludedAllotment[] = [
   { metricId: "queues:operations", includedPerCycle: 1_000_000, unit: "count" },
 ];
+
+/**
+ * Metrics that have no meter of their own but bill into another metric's
+ * shared allotment. `ratio` source units count as one billed unit of the
+ * target meter. The dashboard shows this as a note on the source row, and
+ * the billable-cost estimator folds the converted quantity into the target
+ * meter's cycle consumption.
+ */
+export const BILLED_VIA: Readonly<Record<string, { metricId: string; ratio: number; label: string }>> = {
+  "durable_objects:incoming_websocket_messages": { metricId: "durable_objects:requests", ratio: 20, label: "Durable Objects request" },
+};
 
 export const WORKERS_PAID_INCLUDED: IncludedAllotment[] = [
   ...WORKERS_PAID_WORKERS,

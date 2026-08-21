@@ -33,31 +33,20 @@ async function addWebhookTarget(testD1: TestD1, env: Env): Promise<string> {
 }
 
 describe("alert level API", () => {
-  it("creates, renames, reorders, and deletes any level", async () => {
+  it("renames and reorders the three fixed levels", async () => {
     const testD1 = createTestD1();
     try {
       const env = testEnv(testD1);
       const initial = await levels(testD1, env);
       expect(initial.map(level => level.label)).toEqual(["Warning", "Critical", "Emergency"]);
 
-      const created = await alertLevelsApiRoute(request("/api/alert-levels", "POST", {
-        label: "Low", afterLevelId: initial[0]!.id,
-      }), env, "test-actor");
-      expect(created?.status).toBe(201);
-      const createdLevel = await created!.json() as { level: { id: string; label: string; position: number } };
-      expect(createdLevel.level).toMatchObject({ label: "Low", position: 1 });
-
-      const renamed = await alertLevelsApiRoute(request(`/api/alert-levels/${createdLevel.level.id}`, "PATCH", {
-        label: "Notice", position: 3,
+      const renamed = await alertLevelsApiRoute(request(`/api/alert-levels/${initial[0]!.id}`, "PATCH", {
+        label: "Notice", position: 2,
       }), env, "test-actor");
       expect(renamed?.status).toBe(200);
       const current = await levels(testD1, env);
-      expect(current.map(level => level.label)).toEqual(["Warning", "Critical", "Emergency", "Notice"]);
-      expect(current.at(-1)).toMatchObject({ id: createdLevel.level.id, position: 3, label: "Notice" });
-
-      const deleted = await alertLevelsApiRoute(request(`/api/alert-levels/${createdLevel.level.id}`, "DELETE"), env, "test-actor");
-      expect(deleted?.status).toBe(200);
-      expect((await levels(testD1, env)).map(level => level.label)).toEqual(["Warning", "Critical", "Emergency"]);
+      expect(current.map(level => level.label)).toEqual(["Critical", "Emergency", "Notice"]);
+      expect(current.at(-1)).toMatchObject({ id: initial[0]!.id, position: 2, label: "Notice" });
     } finally {
       testD1.close();
     }
@@ -67,8 +56,9 @@ describe("alert level API", () => {
     const testD1 = createTestD1();
     try {
       const env = testEnv(testD1);
-      const response = await alertLevelsApiRoute(request("/api/alert-levels", "POST", {
-        label: "wArNiNg", afterLevelId: null,
+      const initial = await levels(testD1, env);
+      const response = await alertLevelsApiRoute(request(`/api/alert-levels/${initial[1]!.id}`, "PATCH", {
+        label: "wArNiNg",
       }), env, "test-actor");
       expect(response?.status).toBe(400);
       await expect(response?.json()).resolves.toMatchObject({ error: "Alert level names must be unique" });
@@ -77,39 +67,19 @@ describe("alert level API", () => {
     }
   });
 
-  it("allows eight levels and rejects a ninth", async () => {
-    const testD1 = createTestD1();
-    try {
-      const env = testEnv(testD1);
-      for (let index = 1; index <= 5; index += 1) {
-        const response = await alertLevelsApiRoute(request("/api/alert-levels", "POST", {
-          label: `Custom ${index}`, afterLevelId: null,
-        }), env, "test-actor");
-        expect(response?.status).toBe(201);
-      }
-      expect((await levels(testD1, env))).toHaveLength(8);
-      const ninth = await alertLevelsApiRoute(request("/api/alert-levels", "POST", {
-        label: "Ninth", afterLevelId: null,
-      }), env, "test-actor");
-      expect(ninth?.status).toBe(400);
-      await expect(ninth?.json()).resolves.toMatchObject({ error: "Brolly supports up to eight alert levels" });
-    } finally {
-      testD1.close();
-    }
-  });
-
-  it("refuses deleting the last remaining level", async () => {
+  it("refuses adding or removing levels", async () => {
     const testD1 = createTestD1();
     try {
       const env = testEnv(testD1);
       const initial = await levels(testD1, env);
-      for (const level of initial.slice(1)) {
-        expect((await alertLevelsApiRoute(request(`/api/alert-levels/${level.id}`, "DELETE"), env, "test-actor"))?.status).toBe(200);
-      }
-      const last = (await levels(testD1, env))[0]!;
-      const response = await alertLevelsApiRoute(request(`/api/alert-levels/${last.id}`, "DELETE"), env, "test-actor");
-      expect(response?.status).toBe(409);
-      await expect(response?.json()).resolves.toMatchObject({ error: "At least one alert level must remain" });
+      const created = await alertLevelsApiRoute(request("/api/alert-levels", "POST", {
+        label: "Low", afterLevelId: null,
+      }), env, "test-actor");
+      expect(created?.status).toBe(405);
+      await expect(created?.json()).resolves.toMatchObject({ error: "Brolly uses exactly 3 alert levels" });
+      const deleted = await alertLevelsApiRoute(request(`/api/alert-levels/${initial[2]!.id}`, "DELETE"), env, "test-actor");
+      expect(deleted?.status).toBe(405);
+      expect((await levels(testD1, env)).map(level => level.label)).toEqual(["Warning", "Critical", "Emergency"]);
     } finally {
       testD1.close();
     }

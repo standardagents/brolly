@@ -36,29 +36,40 @@ allotment-derived defaults because Cloudflare enforces hard usage caps before
 spend can accrue.
 
 `GET /api/usage-series` adds an optional `includedPerCycle` value to eligible
-account-scope metric definitions. The response also includes the effective
-plan tier, its source, and the catalog version. Account responses include an
-`estimatedBillableCostSeries` for paid and unknown tiers. This additive series
-prices daily usage above each catalog allotment at Brolly's existing gross
-rates and resets at each billing-cycle boundary. The primary cost series keeps
-its existing authoritative-then-estimated selection. Free and Enterprise tiers
-return no estimated billable-cost points.
+metric definitions on their product-family scope. The response also includes
+the effective plan tier, its source, and the catalog version. Account responses
+include an `estimatedBillableCostSeries` for paid and unknown tiers. This
+additive series prices daily usage above each catalog allotment at Brolly's
+existing gross rates and resets at each billing-cycle boundary. Incoming
+Durable Objects WebSocket messages have no meter of their own: the estimator
+folds them into the Durable Objects request meter at 20 messages per billed
+request, and their dashboard row notes that conversion. The dashboard does
+not currently render the estimated billable-cost series; the response field
+remains for API consumers. The primary
+cost series keeps its existing authoritative-then-estimated selection. Free
+and Enterprise tiers return no estimated billable-cost points.
 
-Billing-cycle usage charts shade the included
-range and draw a fixed system boundary at the allotment. The line is outside
+Product billing-cycle usage charts shade the included range and draw a fixed
+system boundary at the allotment for each eligible meter. The line is outside
 threshold interaction and chart history. Daily charts omit the cycle-scoped
 band and retain a cycle-to-date percent readout. A boundary more than three
 times the visible data and configured levels stays outside the scale so usage
 remains legible. The readout continues to report the allotment and billable
-state.
+state. Resource charts show their contribution without a separate allotment
+boundary.
 
-Fresh account-cycle usage limits use 80 percent of the allotment for Warning
-and 100 percent for Critical. Emergency retains its tolerance-derived value
-with Critical as its minimum. A metric whose typical cycle usage exceeds the
-catalog value keeps the tolerance-derived defaults so onboarding does not seed
-thresholds that are breached at creation time. Day limits, resource limits,
-metrics without an allotment, and free-tier accounts keep tolerance-derived
-defaults.
+Fresh usage limits for a meter with an allotment apply the risk-tolerance
+percentages to a baseline: the larger of the meter's typical cycle usage and
+its allotment. Typical cycle usage is the median non-zero day over the
+lookback window times the days in the current cycle (point-in-time meters use
+the median day), so a runaway fortnight does not move it. Inside the free tier
+the allotment is the baseline and 100 percent is where billing starts; a meter
+that is consistently billable keeps its typical usage as the baseline. Daily
+limits for such meters are the baseline spread over the cycle's days times the
+same percentages, so the cycle default stays the daily default times the days
+in the cycle. Resource limits, metrics without an allotment, and free-tier
+accounts keep tolerance-derived defaults. Account limits contain aggregate
+dollar-spend thresholds.
 
 Brolly stores these quality states:
 

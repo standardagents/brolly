@@ -7,7 +7,7 @@ import {
   tolerancePresetValues,
   typicalDay,
 } from "../src/client/onboarding/risk-tolerance";
-import { completeWithDefaults, cycleDaysFor, includedCycleDefaults, toleranceDefaults, windowDefaults } from "../src/client/components/limits-chart/defaults";
+import { completeWithDefaults, cycleBaseline, cycleDaysFor, dailyToleranceDefaults, typicalCycleUsage, toleranceDefaults, windowDefaults } from "../src/client/components/limits-chart/defaults";
 import { preparePolicy } from "../src/client/onboarding/model";
 
 describe("risk tolerance presets", () => {
@@ -59,6 +59,50 @@ describe("risk tolerance presets", () => {
     }, ["workers"], [], undefined, false);
     expect(prepared.limits?.day.account?.cost).toEqual({});
     expect(prepared.limits?.day["family:workers"]?.cost).toEqual({});
+  });
+
+  it("moves legacy account usage into family scopes while family values win", () => {
+    const prepared = preparePolicy({
+      version: "legacy-usage",
+      accountDailySpend: { warning: 5, critical: 12.5, emergency: 25 },
+      familyDailySpend: {},
+      assetDailySpend: {},
+      limits: {
+        day: {
+          account: {
+            cost: { warning: 7 },
+            usage: {
+              "workers:requests": { warning: 100 },
+              "durable_objects:requests": { warning: 200 },
+            },
+            usageEnabled: { "workers:requests": false, "durable_objects:requests": true },
+            usageLevelEnabled: { "workers:requests": { warning: false } },
+          },
+          "family:workers": {
+            cost: {},
+            usage: { "workers:requests": { warning: 900 } },
+            usageEnabled: { "workers:requests": true },
+          },
+        },
+        cycle: {
+          account: {
+            cost: {},
+            usage: { "durable_objects:requests": { warning: 2_000 } },
+          },
+        },
+      },
+      thresholds: [],
+    }, ["workers", "durable_objects"], [], undefined, false);
+
+    expect(prepared.limits?.day.account?.usage).toEqual({});
+    expect(prepared.limits?.day.account?.usageEnabled).toEqual({});
+    expect(prepared.limits?.day["family:workers"]?.usage["workers:requests"]).toEqual({ warning: 900 });
+    expect(prepared.limits?.day["family:workers"]?.usageEnabled?.["workers:requests"]).toBe(true);
+    expect(prepared.limits?.day["family:workers"]?.usageLevelEnabled?.["workers:requests"]).toEqual({ warning: false });
+    expect(prepared.limits?.day["family:durable_objects"]?.usage["durable_objects:requests"]).toEqual({ warning: 200 });
+    expect(prepared.limits?.day["family:durable_objects"]?.usageEnabled?.["durable_objects:requests"]).toBe(true);
+    expect(prepared.limits?.cycle.account?.usage).toEqual({});
+    expect(prepared.limits?.cycle["family:durable_objects"]?.usage["durable_objects:requests"]).toEqual({ warning: 2_000 });
   });
 
   it("extends an existing preset when the alert-level board changes", () => {
@@ -145,26 +189,48 @@ describe("risk tolerance baseline", () => {
     expect(defaults.emergency).toBeGreaterThanOrEqual(300);
   });
 
-  it("anchors cycle defaults to an included allotment while typical usage stays below it", () => {
+  it("anchors both windows to the allotment while typical usage stays inside the free tier", () => {
     const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) }];
-    const values = includedCycleDefaults(
-      [{ day: "2026-01-18", value: 100 }], cycles, "2026-01-18",
-      ["warn", "critical", "emergency"],
-      { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000,
-    );
-    expect(values?.warn).toBe(800);
-    expect(values?.critical).toBe(1_000);
-    expect(values?.emergency).toBeGreaterThanOrEqual(1_000);
+    const series = [{ day: "2026-01-17", value: 10 }, { day: "2026-01-18", value: 10 }];
+    const order = ["warn", "critical", "emergency"];
+    const tolerance = { warn: 90, critical: 200, emergency: 300 };
+    // Typical cycle usage is 10 × 31 = 310, below the 3,100 allotment.
+    expect(cycleBaseline(series, cycles, "2026-01-18", 3_100)).toBe(3_100);
+    expect(windowDefaults(series, cycles, "2026-01-18", order, "cycle", tolerance, undefined, 3_100)).toEqual({ warn: 2_800, critical: 6_200, emergency: 9_400 });
+    // Daily: the 3,100 baseline over 31 days is 100 a day.
+    expect(dailyToleranceDefaults(series, cycles, "2026-01-18", order, tolerance, 3_100)).toEqual({ warn: 90, critical: 200, emergency: 300 });
   });
 
-  it("returns no allotment seed when observed cycle usage is already billable", () => {
+  it("keeps typical usage as the baseline when the meter is consistently billable", () => {
     const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) }];
-    const series = [{ day: "2026-01-18", value: 1_001 }];
-    expect(includedCycleDefaults(
-      series, cycles, "2026-01-18",
-      ["warn", "critical", "emergency"],
-      { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000,
-    )).toBeUndefined();
-    expect(windowDefaults(series, cycles, "2026-01-18", ["warn", "critical", "emergency"], "cycle", { warn: 90, critical: 200, emergency: 300 }, undefined, 1_000)?.warn).not.toBe(800);
+    const series = [{ day: "2026-01-17", value: 200 }, { day: "2026-01-18", value: 200 }];
+    // Typical cycle usage is 200 × 31 = 6,200, above the 1,000 allotment.
+    expect(cycleBaseline(series, cycles, "2026-01-18", 1_000)).toBe(6_200);
+    const values = windowDefaults(series, cycles, "2026-01-18", ["warn", "critical"], "cycle", { warn: 90, critical: 200 }, undefined, 1_000)!;
+    expect(values.warn).toBeLessThan(6_200);
+    expect(values.critical).toBeGreaterThanOrEqual(12_000);
+  });
+
+  it("ignores a runaway fortnight when judging typical usage", () => {
+    const cycles = [
+      { startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) },
+      { startsAt: Date.UTC(2026, 1, 1), endsAt: Date.UTC(2026, 2, 1) },
+    ];
+    const series = [
+      ...Array.from({ length: 14 }, (_, index) => ({ day: `2026-01-${String(index + 1).padStart(2, "0")}`, value: 1_000_000 })),
+      ...Array.from({ length: 17 }, (_, index) => ({ day: `2026-01-${String(index + 15).padStart(2, "0")}`, value: 10 })),
+      ...Array.from({ length: 10 }, (_, index) => ({ day: `2026-02-${String(index + 1).padStart(2, "0")}`, value: 10 })),
+    ];
+    // 27 normal days outvote 14 incident days: the median day is 10.
+    expect(typicalCycleUsage(series, cycles, "2026-02-10")).toBe(280);
+    expect(cycleBaseline(series, cycles, "2026-02-10", 25_000)).toBe(25_000);
+  });
+
+  it("uses maximum storage within a cycle for allotment defaults", () => {
+    const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 1, 1) }];
+    const storage = [{ day: "2026-01-17", value: 60 }, { day: "2026-01-18", value: 60 }];
+    expect(typicalCycleUsage(storage, cycles, "2026-01-18", "maximum")).toBe(60);
+    expect(windowDefaults(storage, cycles, "2026-01-18", ["warn", "critical"], "cycle", { warn: 90, critical: 200 }, undefined, 100, "maximum")).toEqual({ warn: 90, critical: 200 });
+    expect(windowDefaults(storage, cycles, "2026-01-18", ["warn"], undefined, undefined, { warn: 4 }, undefined, "maximum")).toEqual({ warn: 4 });
   });
 });

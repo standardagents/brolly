@@ -1,5 +1,5 @@
 import { resourceId } from "@standardagents/brolly-core";
-import { INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
+import { BILLED_VIA, INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
 import { estimatedBillableCostSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
 import { readPlanState } from "./plan-tier.js";
 
@@ -25,8 +25,8 @@ export interface UsageSeriesResponse {
   resourceId: string;
   found: boolean;
   today: string;
-  /** Metric id → { key, label, unit } for the metrics present in the series. */
-  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number }>;
+  /** Metric id → metadata for the metrics present in the series. */
+  metrics: Record<string, { key: string; label: string; unit: string; aggregationKind: "sum" | "maximum" | "latest"; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string } }>;
   series: UsageSeriesPoint[];
   estimatedBillableCostSeries?: EstimatedBillableCostPoint[];
   cycles: Array<{ startsAt: number; endsAt: number; approximate: boolean }>;
@@ -42,6 +42,15 @@ export function scopeResourceId(accountId: string, scope: string): string | null
   const asset = scope.match(/^asset:([^:]+):([^:]+):(.+)$/);
   if (asset) return resourceId(accountId, asset[1]!, `${asset[1]}:${asset[2]}`, asset[3]!);
   return null;
+}
+
+function familyScope(scope: string): string | null {
+  return scope.match(/^family:([^:]+)$/)?.[1] ?? null;
+}
+
+function metricFamily(metricId: string): string | null {
+  const separator = metricId.indexOf(":");
+  return separator > 0 ? metricId.slice(0, separator) : null;
 }
 
 export async function usageSeriesResponse(db: D1Database, accountId: string, url: URL, now = Date.now()): Promise<Response> {
@@ -63,7 +72,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
        WHERE account_id=?1 AND local_day>=?2 AND local_day<=?3
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`,
     ).bind(accountId, from, today).all<{ local_day: string; payload_json: string }>(),
-    db.prepare(`SELECT id,metric_key,display_name,unit,billing_mapping FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; billing_mapping: string | null }>(),
+    db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; aggregation_kind: "sum" | "maximum" | "latest"; billing_mapping: string | null }>(),
     db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`)
       .bind(accountId, now - (days + 31) * 86_400_000).all<{ starts_at: number; ends_at: number; approximate: number }>(),
     readPlanState(db),
@@ -95,7 +104,9 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const series = [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
   const present = new Set(series.flatMap(point => Object.keys(point.metrics)));
   const includedAllotments = includedAllotmentsForTier(planState.planTier);
-  const includedByMetric = new Map((scope === "account" ? includedAllotments : []).map(item => [item.metricId, item.includedPerCycle]));
+  const family = familyScope(scope);
+  const familyAllotments = family ? includedAllotments.filter(item => metricFamily(item.metricId) === family) : [];
+  const includedByMetric = new Map(familyAllotments.map(item => [item.metricId, item.includedPerCycle]));
   const metrics = Object.fromEntries(definitions.results
     .filter(definition => present.has(definition.id))
     .map(definition => {
@@ -104,14 +115,17 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
         key: definition.metric_key,
         label: definition.display_name,
         unit: definition.unit,
-        billable: Boolean(definition.billing_mapping),
+        aggregationKind: definition.aggregation_kind,
+        billable: Boolean(definition.billing_mapping) || Boolean(BILLED_VIA[definition.id]),
         ...(included === undefined ? {} : { includedPerCycle: included }),
+        ...(BILLED_VIA[definition.id] ? { billedVia: BILLED_VIA[definition.id] } : {}),
       }];
-    }));
+  }));
 
   const cycleRows = cycles.results.map(cycle => ({ startsAt: cycle.starts_at, endsAt: cycle.ends_at, approximate: cycle.approximate === 1 }));
-  const billableCost = scope === "account"
-    ? estimatedBillableCostSeries(series, cycleRows, includedAllotments, planState.planTier)
+  const billableCostAllotments = scope === "account" ? includedAllotments : familyAllotments;
+  const billableCost = scope === "account" || family
+    ? estimatedBillableCostSeries(series, cycleRows, billableCostAllotments, planState.planTier)
     : [];
   const body: UsageSeriesResponse = {
     scope, resourceId: id, found: Boolean(resource), today, metrics, series,

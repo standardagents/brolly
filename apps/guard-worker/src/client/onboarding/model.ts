@@ -77,8 +77,49 @@ export function preparePolicy(
     ensureScopeLimits(next.limits.day, `asset:${asset.key}`, preserveLegacyCost ? next.assetDailySpend[asset.key] : {});
     ensureScopeLimits(next.limits.cycle, `asset:${asset.key}`);
   }
+  moveAccountUsageToFamilies(next.limits.day, next.limits.cycle, families);
   for (const row of LIMIT_ROWS) next.thresholds = replaceThreshold(next.thresholds, findThreshold(next, row.metric, row.windowMs, row.defaults));
   return next;
+}
+
+/**
+ * Account usage limits were accepted by an earlier chart contract. Family
+ * meters own those limits now, so migrate each metric by its family prefix
+ * before the account step renders its cost-only surface.
+ */
+function moveAccountUsageToFamilies(day: Record<string, ScopeLimits>, cycle: Record<string, ScopeLimits>, families: string[]): void {
+  for (const scopes of [day, cycle]) {
+    const account = scopes.account;
+    if (!account) continue;
+    const accountUsage = account.usage ?? {};
+    const accountEnabled = account.usageEnabled;
+    const accountLevelEnabled = account.usageLevelEnabled;
+    const metricIds = new Set([
+      ...Object.keys(accountUsage),
+      ...Object.keys(accountEnabled ?? {}),
+      ...Object.keys(accountLevelEnabled ?? {}),
+    ]);
+    for (const metricId of metricIds) {
+      const family = metricId.split(":", 1)[0];
+      if (!family || !families.includes(family)) continue;
+      const familyScope = scopes[`family:${family}`];
+      if (!familyScope) continue;
+      if (!Object.prototype.hasOwnProperty.call(familyScope.usage, metricId) && Object.prototype.hasOwnProperty.call(accountUsage, metricId)) {
+        familyScope.usage[metricId] = accountUsage[metricId]!;
+      }
+      if (accountEnabled && Object.prototype.hasOwnProperty.call(accountEnabled, metricId)) {
+        familyScope.usageEnabled ??= {};
+        if (!Object.prototype.hasOwnProperty.call(familyScope.usageEnabled, metricId)) familyScope.usageEnabled[metricId] = accountEnabled[metricId]!;
+      }
+      if (accountLevelEnabled && Object.prototype.hasOwnProperty.call(accountLevelEnabled, metricId)) {
+        familyScope.usageLevelEnabled ??= {};
+        if (!Object.prototype.hasOwnProperty.call(familyScope.usageLevelEnabled, metricId)) familyScope.usageLevelEnabled[metricId] = accountLevelEnabled[metricId]!;
+      }
+    }
+    account.usage = {};
+    if (account.usageEnabled) account.usageEnabled = {};
+    if (account.usageLevelEnabled) account.usageLevelEnabled = {};
+  }
 }
 
 function ensureScopeLimits(scopes: Record<string, ScopeLimits>, scope: string, legacyCost: SpendLimits = {}): void {

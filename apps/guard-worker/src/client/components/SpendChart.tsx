@@ -50,15 +50,15 @@ export function SpendChart({ points, disabled = false }: { points: SpendPoint[];
       <svg className="block h-[230px] w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Estimated daily spend trend">
         <defs>
           <linearGradient id="spend-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#f6821f" stopOpacity=".22" />
-            <stop offset="1" stopColor="#f6821f" stopOpacity="0" />
+            <stop offset="0" stopColor="#2f6fd6" stopOpacity=".22" />
+            <stop offset="1" stopColor="#2f6fd6" stopOpacity="0" />
           </linearGradient>
         </defs>
         <line x1={pad} x2={width - pad} y1={height / 2} y2={height / 2} className="stroke-line-soft [stroke-dasharray:5_7]" />
         <polygon points={area} fill="url(#spend-fill)" />
-        <polyline points={line} fill="none" stroke="#f6821f" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        <polyline points={line} fill="none" stroke="#2f6fd6" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
         {coordinates.map(point => (
-          <circle key={point.at} cx={point.x} cy={point.y} r="3.5" fill="#fff" stroke="#f6821f" strokeWidth="2.5">
+          <circle key={point.at} cx={point.x} cy={point.y} r="3.5" fill="#fff" stroke="#2f6fd6" strokeWidth="2.5">
             <title>{dateTime(point.at)} · {money(point.totalUsd)}</title>
           </circle>
         ))}

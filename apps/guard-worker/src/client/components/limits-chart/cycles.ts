@@ -6,6 +6,11 @@
 
 export interface DayPoint { day: string; value: number; sealed?: boolean }
 export interface CycleBounds { startsAt: number; endsAt: number }
+export type AggregationKind = "sum" | "maximum" | "latest";
+
+function isNonAdditive(kind: AggregationKind): boolean {
+  return kind === "maximum" || kind === "latest";
+}
 
 export interface CumulativePoint extends DayPoint {
   /** Running total inside the day's billing cycle. */
@@ -22,9 +27,14 @@ export interface CycleProjection {
   elapsedDays: number;
   /** Total days in the cycle. */
   totalDays: number;
-  /** Straight-line projected total at cycle end. */
+  /** Recent daily pace: the median of the last seven days in the cycle. */
+  rate: number;
+  /** Projected total at cycle end: today's total plus the recent pace over the remaining days. */
   projected: number;
 }
+
+/** Days of the current cycle that set the projection's pace. */
+export const PROJECTION_PACE_DAYS = 7;
 
 export const DAY_MS = 86_400_000;
 
@@ -65,29 +75,42 @@ export function cycleIndexFor(cycles: readonly CycleBounds[], day: string): numb
   return cycles.findIndex(cycle => at >= cycle.startsAt && at < cycle.endsAt);
 }
 
-/** Running total per day that resets at each cycle start. */
-export function cycleCumulative(series: readonly DayPoint[], cycles: readonly CycleBounds[]): CumulativePoint[] {
+/** Running cycle value per day that resets at each cycle start. */
+export function cycleCumulative(series: readonly DayPoint[], cycles: readonly CycleBounds[], aggregationKind: AggregationKind = "sum"): CumulativePoint[] {
   const totals = new Map<number, number>();
   return series.map(point => {
     const cycle = cycleIndexFor(cycles, point.day);
-    const cumulative = (totals.get(cycle) ?? 0) + Math.max(0, point.value);
+    const value = Math.max(0, point.value);
+    const previous = totals.get(cycle) ?? 0;
+    const cumulative = isNonAdditive(aggregationKind) ? Math.max(previous, value) : previous + value;
     totals.set(cycle, cumulative);
     return { ...point, cumulative, cycle };
   });
 }
 
-/** Straight-line projection of the cycle that contains `today`. */
-export function projectCycle(series: readonly DayPoint[], cycles: readonly CycleBounds[], today: string): CycleProjection | null {
+/**
+ * Projection of the cycle that contains `today`. The total so far is fact;
+ * the slope is the recent pace (median of the last PROJECTION_PACE_DAYS days
+ * in the cycle), so a spike early in the cycle stays in the total without
+ * dictating the rest of the month once usage has settled.
+ */
+export function projectCycle(series: readonly DayPoint[], cycles: readonly CycleBounds[], today: string, aggregationKind: AggregationKind = "sum"): CycleProjection | null {
   const cycle = cycleIndexFor(cycles, today);
   if (cycle < 0) return null;
   const bounds = cycles[cycle]!;
   const todayAt = dayStart(today);
-  const toDate = series
+  const currentPoints = series
     .filter(point => cycleIndexFor(cycles, point.day) === cycle && dayStart(point.day) <= todayAt)
-    .reduce((sum, point) => sum + Math.max(0, point.value), 0);
+    .sort((left, right) => left.day.localeCompare(right.day));
+  const toDate = isNonAdditive(aggregationKind)
+    ? Math.max(0, ...currentPoints.map(point => Math.max(0, point.value)))
+    : currentPoints.reduce((sum, point) => sum + Math.max(0, point.value), 0);
   const elapsedDays = daysBetween(bounds.startsAt, todayAt + DAY_MS);
   const totalDays = daysBetween(bounds.startsAt, bounds.endsAt);
-  return { cycle, toDate, elapsedDays, totalDays, projected: (toDate / elapsedDays) * totalDays };
+  const recent = currentPoints.slice(-PROJECTION_PACE_DAYS).map(point => Math.max(0, point.value)).sort((left, right) => left - right);
+  const rate = isNonAdditive(aggregationKind) || !recent.length ? 0 : recent.length % 2 ? recent[(recent.length - 1) / 2]! : (recent[recent.length / 2 - 1]! + recent[recent.length / 2]!) / 2;
+  const remainingDays = Math.max(0, totalDays - elapsedDays);
+  return { cycle, toDate, elapsedDays, totalDays, rate, projected: isNonAdditive(aggregationKind) ? toDate : toDate + rate * remainingDays };
 }
 
 /**
@@ -95,20 +118,60 @@ export function projectCycle(series: readonly DayPoint[], cycles: readonly Cycle
  * reaches an included allotment. A cycle already above the allotment has no
  * future projected crossing to annotate.
  */
-export function projectedCrossingDate(series: readonly DayPoint[], cycles: readonly CycleBounds[], today: string, includedPerCycle?: number): string | null {
+export function projectedCrossingDate(series: readonly DayPoint[], cycles: readonly CycleBounds[], today: string, includedPerCycle?: number, aggregationKind: AggregationKind = "sum"): string | null {
   const included = includedPerCycle;
   if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return null;
-  const projection = projectCycle(series, cycles, today);
+  const projection = projectCycle(series, cycles, today, aggregationKind);
   if (!projection || projection.toDate >= included || !(projection.projected > included)) return null;
-  const dailyRate = projection.toDate / projection.elapsedDays;
-  if (!(dailyRate > 0)) return null;
+  if (!(projection.rate > 0)) return null;
   const bounds = cycles[projection.cycle];
   if (!bounds) return null;
-  // Values are recorded at the end of each UTC day. A crossing during day N
-  // is shown against that day's label, so day one has offset zero.
-  const offset = Math.max(0, Math.ceil(included / dailyRate) - 1);
+  // Values are recorded at the end of each UTC day. The crossing lands
+  // `ceil(shortfall / pace)` days after today; day one has offset zero.
+  const offset = Math.max(0, projection.elapsedDays + Math.ceil((included - projection.toDate) / projection.rate) - 1);
   const lastDay = Math.max(bounds.startsAt, bounds.endsAt - DAY_MS);
   return dayOf(Math.min(lastDay, bounds.startsAt + offset * DAY_MS));
+}
+
+export interface FreeRemainingPoint extends DayPoint {
+  /** Index into the cycles array, or -1 when no cycle contains the day. */
+  cycle: number;
+  /** Included allotment still unspent at the start of the day. */
+  before: number;
+  /** Included allotment still unspent at the end of the day. */
+  after: number;
+}
+
+/**
+ * Free usage left in the cycle, day by day: the allotment minus the running
+ * total, clamped at zero. It starts the cycle at the full allotment and falls
+ * as usage accumulates, so the day chart can draw it as the inverse of the
+ * cumulative usage. Point-in-time meters subtract the running maximum.
+ */
+export function freeRemainingSeries(series: readonly DayPoint[], cycles: readonly CycleBounds[], includedPerCycle: number | undefined, aggregationKind: AggregationKind = "sum"): FreeRemainingPoint[] {
+  const included = includedPerCycle;
+  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return [];
+  const used = new Map<number, number>();
+  return series.map(point => {
+    const cycle = cycleIndexFor(cycles, point.day);
+    const usedBefore = used.get(cycle) ?? 0;
+    const value = Math.max(0, point.value);
+    const usedAfter = isNonAdditive(aggregationKind) ? Math.max(usedBefore, value) : usedBefore + value;
+    used.set(cycle, usedAfter);
+    return { ...point, cycle, before: Math.max(0, included - usedBefore), after: Math.max(0, included - usedAfter) };
+  });
+}
+
+/**
+ * How much of each running total is still inside the allotment. With a
+ * shared pool the ceiling falls as the other members spend it: the room left
+ * for this metric is the allotment minus everything the others have used.
+ */
+export function includedTops(selfCumulative: readonly number[], poolCumulative: readonly number[] | undefined, includedPerCycle: number): number[] {
+  return selfCumulative.map((self, index) => {
+    const others = poolCumulative ? Math.max(0, (poolCumulative[index] ?? self) - self) : 0;
+    return Math.min(self, Math.max(0, includedPerCycle - others));
+  });
 }
 
 /** Shorter name for chart callers that describe the annotation as a crossing. */

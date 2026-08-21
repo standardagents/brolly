@@ -152,9 +152,9 @@ import continues.
 
 Each installation has one ordered alert-level board. Warning, Critical, and
 Emergency are seeded as empty levels. A level has a case-insensitive unique
-label, a position, and ordered entries. Custom levels use the same data model as
-the seeded levels. The board permits up to eight levels and keeps one level when
-an operator removes a column. A level's position supplies its priority as
+label, a position, and ordered entries. The board is fixed at three levels:
+operators rename and reorder them, and the API refuses to add or remove a
+level. A level's position supplies its priority as
 `position * 10`; the rightmost position supplies the highest display severity.
 
 `LimitsChart` is the reusable threshold input for daily and billing-cycle cost
@@ -170,13 +170,15 @@ A level diamond in a dimension row switches that level for the dimension. The
 diamond stays available while its level is off. Read-only charts omit all
 editing and history controls.
 
-Account-scope billing-cycle usage charts also read Brolly's release-versioned
-Workers Paid quota catalog. An eligible metric shows a shaded included range
-and a fixed boundary where billable usage begins. The fixed boundary is a
-system value and never enters threshold hit testing, editing, Undo, or Redo.
-Daily usage rows report cycle-to-date progress without drawing a cycle quota on
-the daily axis. Enterprise accounts use the same boundary as a labeled
-standard paid-plan baseline. Free accounts receive no quota boundary.
+Product-scope billing-cycle usage charts also read Brolly's release-versioned
+Workers Paid quota catalog. Each eligible product meter shows its own shaded
+included range and a fixed boundary where billable usage begins. The fixed
+boundary is a system value and never enters threshold hit testing, editing,
+Undo, or Redo. Daily usage rows report cycle-to-date progress without drawing
+a cycle quota on the daily axis. Resource usage contributes to the shared
+product meter and does not receive a separate allotment. Enterprise accounts
+use the same boundary as a labeled standard paid-plan baseline. Free accounts
+receive no quota boundary.
 
 Paid and unknown account series also expose estimated billable cost as a
 secondary chart line. Its daily values contain only usage above the catalog
@@ -197,11 +199,12 @@ cycles. When fewer cycles exist, the cycle baseline is the daily median times
 the current cycle length. A p95 value appears only as the busiest-normal-day
 readout. A single spike therefore does not change the multiplier baseline.
 
-For an account-cycle usage metric with an included allotment, Warning defaults
-to 80 percent of included usage and Critical defaults to 100 percent.
-Emergency keeps its tolerance value with Critical as its minimum. Typical
-cycle usage above the allotment selects the complete tolerance-derived map.
-This guard prevents fresh rules from beginning in a breached state.
+For a product-cycle usage metric with an included allotment, Warning defaults
+to 80 percent of included usage and Critical defaults to 100 percent. Emergency
+keeps its tolerance value with Critical as its minimum. Typical cycle usage
+above the allotment selects the complete tolerance-derived map. Resource
+limits retain tolerance-derived defaults. This guard prevents fresh rules from
+beginning in a breached state.
 
 Tolerance seeds missing chart values once. Saved chart values remain detached
 from later tolerance edits. Reset to tolerance reapplies the current

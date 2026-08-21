@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, snapToNice, snapUpToNice } from "../src/client/components/limits-chart/scale";
 import { GAP_FRACTION, GAP_RATIO, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
-import { cycleCumulative, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "../src/client/components/limits-chart/cycles";
+import { billableMetricIds, metricComposition, metricIncluded, metricPool, rowSeries } from "../src/client/components/limits-chart/api";
+import { freeRemainingSeries, includedTops, cycleCumulative, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "../src/client/components/limits-chart/cycles";
 
 const ORDER = ["warn", "critical", "emergency"];
 
@@ -168,6 +169,16 @@ describe("billing cycles", () => {
     expect(byDay["2026-08-02"]).toBe(20);
   });
 
+  it("uses a running maximum for non-additive cycle metrics", () => {
+    const storage = denseSeries([
+      { day: "2026-08-01", value: 40 },
+      { day: "2026-08-02", value: 60 },
+      { day: "2026-08-03", value: 20 },
+    ], "2026-08-01", "2026-08-03");
+    expect(cycleCumulative(storage, cycles, "maximum").map(point => point.cumulative)).toEqual([40, 60, 60]);
+    expect(projectCycle(storage, cycles, "2026-08-03", "maximum")).toMatchObject({ toDate: 60, projected: 60 });
+  });
+
   it("projects the current cycle from its daily rate", () => {
     const projection = projectCycle(series, cycles, "2026-08-02");
     expect(projection?.toDate).toBe(20);
@@ -185,5 +196,69 @@ describe("billing cycles", () => {
     expect(visibleWindow(series, cycles, "2026-08-02")).toEqual({ fromDay: "2026-06-30", toDay: "2026-08-02" });
     const long = denseSeries([{ day: "2026-03-01", value: 1 }], "2026-03-01", "2026-08-02");
     expect(visibleWindow(long, monthlyCycles("2026-03-01", "2026-08-02"), "2026-08-02").fromDay).toBe("2026-06-01");
+  });
+
+  it("tracks the free usage left as the inverse of cycle usage", () => {
+    const cycles = [{ startsAt: Date.UTC(2026, 0, 1), endsAt: Date.UTC(2026, 0, 11) }];
+    const series = [
+      { day: "2026-01-01", value: 10 }, { day: "2026-01-02", value: 10 }, { day: "2026-01-03", value: 70 }, { day: "2026-01-04", value: 30 },
+    ];
+    const left = freeRemainingSeries(series, cycles, 100);
+    expect(left.map(point => [point.before, point.after])).toEqual([[100, 90], [90, 80], [80, 10], [10, 0]]);
+    expect(freeRemainingSeries(series, cycles, undefined)).toEqual([]);
+  });
+
+  it("projects from the recent pace, so an early spike stays in the total without setting the slope", () => {
+    const cycles = [{ startsAt: Date.UTC(2026, 8, 1), endsAt: Date.UTC(2026, 9, 1) }];
+    const spiky = denseSeries([
+      { day: "2026-09-01", value: 1_000 }, { day: "2026-09-02", value: 1_000 },
+      ...Array.from({ length: 8 }, (_, index) => ({ day: `2026-09-${String(index + 3).padStart(2, "0")}`, value: 10 })),
+    ], "2026-09-01", "2026-09-10");
+    const projection = projectCycle(spiky, cycles, "2026-09-10")!;
+    expect(projection.toDate).toBe(2_080);
+    expect(projection.rate).toBe(10);
+    // 20 remaining days at the settled pace, not at the 208/day cycle average.
+    expect(projection.projected).toBe(2_080 + 20 * 10);
+    // The crossing date follows the same pace: 2,080 + 10/day reaches 2,150 in 7 days.
+    expect(projectedCrossingDate(spiky, cycles, "2026-09-10", 2_150)).toBe("2026-09-17");
+  });
+
+  it("lowers the included ceiling as the other members of a shared pool spend it", () => {
+    // Self running total 0→40; the pool (self + others) runs ahead of it.
+    expect(includedTops([10, 20, 30, 40], undefined, 25)).toEqual([10, 20, 25, 25]);
+    expect(includedTops([10, 20, 30, 40], [10, 25, 45, 70], 25)).toEqual([10, 20, 10, 0]);
+  });
+
+  it("expresses a shared allotment pool in each member's units", () => {
+    const data = {
+      scope: "family:durable_objects", resourceId: "x", found: true, today: "2026-08-02", cycles: [],
+      metrics: {
+        "durable_objects:requests": { key: "requests", label: "Requests", unit: "requests", billable: true, includedPerCycle: 1_000_000 },
+        "durable_objects:incoming_websocket_messages": { key: "ws", label: "WebSocket messages", unit: "messages", billable: true, billedVia: { metricId: "durable_objects:requests", ratio: 20, label: "Durable Objects request" } },
+        "durable_objects:rows_read": { key: "rows_read", label: "Rows read", unit: "rows", billable: true, includedPerCycle: 25_000_000_000 },
+      },
+      series: [{ day: "2026-08-01", costUsd: 0, sealed: true, metrics: { "durable_objects:requests": 100, "durable_objects:incoming_websocket_messages": 400, "durable_objects:rows_read": 5 } }],
+    };
+    expect(metricPool(data, "durable_objects:requests")).toMatchObject({ includedPerCycle: 1_000_000, series: [{ day: "2026-08-01", value: 120 }] });
+    expect(metricPool(data, "durable_objects:incoming_websocket_messages")).toMatchObject({ includedPerCycle: 20_000_000, series: [{ day: "2026-08-01", value: 2_400 }] });
+    expect(metricPool(data, "durable_objects:rows_read")).toBeUndefined();
+    expect(metricIncluded(data, "durable_objects:incoming_websocket_messages")).toBe(20_000_000);
+    expect(metricIncluded(data, "durable_objects:rows_read")).toBe(25_000_000_000);
+  });
+
+  it("folds a billed-via metric into its meter's row as a composition", () => {
+    const data = {
+      scope: "family:durable_objects", resourceId: "x", found: true, today: "2026-08-02", cycles: [],
+      metrics: {
+        "durable_objects:requests": { key: "requests", label: "Requests", unit: "requests", billable: true, includedPerCycle: 1_000_000 },
+        "durable_objects:incoming_websocket_messages": { key: "ws", label: "WebSocket messages", unit: "messages", billable: true, billedVia: { metricId: "durable_objects:requests", ratio: 20, label: "Durable Objects request" } },
+      },
+      series: [{ day: "2026-08-01", costUsd: 0, sealed: true, metrics: { "durable_objects:requests": 100, "durable_objects:incoming_websocket_messages": 400 } }],
+    };
+    expect(billableMetricIds(data)).toEqual(["durable_objects:requests"]);
+    const parts = metricComposition(data, "durable_objects:requests")!;
+    expect(parts.map(part => [part.label, part.series[0]!.value])).toEqual([["Requests", 100], ["WebSocket messages ÷ 20", 20]]);
+    expect(rowSeries(data, "durable_objects:requests")[0]!.value).toBe(120);
+    expect(metricComposition(data, "durable_objects:incoming_websocket_messages")).toBeUndefined();
   });
 });

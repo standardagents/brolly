@@ -63,6 +63,12 @@ describe("alert level board", () => {
     await waitFor(() => expect(document.querySelectorAll("section[data-level]")).toHaveLength(3));
 
     const warning = levelColumn("Warning");
+    // The board is fixed at three levels: the level menu only reorders.
+    await click(warning.querySelector("[aria-label='Level menu']") as HTMLButtonElement);
+    expect(document.querySelectorAll("[role='menu'] [role='menuitem']")).toHaveLength(2);
+    await click(warning.querySelector("[aria-label='Level menu']") as HTMLButtonElement);
+    expect(calls.filter(call => call.path === "/api/alert-levels")).toHaveLength(0);
+
     await click(warning.querySelector("[data-add-entry]") as HTMLButtonElement);
     // The add menu renders through a portal (it must escape the board's horizontal scroller).
     await click(findButton(document.querySelector("[role='menu']") as HTMLElement, "Ops server"));

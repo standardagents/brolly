@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { billableCostSeries, billableMetricIds, costSeries, metricSeries, type UsageSeriesResponse } from "./api";
-import { cycleDaysFor, dailyMultiple, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
+import { billableMetricIds, costSeries, metricAggregationKind, metricComposition, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
+import type { AggregationKind } from "./cycles";
+import { cycleDaysFor, dailyMultiple, dailyToleranceDefaults, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
 import type { LevelValues } from "./levels";
 import { LevelTrack } from "./LevelTrack";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
@@ -21,10 +22,10 @@ export interface ScopeWindowInput {
   usageFloor?: UsageLimitValues;
   /** Global tolerance: seeds the day window; the cycle window uses it only to recognize an untouched seeded multiple. */
   tolerance?: LevelValues;
-  /** Included allotments are account-wide and must stay off family/resource charts. */
-  accountScope?: boolean;
-  /** Boundary label override used for enterprise's paid-plan baseline. */
-  includedBoundaryLabel?: string;
+  /** Included allotments apply to family meters, not account or resource charts. */
+  quotaScope?: boolean;
+  /** Account cost-only charts must not initialize hidden usage maps. */
+  usageEnabled?: boolean;
   readOnly?: boolean;
   costLevelEnabled?: Record<string, boolean>;
   onCostLevelEnabledChange?(next: Record<string, boolean>): void;
@@ -51,8 +52,8 @@ export interface ScopeWindow {
  * undo history, chart nodes, and chip edit handlers. Layouts decide how the
  * rows look; this decides what they contain.
  */
-export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, accountScope = false, includedBoundaryLabel, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: ScopeWindowInput): ScopeWindow {
-  const metricIds = useMemo(() => (data ? billableMetricIds(data) : []), [data]);
+export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, quotaScope = false, usageEnabled = true, readOnly, costLevelEnabled, onCostLevelEnabledChange, usageLevelEnabled, onUsageLevelEnabledChange }: ScopeWindowInput): ScopeWindow {
+  const metricIds = useMemo(() => (data && usageEnabled ? billableMetricIds(data) : []), [data, usageEnabled]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const histories = useLimitHistories();
   const usageRef = useRef(usage);
@@ -63,11 +64,11 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   const changeUsage = (id: string, next: LevelValues) => publishUsage({ ...usageRef.current, [id]: next });
 
   const cycleDays = data ? cycleDaysFor(data.cycles, data.today) : 30;
-  const scaleFloor = (floor?: LevelValues) => (window === "cycle" ? dailyMultiple(floor, order, cycleDays) : undefined);
-  const floorReady = (floor?: LevelValues) => window !== "cycle" || !!dailyMultiple(floor, order, cycleDays);
+  const scaleFloor = (floor?: LevelValues, aggregationKind: AggregationKind = "sum") => (window === "cycle" ? dailyMultiple(floor, order, cycleDays, aggregationKind) : undefined);
+  const floorReady = (floor?: LevelValues, aggregationKind: AggregationKind = "sum") => window !== "cycle" || !!dailyMultiple(floor, order, cycleDays, aggregationKind);
   const dayTolerance = window === "day" ? tolerance : undefined;
-  const defaultsFor = (series: ReturnType<typeof costSeries>, floor: LevelValues | undefined, includedPerCycle?: number) =>
-    data ? windowDefaults(series, data.cycles, data.today, order, window, tolerance, floor, includedPerCycle) : undefined;
+  const defaultsFor = (series: ReturnType<typeof costSeries>, floor: LevelValues | undefined, includedPerCycle?: number, aggregationKind: AggregationKind = "sum") =>
+    data ? windowDefaults(series, data.cycles, data.today, order, window, tolerance, floor, includedPerCycle, aggregationKind) : undefined;
 
   // Collapsed rows show the same defaults the chart would compute.
   useEffect(() => {
@@ -78,21 +79,22 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
       const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
       onCostChange(defaultLevelValues(series, data.cycles, data.today, order, costRef.current, undefined, scaleFloor(costFloor), fromTolerance));
     }
-    const missing = metricIds.filter(id => order.some(levelId => !(Number.isFinite(usageRef.current[id]?.[levelId])))).filter(id => floorReady(usageFloor?.[id]));
+    const missing = metricIds.filter(id => order.some(levelId => !(Number.isFinite(usageRef.current[id]?.[levelId])))).filter(id => floorReady(usageFloor?.[id], metricAggregationKind(data, id)));
     if (!missing.length) return;
     const next = { ...usageRef.current };
     for (const id of missing) {
-      const series = metricSeries(data, id);
-      const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
-      const included = accountScope && window === "cycle" && data.planTier !== "free" ? data.metrics[id]?.includedPerCycle : undefined;
+      const series = rowSeries(data, id);
+      const aggregationKind = metricAggregationKind(data, id);
+      const included = quotaScope && data.planTier !== "free" ? metricIncluded(data, id) : undefined;
+      const fromTolerance = dayTolerance ? dailyToleranceDefaults(series, data.cycles, data.today, order, dayTolerance, included, aggregationKind) : undefined;
       const seeded = window === "cycle"
-        ? windowDefaults(series, data.cycles, data.today, order, "cycle", tolerance, usageFloor?.[id], included)
+        ? windowDefaults(series, data.cycles, data.today, order, "cycle", tolerance, usageFloor?.[id], included, aggregationKind)
         : undefined;
-      next[id] = defaultLevelValues(series, data.cycles, data.today, order, usageRef.current[id] ?? {}, undefined, seeded ?? scaleFloor(usageFloor?.[id]), seeded ? undefined : fromTolerance);
+      next[id] = defaultLevelValues(series, data.cycles, data.today, order, usageRef.current[id] ?? {}, undefined, seeded ?? scaleFloor(usageFloor?.[id], aggregationKind), seeded ? undefined : fromTolerance, aggregationKind);
     }
     publishUsage(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when data, floors, tolerance, or the level order change
-  }, [data, metricIds, order, usageFloor, costFloor, dayTolerance, window, accountScope]);
+  }, [data, metricIds, order, usageFloor, costFloor, dayTolerance, window, quotaScope, usageEnabled]);
 
   const waitingNote = <div className="grid h-[120px] place-content-center text-center text-[13px] text-faint">Set the daily limits first. Billing-cycle limits start from them.</div>;
   // A scope with no recorded usage has nothing to plot; its levels are set on
@@ -103,12 +105,10 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
     if (!floorReady(costFloor)) return waitingNote;
     if (!hasUsage) return <LevelTrack levels={levels} unit="USD" value={cost} onChange={onCostChange} readOnly={readOnly} levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} />;
     const series = costSeries(data);
-    const secondarySeries = billableCostSeries(data);
     const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
     const reset = defaultsFor(series, costFloor);
     return (
       <LimitsChart kind="cost" unit="USD" window={window} series={series} cycles={data.cycles} today={data.today}
-        secondarySeries={secondarySeries.length ? secondarySeries : undefined} secondaryLabel="Estimated billable cost"
         title={title} titleIndent={Boolean(title)}
         levels={levels} value={cost} seed={scaleFloor(costFloor)} tolerance={fromTolerance} resetToTolerance={reset}
         reference={window === "cycle" ? costFloor : undefined} onChange={onCostChange} readOnly={readOnly}
@@ -117,17 +117,19 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   };
   const usageChart = (id: string): ReactNode => {
     if (!data) return null;
-    if (!floorReady(usageFloor?.[id])) return waitingNote;
+    const aggregationKind = metricAggregationKind(data, id);
+    if (!floorReady(usageFloor?.[id], aggregationKind)) return waitingNote;
     if (!hasUsage) return <LevelTrack levels={levels} unit={data.metrics[id]?.unit ?? ""} value={usage[id] ?? {}} onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined} />;
-    const series = metricSeries(data, id);
-    const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
-    const included = accountScope && window === "cycle" && data.planTier !== "free" ? data.metrics[id]?.includedPerCycle : undefined;
-    const reset = defaultsFor(series, usageFloor?.[id], included);
+    const series = rowSeries(data, id);
+    const included = quotaScope && data.planTier !== "free" ? metricIncluded(data, id) : undefined;
+    const poolSeries = included ? metricPool(data, id)?.series : undefined;
+    const fromTolerance = dayTolerance ? dailyToleranceDefaults(series, data.cycles, data.today, order, dayTolerance, included, aggregationKind) : undefined;
+    const reset = defaultsFor(series, usageFloor?.[id], included, aggregationKind);
     return <LimitsChart key={id} kind="usage" unit={data.metrics[id]?.unit ?? ""} window={window} series={series}
-      cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id])}
+      cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id], aggregationKind)}
       tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}
-      includedPerCycle={included} includedBoundaryLabel={includedBoundaryLabel}
+      includedPerCycle={included} poolSeries={poolSeries} composition={metricComposition(data, id)} aggregationKind={aggregationKind}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined}
       history={histories(id)} fields="inline" />;
@@ -143,7 +145,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   const commitUsage = (id: string, levelId: string, next: number) => {
     if (!data || readOnly) return;
     const current = usageRef.current[id] ?? {};
-    const pushed = pushLevelValue(metricSeries(data, id), data.cycles, data.today, order, current, levelId, next, window === "cycle" ? undefined : usageFloor?.[id]);
+    const pushed = pushLevelValue(rowSeries(data, id), data.cycles, data.today, order, current, levelId, next, window === "cycle" ? undefined : usageFloor?.[id], metricAggregationKind(data, id));
     histories(id).seed(current);
     histories(id).record(pushed);
     changeUsage(id, pushed);

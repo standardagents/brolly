@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget, PlanTier } from "./src/client/types.ts";
 import { estimatedBillableCostSeries } from "./src/estimated-billable-cost.js";
-import { WORKERS_PAID_INCLUDED } from "./src/included-quota.js";
+import { BILLED_VIA, WORKERS_PAID_INCLUDED } from "./src/included-quota.js";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
 
 const now = Date.now();
@@ -690,8 +690,12 @@ function syntheticUsageSeries(scope: string): UsageSeriesResponse {
         "durable_objects:duration_gb_seconds": Math.round(costUsd * 2_400 * (0.8 + random(index + 11) * 0.4)),
         "durable_objects:rows_read": Math.round(costUsd * 4_800_000 * (index > 60 ? 4 : 1) * (0.8 + random(index + 3) * 0.4)),
         "durable_objects:rows_written": Math.round(costUsd * 260_000 * (0.8 + random(index + 5) * 0.4)),
+        "durable_objects:kv_read_units": Math.round(costUsd * 1_800_000 * (0.8 + random(index + 17) * 0.4)),
+        "durable_objects:kv_write_units": Math.round(costUsd * 180_000 * (0.8 + random(index + 19) * 0.4)),
+        "durable_objects:kv_delete_requests": Math.round(costUsd * 90_000 * (0.8 + random(index + 23) * 0.4)),
         "durable_objects:incoming_websocket_messages": Math.round(costUsd * 120_000 * (0.8 + random(index + 13) * 0.4)),
         "durable_objects:sql_storage_bytes": Math.round(2_000_000_000 + index * 18_000_000),
+        "durable_objects:kv_storage_bytes": Math.round(400_000_000 + index * 7_000_000),
       }
       : scope === "account"
         ? {
@@ -710,19 +714,23 @@ function syntheticUsageSeries(scope: string): UsageSeriesResponse {
     includedQuotaCatalogVersion: "2026-08", planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource,
     metrics: withDemoQuota(scope === "family:durable_objects"
       ? {
-        "durable_objects:requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
-        "durable_objects:duration_gb_seconds": { key: "duration_gb_seconds", label: "Duration", unit: "GB-s", billable: true },
-        "durable_objects:rows_read": { key: "rows_read", label: "Rows read", unit: "rows", billable: true },
-        "durable_objects:rows_written": { key: "rows_written", label: "Rows written", unit: "rows", billable: true },
-        "durable_objects:incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", billable: true },
-        "durable_objects:sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", billable: true },
+        "durable_objects:requests": { key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true },
+        "durable_objects:duration_gb_seconds": { key: "duration_gb_seconds", label: "Duration", unit: "GB-s", aggregationKind: "sum", billable: true },
+        "durable_objects:rows_read": { key: "rows_read", label: "Rows read", unit: "rows", aggregationKind: "sum", billable: true },
+        "durable_objects:rows_written": { key: "rows_written", label: "Rows written", unit: "rows", aggregationKind: "sum", billable: true },
+        "durable_objects:kv_read_units": { key: "kv_read_units", label: "KV read units", unit: "count", aggregationKind: "sum", billable: true },
+        "durable_objects:kv_write_units": { key: "kv_write_units", label: "KV write units", unit: "count", aggregationKind: "sum", billable: true },
+        "durable_objects:kv_delete_requests": { key: "kv_delete_requests", label: "KV delete requests", unit: "requests", aggregationKind: "sum", billable: true },
+        "durable_objects:incoming_websocket_messages": { key: "incoming_websocket_messages", label: "WebSocket messages", unit: "messages", aggregationKind: "sum", billable: true, billedVia: BILLED_VIA["durable_objects:incoming_websocket_messages"] },
+        "durable_objects:sql_storage_bytes": { key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", aggregationKind: "maximum", billable: true },
+        "durable_objects:kv_storage_bytes": { key: "kv_storage_bytes", label: "KV storage", unit: "bytes", aggregationKind: "maximum", billable: true },
       }
       : scope === "account"
         ? {
-          "workers:requests": { key: "requests", label: "Requests", unit: "requests", billable: true },
-          "workers:cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "milliseconds", billable: true },
+          "workers:requests": { key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true },
+          "workers:cpu_ms": { key: "cpu_ms", label: "CPU time", unit: "milliseconds", aggregationKind: "sum", billable: true },
         }
-        : Object.fromEntries(demoFamilyMetrics(scope).map(([id, label, unit]) => [id, { key: id.split(":")[1]!, label, unit, billable: true }])), scope),
+        : Object.fromEntries(demoFamilyMetrics(scope).map(([id, label, unit]) => [id, { key: id.split(":")[1]!, label, unit, aggregationKind: "sum" as const, billable: true }])), scope),
     series, cycles,
   };
 }
@@ -740,6 +748,13 @@ const demoIncludedPerCycle: Record<string, number> = {
   "d1:storage_bytes": 5_000_000_000,
   "durable_objects:requests": 1_000_000,
   "durable_objects:duration_gb_seconds": 400_000,
+  "durable_objects:rows_read": 25_000_000_000,
+  "durable_objects:rows_written": 50_000_000,
+  "durable_objects:kv_read_units": 1_000_000,
+  "durable_objects:kv_write_units": 1_000_000,
+  "durable_objects:kv_delete_requests": 1_000_000,
+  "durable_objects:sql_storage_bytes": 5_000_000_000,
+  "durable_objects:kv_storage_bytes": 1_000_000_000,
   "r2:class_a": 1_000_000,
   "r2:class_b": 10_000_000,
   "r2:storage_bytes": 10_000_000_000,
@@ -747,10 +762,12 @@ const demoIncludedPerCycle: Record<string, number> = {
 };
 
 function withDemoQuota(metrics: UsageSeriesResponse["metrics"], scope: string): UsageSeriesResponse["metrics"] {
-  if (scope !== "account") return metrics;
+  const family = scope.match(/^family:([^:]+)$/)?.[1];
+  if (!family) return metrics;
   return Object.fromEntries(Object.entries(metrics).map(([id, metric]) => {
     const includedPerCycle = demoIncludedPerCycle[id];
-    return [id, demoPlan.planTier === "free" || includedPerCycle === undefined ? metric : { ...metric, includedPerCycle }];
+    const noted = BILLED_VIA[id] ? { ...metric, billedVia: BILLED_VIA[id] } : metric;
+    return [id, demoPlan.planTier === "free" || !id.startsWith(`${family}:`) || includedPerCycle === undefined ? noted : { ...noted, includedPerCycle }];
   }));
 }
 

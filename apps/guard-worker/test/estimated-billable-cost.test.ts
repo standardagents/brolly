@@ -57,6 +57,19 @@ describe("estimated billable cost series", () => {
     expect(series[0]?.costUsd).toBeCloseTo(expected, 15);
   });
 
+  it("depletes the shared Durable Objects request allotment with WebSocket messages at 20:1", () => {
+    const requests = { metricId: "durable_objects:requests", includedPerCycle: 1_000_000, unit: "requests" };
+    const series = estimatedBillableCostSeries([
+      // 500k direct requests + 10M messages (= 500k request-equivalents) exactly exhaust the allotment.
+      point("2026-08-01", { "durable_objects:requests": 500_000, "durable_objects:incoming_websocket_messages": 10_000_000 }),
+      // Everything past the boundary is billable: 100k requests + 2M messages (= 100k equivalents).
+      point("2026-08-02", { "durable_objects:requests": 100_000, "durable_objects:incoming_websocket_messages": 2_000_000 }),
+    ], [CYCLE], [requests], "paid");
+
+    expect(series[0]?.costUsd).toBe(0);
+    expect(series[1]?.costUsd).toBeCloseTo(200_000 * (0.15 / 1_000_000), 12);
+  });
+
   it("sorts the returned daily points without mutating the input", () => {
     const input = [
       point("2026-08-02", { "workers:requests": 12_000_000 }),

@@ -24,7 +24,8 @@ function render(props: Partial<Parameters<typeof LimitsChart>[0]> = {}) {
 describe("LimitsChart", () => {
   it("renders one bar per day in the window and one slider per level", () => {
     const html = render();
-    expect((html.match(/<rect [^>]*rx=/g) ?? []).length).toBe(series.length);
+    // One base segment per day; level overage segments stack above it.
+    expect((html.match(/data-day-bar/g) ?? []).length).toBe(series.length);
     expect((html.match(/role="slider"/g) ?? []).length).toBe(LEVELS.length);
     expect(html).toContain('aria-valuenow="10"');
     expect(html).toContain('aria-valuenow="20"');
@@ -32,12 +33,14 @@ describe("LimitsChart", () => {
     expect(html).toContain('aria-valuetext="$50.00"');
   });
 
-  it("colors a bar with the highest crossed level", () => {
+  it("colors only the part of a bar above each crossed level", () => {
     const html = render({ value: { warn: 5, critical: 30, emergency: 100 } });
     // The 40-dollar spike crosses "critical"; ordinary days (3–6) cross "warn".
-    expect(html).toContain('fill="#c9412c" opacity="1"');
-    expect(html).toContain('fill="#e79021" opacity="1"');
-    expect(html).not.toContain('fill="#561a55" opacity="1"');
+    // Each bar stays blue to the first level and wears a level's color only above it.
+    expect(html).toContain('fill="#c9412c" opacity="0.9"');
+    expect(html).toContain('fill="#e79021" opacity="0.9"');
+    expect(html).toContain('fill="#2f6fd6" opacity="0.9"');
+    expect(html).not.toContain('fill="#561a55" opacity="0.9"');
   });
 
   it("renders a numeric field per level and hides handles and fields in read-only mode", () => {
@@ -52,45 +55,45 @@ describe("LimitsChart", () => {
     expect(readOnly).toContain("Emergency");
   });
 
-  it("labels usage charts with the unit and uses the teal accent", () => {
+  it("labels usage charts with the unit and uses the shared blue accent", () => {
     const html = render({ kind: "usage", unit: "requests", value: { warn: 100, critical: 200, emergency: 500 } });
     expect(html).toContain('data-limits-chart="usage"');
     expect(html).toContain("500 reqs");
-    expect(html).toContain('fill="#1a9c8c"');
+    expect(html).toContain('fill="#2f6fd6"');
   });
 
-  it("renders estimated billable cost as a secondary line with a legend", () => {
-    const html = render({
-      secondarySeries: series.map(point => ({ ...point, value: point.value / 2 })),
-      secondaryLabel: "Estimated billable cost",
-    });
-    expect(html).toContain("data-secondary-cost-series");
-    expect(html).toContain("data-cost-series-legend");
-  });
 
-  it("paints the cycle running total in the color of the band it crosses and greys the bars", () => {
+  it("paints the cycle running total in the color of the band it crosses", () => {
     const html = render({ window: "cycle", value: { warn: 20, critical: 60, emergency: 1000 } });
     // Cumulative July spend passes 20 and 60, so warn and critical bands both paint the sawtooth.
-    expect(html).toContain('fill="#e79021" opacity=".82"');
-    expect(html).toContain('fill="#c9412c" opacity=".82"');
-    expect(html).toContain('fill="currentColor" opacity="0.16"');
+    expect(html).toContain('fill="#e79021" opacity="0.82"');
+    expect(html).toContain('fill="#c9412c" opacity="0.82"');
     // The open-ended top band clips from the top of the plot, so totals above the last line still paint.
     const low = render({ window: "cycle", value: { warn: 5, critical: 10, emergency: 20 } });
-    expect(low).toContain('fill="#561a55" opacity=".82"');
+    expect(low).toContain('fill="#561a55" opacity="0.82"');
     expect(low).not.toMatch(/band-emergency"><rect[^>]*height="0"/);
   });
 
-  it("shows the account usage allotment only on cycle charts and keeps distant boundaries off-scale", () => {
+  it("draws the allotment boundary on cycle charts and the free runway on day charts", () => {
     const cycle = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 50 });
-    expect((cycle.match(/data-included-band/g) ?? []).length).toBe(1);
     expect((cycle.match(/data-included-boundary/g) ?? []).length).toBe(1);
     expect((cycle.match(/data-projected-crossing/g) ?? []).length).toBe(1);
+    expect((cycle.match(/data-included-pill/g) ?? []).length).toBe(1);
+    expect((cycle.match(/data-included-legend/g) ?? []).length).toBe(1);
+    expect(cycle).not.toContain("data-free-left");
     const day = render({ kind: "usage", unit: "requests", window: "day", includedPerCycle: 50 });
-    expect(day).not.toContain("data-included-band");
+    expect(day).not.toContain("data-included-boundary");
+    expect((day.match(/data-free-left(?!-)/g) ?? []).length).toBe(1);
+    expect(day).toContain("data-free-left-projected");
+    expect(day).not.toContain("data-included-pill");
     const distant = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 10_000 });
-    expect(distant).toMatch(/data-included-band="true" data-clamped="true"/);
     expect(distant).not.toContain("data-included-boundary");
+    expect(distant).not.toContain("data-included-pill");
+    expect(distant).toContain("data-included-legend");
+    const cost = render({ window: "day", includedPerCycle: 50 });
+    expect(cost).not.toContain("data-free-left");
   });
+
 
   it("shows a non-blocking note when a cycle level is below its daily reference", () => {
     const html = render({ window: "cycle", value: { warn: 10, critical: 40, emergency: 80 }, reference: { warn: 20, critical: 30, emergency: 60 } });

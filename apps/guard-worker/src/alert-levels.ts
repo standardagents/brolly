@@ -5,6 +5,10 @@ export const ALERT_ENTRY_KINDS = ["channel", "prepare_stop", "prepare_quarantine
 
 export type AlertEntryKind = typeof ALERT_ENTRY_KINDS[number];
 
+/** Brolly runs a fixed three-level board: Warning, Critical, Emergency. Levels are renamed and reordered, never added or removed. */
+export const ALERT_LEVEL_COUNT = 3;
+const FIXED_BOARD_ERROR = `Brolly uses exactly ${ALERT_LEVEL_COUNT} alert levels`;
+
 export interface AlertLevel {
   id: string;
   position: number;
@@ -33,27 +37,7 @@ export async function alertLevelsApiRoute(request: Request, env: Env, actor: str
     return Response.json({ levels: await loadAlertLevels(env.DB) }, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/api/alert-levels" && request.method === "POST") {
-    const body = await request.json<{ label?: string; afterLevelId?: string | null }>();
-    const label = normalizedLabel(body.label);
-    if (!label) return Response.json({ error: "Level name must contain 1 to 40 characters" }, { status: 400 });
-    const levels = await loadAlertLevels(env.DB);
-    if (levels.length >= 8) return Response.json({ error: "Brolly supports up to eight alert levels" }, { status: 400 });
-    if (levels.some(level => sameLabel(level.label, label))) return Response.json({ error: "Alert level names must be unique" }, { status: 400 });
-    let insertAt = 0;
-    if (body.afterLevelId != null) {
-      const after = levels.findIndex(level => level.id === body.afterLevelId);
-      if (after === -1) return Response.json({ error: "Previous alert level not found" }, { status: 400 });
-      insertAt = after + 1;
-    }
-    const id = crypto.randomUUID();
-    const now = Date.now();
-    await env.DB.prepare(`INSERT INTO alert_levels(id,position,label,created_at,updated_at) VALUES(?1,?2,?3,?4,?4)`)
-      .bind(id, 10_000 + levels.length, label, now).run();
-    const ordered = [...levels];
-    ordered.splice(insertAt, 0, { id, position: insertAt, label, entries: [] });
-    await writeLevelPositions(env.DB, ordered.map(level => level.id), now);
-    await audit(env.DB, actor, "alert_level.create", id, { label, position: insertAt });
-    return Response.json({ ok: true, level: (await loadAlertLevels(env.DB)).find(level => level.id === id) }, { status: 201 });
+    return Response.json({ error: FIXED_BOARD_ERROR }, { status: 405 });
   }
 
   const levelMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)$/);
@@ -88,20 +72,7 @@ export async function alertLevelsApiRoute(request: Request, env: Env, actor: str
   }
 
   if (levelMatch && request.method === "DELETE") {
-    const id = decodeURIComponent(levelMatch[1]!);
-    const levels = await loadAlertLevels(env.DB);
-    if (!levels.some(level => level.id === id)) return Response.json({ error: "Alert level not found" }, { status: 404 });
-    if (levels.length === 1) return Response.json({ error: "At least one alert level must remain" }, { status: 409 });
-    const now = Date.now();
-    await env.DB.batch([
-      env.DB.prepare(`UPDATE alert_lines SET retired=1,updated_at=?2 WHERE level_id=?1`).bind(id, now),
-      env.DB.prepare(`DELETE FROM alert_levels WHERE id=?1`).bind(id),
-    ]);
-    const remaining = levels.filter(level => level.id !== id);
-    await writeLevelPositions(env.DB, remaining.map(level => level.id), now);
-    await synchronizeLinePriorities(env.DB, remaining, now);
-    await audit(env.DB, actor, "alert_level.delete", id, {});
-    return Response.json({ ok: true, id });
+    return Response.json({ error: FIXED_BOARD_ERROR }, { status: 405 });
   }
 
   const entriesMatch = url.pathname.match(/^\/api\/alert-levels\/([^/]+)\/entries(?:\/([^/]+))?$/);

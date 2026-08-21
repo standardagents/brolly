@@ -1,4 +1,4 @@
-import type { IncludedAllotment, PlanTier } from "./included-quota.js";
+import { BILLED_VIA, type IncludedAllotment, type PlanTier } from "./included-quota.js";
 
 /**
  * The usage fields needed to derive the secondary cost series. The server's
@@ -32,7 +32,6 @@ export const ESTIMATED_BILLABLE_GROSS_RATES: Readonly<Record<string, number>> = 
   "workers:cpu_ms": 0.02 / 1_000_000,
   "durable_objects:requests": 0.15 / 1_000_000,
   "durable_objects:duration_gb_seconds": 12.50 / 1_000_000,
-  "durable_objects:incoming_websocket_messages": (0.15 / 1_000_000) / 20,
   "durable_objects:rows_read": 0.001 / 1_000_000,
   "durable_objects:rows_written": 1 / 1_000_000,
   "durable_objects:kv_read_units": 0.20 / 1_000_000,
@@ -81,7 +80,7 @@ export function estimatedBillableCostSeries(
     const usageByMetric = cycleUsage.get(cycle.index) ?? new Map<string, number>();
     cycleUsage.set(cycle.index, usageByMetric);
     let costUsd = 0;
-    for (const [metricId, rawValue] of Object.entries(point.metrics)) {
+    for (const [metricId, rawValue] of Object.entries(foldBilledVia(point.metrics))) {
       const included = includedByMetric.get(metricId);
       const grossRate = ESTIMATED_BILLABLE_GROSS_RATES[metricId];
       if (included === undefined || grossRate === undefined) continue;
@@ -95,6 +94,24 @@ export function estimatedBillableCostSeries(
     }
     return { day: point.day, costUsd };
   });
+}
+
+/**
+ * Fold metrics that bill into another meter (see BILLED_VIA) into that
+ * meter's quantity, so shared allotments deplete correctly. Incoming
+ * WebSocket messages, for example, consume Durable Objects requests at 20:1.
+ */
+function foldBilledVia(metrics: Readonly<Record<string, number>>): Record<string, number> {
+  if (!Object.keys(metrics).some(metricId => BILLED_VIA[metricId])) return { ...metrics };
+  const folded: Record<string, number> = { ...metrics };
+  for (const [metricId, target] of Object.entries(BILLED_VIA)) {
+    const value = folded[metricId];
+    if (value === undefined) continue;
+    delete folded[metricId];
+    const converted = Math.max(0, Number.isFinite(value) ? value : 0) / target.ratio;
+    folded[target.metricId] = (folded[target.metricId] ?? 0) + converted;
+  }
+  return folded;
 }
 
 function cycleForDay(

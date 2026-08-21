@@ -1,7 +1,7 @@
 import { familyControl } from "@standardagents/brolly-core";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { LimitsChartDual, levelColor, useUsageSeries } from "../components/limits-chart";
-import { billableMetricIds, costSeries, metricSeries } from "../components/limits-chart/api";
+import { rowSeries, metricIncluded, billableMetricIds, costSeries, metricAggregationKind, metricSeries } from "../components/limits-chart/api";
 import { windowDefaults } from "../components/limits-chart/defaults";
 import type { LevelValues } from "../components/limits-chart/levels";
 import { Expander, Icon, ProductIcon, Spinner, Switch } from "../components/ui";
@@ -147,7 +147,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
 
   return <>
     <StepIntro title="Product limits">
-      Cost and billable usage limits for each product: per day on the left, per billing cycle on the right. Each starts from its typical history and your risk tolerance.
+      Cost and billable usage limits for each product: per day on the left, per billing cycle on the right. Each starts from its typical history and your risk tolerance. Billing-cycle usage charts mark each product meter&apos;s included allotment.
     </StepIntro>
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
       <nav className="sticky self-start max-lg:static" style={{ top: STICKY_TOP + 16 }} aria-label="Products">
@@ -265,15 +265,17 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     // An item is "deviated" when either window's saved values differ from
     // its defaults: tolerance for the day window, the daily multiple for the
     // cycle window.
-    const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle", includedPerCycle?: number) => {
+    const deviates = (series: ReturnType<typeof costSeries>, saved: Record<string, number> | undefined, dailySaved: Record<string, number> | undefined, window: "day" | "cycle", includedPerCycle?: number, aggregationKind?: "sum" | "maximum" | "latest") => {
       if (!saved || !order.every(id => Number.isFinite(saved[id]))) return false;
-      const expected = windowDefaults(series, data.cycles, data.today, order, window, tolerance, dailySaved, includedPerCycle);
+      const expected = windowDefaults(series, data.cycles, data.today, order, window, tolerance, dailySaved, includedPerCycle, aggregationKind === "sum" ? "sum" : aggregationKind ?? "sum");
       return !!expected && order.some(id => expected[id] !== saved[id]);
     };
     const deviated: string[] = [];
     if (deviates(costSeries(data), dayLimits?.cost, undefined, "day") || deviates(costSeries(data), cycleLimits?.cost, dayLimits?.cost, "cycle")) deviated.push("cost");
     for (const id of metricIds) {
-      if (deviates(metricSeries(data, id), dayLimits?.usage?.[id], undefined, "day", undefined) || deviates(metricSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle", undefined)) deviated.push(id);
+      const includedPerCycle = data.scope.startsWith("family:") ? metricIncluded(data, id) : undefined;
+      const aggregationKind = metricAggregationKind(data, id);
+      if (deviates(rowSeries(data, id), dayLimits?.usage?.[id], undefined, "day", includedPerCycle, aggregationKind) || deviates(rowSeries(data, id), cycleLimits?.usage?.[id], dayLimits?.usage?.[id], "cycle", includedPerCycle, aggregationKind)) deviated.push(id);
     }
     setDeviatedRows(current => (deviated.length === current.size && deviated.every(id => current.has(id)) ? current : new Set(deviated)));
     onInfo(scope, { hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });

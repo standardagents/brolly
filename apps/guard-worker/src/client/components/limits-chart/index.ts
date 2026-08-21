@@ -4,7 +4,6 @@ export { useLimitHistory, type LimitHistory } from "./use-limit-history";
 export { projectedCrossingDate, projectedCrossingDay, type CycleBounds, type DayPoint } from "./cycles";
 export { type LevelValues, pushLevels, defaultLevels, completeLevels } from "./levels";
 export { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, quotaBandGeometry, type Axis, type IncludedBandGeometry } from "./scale";
-export { cycleIncludedPercent, includedUsagePercent } from "./included-quota";
 export { type UsageLimitValues } from "./use-scope-window";
 export { useUsageSeries, scopeKey, type UsageSeriesResponse } from "./api";
 export { LimitsChartDual, type LimitsChartDualProps, type WindowLimits } from "./LimitsChartDual";

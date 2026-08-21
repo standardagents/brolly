@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
-import { billableMetricIds, costSeries, metricSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
-import type { DayPoint } from "./cycles";
+import { billableMetricIds, costSeries, metricAggregationKind, metricComposition, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
+import type { AggregationKind, DayPoint } from "./cycles";
 import { windowDefaults } from "./defaults";
-import { unitLabel } from "./format";
+import { formatLimitValue, unitLabel } from "./format";
 import { LevelValueField } from "./LevelValueField";
 import type { LevelValues } from "./levels";
-import type { LimitsChartLevel } from "./LimitsChart";
+import { CHART_ACCENT, type LimitsChartLevel } from "./LimitsChart";
 import { Expander, Spinner, Switch } from "../ui";
-import { IncludedUsageReadout, MiniChart } from "./UsageDimensions";
+import { MiniChart } from "./UsageDimensions";
 import { sameMap, useScopeWindow, type ScopeWindow, type UsageLimitValues } from "./use-scope-window";
 
 export interface WindowLimits {
@@ -49,10 +49,12 @@ export interface LimitsChartDualProps {
    * open row draws a full box and pushes its neighbors away.
    */
   separators?: boolean;
+  /**
+   * Teaching layout: no row header (label, sparklines, chips, switch); the
+   * charts render open with their headings. Used by the account step.
+   */
+  headerless?: boolean;
 }
-
-const COST_ACCENT = "#2f6fd6";
-const USAGE_ACCENT = "#1a9c8c";
 
 /**
  * One table per scope: a row per dimension (cost first) with the per-day and
@@ -65,15 +67,17 @@ const USAGE_ACCENT = "#1a9c8c";
  * follows tolerance until both are reset. Manual daily edits never move the
  * cycle map.
  */
-export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false, costOnly = false, deviated, chartHeadings, separators = false }: LimitsChartDualProps) {
+export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cycle, onChange, tolerance, open, onOpenChange, readOnly = false, costOnly = false, deviated, chartHeadings, separators = false, headerless = false }: LimitsChartDualProps) {
   const fetched = useUsageSeries(token ?? "", dataProp ? "" : scope ?? "");
   const data = dataProp ?? fetched.data;
-  const accountScope = (scope ?? data?.scope) === "account";
+  const scopeKey = scope ?? data?.scope;
+  // Included allotments belong to family product meters. Account limits are
+  // cost-only and resource charts are measured independently.
+  const quotaScope = scopeKey?.startsWith("family:") === true;
   const planTier = (data as (UsageSeriesResponse & { planTier?: string }) | null)?.planTier;
-  const includedBoundaryLabel = planTier === "enterprise" ? "Standard paid-plan allotment" : undefined;
   const dayWindow = useScopeWindow({
     data, window: "day", levels, cost: day.cost, usage: day.usage, tolerance, readOnly,
-    accountScope, includedBoundaryLabel,
+    quotaScope, usageEnabled: !costOnly,
     onCostChange: cost => onChange("day", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("day", current => ({ ...current, usage })),
     costLevelEnabled: day.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("day", current => ({ ...current, costLevelEnabled })),
@@ -81,7 +85,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
   });
   const cycleWindow = useScopeWindow({
     data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, costFloor: day.cost, usageFloor: day.usage,
-    accountScope, includedBoundaryLabel,
+    quotaScope, usageEnabled: !costOnly,
     onCostChange: cost => onChange("cycle", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("cycle", current => ({ ...current, usage })),
     costLevelEnabled: cycle.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("cycle", current => ({ ...current, costLevelEnabled })),
@@ -99,21 +103,21 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     const previous = previousTolerance.current;
     previousTolerance.current = tolerance;
     if (!data || !tolerance || !previous || sameMap(previous, tolerance)) return;
-    const follow = (series: DayPoint[], dayMap: LevelValues | undefined, cycleMap: LevelValues | undefined, includedPerCycle?: number): { day: LevelValues; cycle: LevelValues } | null => {
+    const follow = (series: DayPoint[], dayMap: LevelValues | undefined, cycleMap: LevelValues | undefined, includedPerCycle?: number, aggregationKind: AggregationKind = "sum"): { day: LevelValues; cycle: LevelValues } | null => {
       if (!dayMap) return null;
-      const dayBefore = windowDefaults(series, data.cycles, data.today, order, "day", previous, undefined);
+      const dayBefore = windowDefaults(series, data.cycles, data.today, order, "day", previous, undefined, includedPerCycle, aggregationKind);
       if (!dayBefore || !sameMap(dayMap, dayBefore)) return null;
       if (cycleMap && order.some(id => Number.isFinite(cycleMap[id]))) {
-        const cycleBefore = windowDefaults(series, data.cycles, data.today, order, "cycle", previous, undefined, includedPerCycle);
+        const cycleBefore = windowDefaults(series, data.cycles, data.today, order, "cycle", previous, undefined, includedPerCycle, aggregationKind);
         if (!cycleBefore || !sameMap(cycleMap, cycleBefore)) return null;
       }
-      const dayAfter = windowDefaults(series, data.cycles, data.today, order, "day", tolerance, undefined);
-      const cycleAfter = windowDefaults(series, data.cycles, data.today, order, "cycle", tolerance, undefined, includedPerCycle);
+      const dayAfter = windowDefaults(series, data.cycles, data.today, order, "day", tolerance, undefined, includedPerCycle, aggregationKind);
+      const cycleAfter = windowDefaults(series, data.cycles, data.today, order, "cycle", tolerance, undefined, includedPerCycle, aggregationKind);
       if (!dayAfter || !cycleAfter) return null;
       return { day: dayAfter, cycle: cycleAfter };
     };
     const cost = follow(costSeries(data), day.cost, cycle.cost);
-    const usage = Object.fromEntries(metricIds.map(id => [id, follow(metricSeries(data, id), day.usage[id], cycle.usage[id], accountScope && data.planTier !== "free" ? data.metrics[id]?.includedPerCycle : undefined)] as const).filter(([, next]) => next)) as Record<string, { day: LevelValues; cycle: LevelValues }>;
+    const usage = Object.fromEntries(metricIds.map(id => [id, follow(rowSeries(data, id), day.usage[id], cycle.usage[id], quotaScope && data.planTier !== "free" ? metricIncluded(data, id) : undefined, metricAggregationKind(data, id))] as const).filter(([, next]) => next)) as Record<string, { day: LevelValues; cycle: LevelValues }>;
     if (!cost && !Object.keys(usage).length) return;
     onChange("day", current => ({ ...current, cost: cost ? cost.day : current.cost, usage: { ...current.usage, ...Object.fromEntries(Object.entries(usage).map(([id, next]) => [id, next.day])) } }));
     onChange("cycle", current => ({ ...current, cost: cost ? cost.cycle : current.cost, usage: { ...current.usage, ...Object.fromEntries(Object.entries(usage).map(([id, next]) => [id, next.cycle])) } }));
@@ -122,8 +126,11 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
 
   const rows = useMemo(() => data ? [
     { id: "cost", label: "Cost", unit: "USD", series: costSeries(data) },
-    ...(costOnly ? [] : metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: metricSeries(data, id), includedPerCycle: accountScope && data.planTier !== "free" ? metricIncludedPerCycle(data, id) : undefined }))),
-  ] : [], [data, metricIds, costOnly, accountScope]);
+    ...(costOnly ? [] : metricIds.map(id => {
+      const quota = quotaScope && data.planTier !== "free";
+      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: rowSeries(data, id), includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, includes: metricComposition(data, id)?.slice(1).map(part => part.label), aggregationKind: metricAggregationKind(data, id) };
+    })),
+  ] : [], [data, metricIds, costOnly, quotaScope]);
   // One switch per dimension, written to both windows; the day map is authoritative.
   const enabledFor = (id: string) => (id === "cost" ? day.costEnabled ?? true : day.usageEnabled?.[id] ?? true);
   const setEnabled = (id: string, next: boolean) => {
@@ -155,6 +162,15 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
           const on = enabledFor(row.id);
           const unsupported = row.id === "cost" && costUnsupported;
           const isOpen = on && !unsupported && open === row.id;
+          if (headerless) {
+            return (
+              <div key={row.id} className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+                <div className="min-w-0">{row.id === "cost" ? dayWindow.costChart(chartHeadings?.day) : dayWindow.usageChart(row.id)}</div>
+                <div className="min-w-0">{row.id === "cost" ? cycleWindow.costChart(chartHeadings?.cycle) : cycleWindow.usageChart(row.id)}</div>
+                {unsupported && <p className="col-span-full m-0 text-[11.5px] text-muted">Cost tracking is not supported on Enterprise plans currently.</p>}
+              </div>
+            );
+          }
           return (
             <DualRow
               key={row.id}
@@ -183,7 +199,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
 interface WindowCell { window: ScopeWindow; values: LevelValues; levelEnabled?: Record<string, boolean>; data: UsageSeriesResponse }
 
 function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns, levels, day, cycle, readOnly, unsupported, chartHeadings, separators }: {
-  row: { id: string; label: string; unit: string; series: DayPoint[]; includedPerCycle?: number };
+  row: { id: string; label: string; unit: string; series: DayPoint[]; includedPerCycle?: number; poolSeries?: DayPoint[]; includes?: string[]; aggregationKind?: AggregationKind };
   on: boolean;
   open: boolean;
   onToggleOpen(): void;
@@ -198,7 +214,7 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
   chartHeadings?: { day: string; cycle: string };
   separators?: boolean;
 }) {
-  const accent = row.id === "cost" ? COST_ACCENT : USAGE_ACCENT;
+  const accent = CHART_ACCENT;
   // A disabled row desaturates its content; the switch keeps full strength so
   // the way back on stays obvious.
   const dim = on && !unsupported ? "" : "opacity-55 saturate-0";
@@ -213,15 +229,10 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
   const cycleActiveLevels = useMemo(() => levels.filter(level => cycle.levelEnabled?.[level.id] ?? true), [levels, cycle.levelEnabled]);
   const cell = (window: "day" | "cycle", side: WindowCell) => {
     const activeLevels = window === "day" ? dayActiveLevels : cycleActiveLevels;
-    const readout = window === "day" && row.id !== "cost" ? (
-      <IncludedUsageReadout series={row.series} cycles={side.data.cycles} today={side.data.today} includedPerCycle={row.includedPerCycle}
-        className="block whitespace-nowrap text-[9px] leading-3 text-faint" />
-    ) : null;
     return (
       <span className="pointer-events-none relative grid min-w-0 items-center gap-x-2.5" style={chipColumns}>
-        <span className="grid min-w-0 gap-0.5">
-          <MiniChart series={row.series} cycles={side.data.cycles} today={side.data.today} window={window} accent={accent} levels={activeLevels} values={side.values} className="h-6 w-[72px]" />
-          {readout}
+        <span className="grid min-w-0">
+          <MiniChart series={row.series} cycles={side.data.cycles} today={side.data.today} window={window} accent={accent} levels={activeLevels} values={side.values} includedPerCycle={row.includedPerCycle} poolSeries={row.poolSeries} aggregationKind={row.aggregationKind} className="h-6 w-[72px]" />
         </span>
         {levels.map(level => {
           const levelOn = side.levelEnabled?.[level.id] ?? true;
@@ -243,7 +254,8 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
         <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${row.label}`} disabled={!on || unsupported} onClick={onToggleOpen} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
         <span className={`pointer-events-none relative min-w-0 ${dim}`}>
           <strong className="block truncate text-[12.5px]">{row.label}{deviated && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</strong>
-          <small className="block text-[10.5px] text-faint">{unitLabel(row.unit)}</small>
+          <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${formatLimitValue(row.includedPerCycle, row.unit)} included` : unitLabel(row.unit)}</small>
+          {row.includes?.length ? <small data-includes className="block text-[9.5px] leading-3 text-muted">Includes {row.includes.join(", ")}</small> : null}
         </span>
         <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("day", day)}</span>
         <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("cycle", cycle)}</span>
@@ -266,8 +278,3 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
   );
 }
 
-function metricIncludedPerCycle(data: UsageSeriesResponse, metricId: string): number | undefined {
-  const metric = data.metrics[metricId] as (UsageSeriesResponse["metrics"][string] & { includedPerCycle?: number }) | undefined;
-  const included = metric?.includedPerCycle;
-  return typeof included === "number" && Number.isFinite(included) && included > 0 ? included : undefined;
-}

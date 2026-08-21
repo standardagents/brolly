@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { money, number as formatNumber } from "../../format";
+import { money } from "../../format";
+import type { MetricPart } from "./api";
 import { ProductIcon } from "../ui";
-import { type CycleBounds, type DayPoint, cycleCumulative, dayStart, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
+import { DAY_MS, type AggregationKind, type CycleBounds, type DayPoint, cycleCumulative, dayOf, dayStart, denseSeries, freeRemainingSeries, includedTops, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults } from "./defaults";
-import { formatLimitValue } from "./format";
+import { compactValue, formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
 import { type Axis, chooseAxisWithIncluded, includedBandGeometry, snapStep, snapToNice } from "./scale";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
@@ -19,10 +20,6 @@ export interface LimitsChartProps {
   window: "day" | "cycle";
   /** Per-day values, ascending by day. Gaps are rendered as zero. */
   series: DayPoint[];
-  /** Optional per-day comparison rendered as a fixed secondary line. */
-  secondarySeries?: DayPoint[];
-  /** Legend label for the secondary line. */
-  secondaryLabel?: string;
   /** Billing cycle bounds. When empty, UTC calendar months are used. */
   cycles?: CycleBounds[];
   /** ISO day of "today"; defaults to the last day in the series. */
@@ -41,10 +38,14 @@ export interface LimitsChartProps {
   resetToTolerance?: LevelValues;
   /** Daily values shown as a non-blocking reference on cycle charts. */
   reference?: LevelValues;
-  /** Included account allotment for this usage metric's billing cycle. */
+  /** Included family allotment for this usage metric's billing cycle (in this metric's units). */
   includedPerCycle?: number;
-  /** Boundary label override for an enterprise baseline allotment. */
-  includedBoundaryLabel?: string;
+  /** Usage of a shared allotment pool in this metric's units, including this metric, when the allotment is shared. */
+  poolSeries?: DayPoint[];
+  /** Parts that make up `series` (meter first, then folded sources), each in this metric's units. */
+  composition?: MetricPart[];
+  /** How daily metric values combine within a billing cycle. Legacy data sums. */
+  aggregationKind?: AggregationKind;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
   /** levelId → active on this chart. Missing ids are active. Inactive levels keep their value but draw no line. */
@@ -75,8 +76,12 @@ const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
 export const CHART_PLOT_LEFT = PLOT.left;
 /** Floating readouts over the chart: the day tooltip and the axis value chip share one look. */
 const FLOAT_CHIP = "pointer-events-none absolute z-10 whitespace-nowrap rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
-/** Bar accents sit outside the warm level ramp: cool blue for cost, teal for usage. */
-const ACCENT = { cost: "#2f6fd6", usage: "#1a9c8c" } as const;
+/** One series accent for every chart, cost and usage alike: cool blue, outside the warm level ramp. */
+export const CHART_ACCENT = "#2f6fd6";
+/** Included (free-allotment) usage is green: it costs nothing. Blue is billable usage under the first level. */
+export const INCLUDED_COLOR = "#2e9d62";
+/** Included usage and the free-usage-left area share one light dithered green fill. */
+const DITHER_SWATCH = { backgroundColor: `${INCLUDED_COLOR}08`, backgroundImage: `radial-gradient(${INCLUDED_COLOR}7a 0.5px, transparent 0.6px)`, backgroundSize: "3px 3px" } as const;
 /** Level ramp, lowest to highest severity: amber → red → magenta → deep plum. */
 const LEVEL_PALETTE = ["#e79021", "#e0632a", "#c9412c", "#a8232f", "#8c1d45", "#701a58", "#521a5c", "#3a1748"];
 
@@ -89,7 +94,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, secondarySeries, secondaryLabel, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, includedBoundaryLabel = "Billable usage starts", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -106,28 +111,41 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
   );
   const window = useMemo(() => visibleWindow(series, cycles, today), [series, cycles, today]);
   const dense = useMemo(() => denseSeries(series, window.fromDay, window.toDay), [series, window]);
-  const cumulative = useMemo(() => cycleCumulative(dense, cycles), [dense, cycles]);
-  const secondaryDense = useMemo(() => secondarySeries ? denseSeries(secondarySeries, window.fromDay, window.toDay) : [], [secondarySeries, window]);
-  const secondaryCumulative = useMemo(() => cycleCumulative(secondaryDense, cycles), [secondaryDense, cycles]);
-  const projection = useMemo(() => projectCycle(dense, cycles, today), [dense, cycles, today]);
+  // Composition parts aligned to `dense`, for the seams inside day bars and the tooltip breakdown.
+  const partsDense = useMemo(() => (composition && composition.length > 1 ? composition.map(part => denseSeries(part.series, window.fromDay, window.toDay)) : []), [composition, window]);
+  const cumulative = useMemo(() => cycleCumulative(dense, cycles, aggregationKind), [dense, cycles, aggregationKind]);
+  const projection = useMemo(() => projectCycle(dense, cycles, today, aggregationKind), [dense, cycles, today, aggregationKind]);
   const observedMax = useMemo(() => Math.max(0, ...dense.map(point => point.value)), [dense]);
   const seriesValues = useMemo(() => dense.map(point => point.value), [dense]);
   const cycleMode = limitWindow === "cycle";
-  // Allotments are cycle-scoped usage quantities. Callers only provide an
-  // allotment for account-scope usage, but keeping the guard here prevents a
-  // cost or day chart from acquiring quota geometry through composition.
-  const chartIncluded = kind === "usage" && cycleMode && Number.isFinite(includedPerCycle) && includedPerCycle! > 0 ? includedPerCycle : undefined;
+  // Allotments are cycle-scoped usage quantities. The cycle chart draws the
+  // boundary; the day chart draws the free usage left as the cycle spends it.
+  // The kind guard keeps a cost chart from acquiring quota geometry.
+  const chartIncluded = kind === "usage" && Number.isFinite(includedPerCycle) && includedPerCycle! > 0 ? includedPerCycle : undefined;
+  const cycleIncluded = cycleMode ? chartIncluded : undefined;
+  // With a shared pool the free usage is judged against the whole pool.
+  const poolDense = useMemo(() => (poolSeries && chartIncluded ? denseSeries(poolSeries, window.fromDay, window.toDay) : undefined), [poolSeries, chartIncluded, window]);
+  const poolCumulative = useMemo(() => (poolDense ? cycleCumulative(poolDense, cycles, aggregationKind) : undefined), [poolDense, cycles, aggregationKind]);
+  const freeLeft = useMemo(() => (!cycleMode && chartIncluded ? freeRemainingSeries(poolDense ?? dense, cycles, chartIncluded, aggregationKind) : []), [cycleMode, chartIncluded, poolDense, dense, cycles, aggregationKind]);
+  // Per day of the cycle chart: how much of the running total is included,
+  // and where the ceiling sits once the pool's other members have spent.
+  const includedTop = useMemo(() => (cycleMode && chartIncluded ? includedTops(cumulative.map(point => point.cumulative), poolCumulative?.map(point => point.cumulative), chartIncluded) : []), [cycleMode, chartIncluded, cumulative, poolCumulative]);
+  const ceiling = useMemo(() => (cycleMode && chartIncluded && poolCumulative
+    ? cumulative.map((point, index) => Math.max(0, chartIncluded - Math.max(0, (poolCumulative[index]?.cumulative ?? point.cumulative) - point.cumulative)))
+    : []), [cycleMode, chartIncluded, cumulative, poolCumulative]);
   // The daily chart is about days: its axis fits the bars and levels, and the
   // cumulative background may run off the top. The cycle chart's axis must
   // hold the running total and the projection.
   const heightValues = useMemo(() => (limitWindow === "cycle"
-    ? [...seriesValues, ...cumulative.map(point => point.cumulative), ...secondaryCumulative.map(point => point.cumulative), projection?.projected ?? 0]
-    : [...seriesValues, ...secondaryDense.map(point => point.value)]), [seriesValues, cumulative, secondaryCumulative, secondaryDense, projection, limitWindow]);
+    ? [...seriesValues, ...cumulative.map(point => point.cumulative), projection?.projected ?? 0]
+    : seriesValues), [seriesValues, cumulative, projection, limitWindow]);
 
   // The axis extends to keep every level visible, but stays frozen while a
   // handle is dragged so the chart does not rescale under the pointer.
   const [frozenAxis, setFrozenAxis] = useState<Axis | null>(null);
-  const liveAxis = useMemo(() => chooseAxisWithIncluded(heightValues, order.map(id => value[id] ?? 0), chartIncluded), [heightValues, order, value, chartIncluded]);
+  // The day axis fits bars and levels only; the free-left area is clipped to
+  // the plot and reads as a full-height wash until it descends into range.
+  const liveAxis = useMemo(() => chooseAxisWithIncluded(heightValues, order.map(id => value[id] ?? 0), cycleIncluded), [heightValues, order, value, cycleIncluded]);
   const axis = frozenAxis ?? liveAxis;
 
   // Fill in defaults for levels that have no value yet. The defaults are
@@ -155,16 +173,22 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
   const plotHeight = PLOT.height - PLOT.top - PLOT.bottom;
   const yFor = (item: number) => PLOT.top + (1 - axis.position(item)) * plotHeight;
   const valueForY = (y: number) => axis.invert(1 - (y - PLOT.top) / plotHeight);
-  const includedBand = includedBandGeometry(axis, chartIncluded);
+  const includedBand = includedBandGeometry(axis, cycleIncluded);
+  // The free marker lives on the y axis as a highlighted tick: a value label
+  // in the gutter with a soft green field, drawn under the level diamonds.
+  // Cycle charts only: the day chart's green area carries its own meaning.
+  const freeMark = cycleMode && chartIncluded && includedBand?.boundary !== null
+    ? { value: chartIncluded, label: compactValue(chartIncluded, unit) }
+    : null;
+  const freeMarkY = freeMark ? yFor(freeMark.value) : null;
   const projectedCrossing = useMemo(
-    () => cycleMode ? projectedCrossingDate(dense, cycles, today, chartIncluded) : null,
-    [cycleMode, dense, cycles, today, chartIncluded],
+    () => cycleMode ? projectedCrossingDate(dense, cycles, today, cycleIncluded, aggregationKind) : null,
+    [cycleMode, dense, cycles, today, cycleIncluded, aggregationKind],
   );
   // Reserve room for the rest of the current cycle so the projection has
   // somewhere to go.
   const remainingDays = projection ? Math.max(0, projection.totalDays - projection.elapsedDays) : 0;
   const barSlot = plotWidth / Math.max(1, dense.length + remainingDays);
-  const barWidth = Math.max(1.5, barSlot * 0.62);
   const xFor = (index: number) => PLOT.left + index * barSlot + barSlot / 2;
 
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -277,46 +301,159 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const sawtooth = useMemo(() => cyclePolygons(cumulative, xFor, yFor, PLOT.top + plotHeight, barSlot), [cumulative, axis, plotWidth, plotHeight, barSlot]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
-  const secondaryLines = useMemo(() => chartLinePoints(cycleMode ? secondaryCumulative.map(point => ({ ...point, value: point.cumulative })) : secondaryDense, cycleMode, xFor, yFor), [secondaryCumulative, secondaryDense, cycleMode, axis, plotWidth, barSlot]);
   // Horizontal color bands for the cycle sawtooth: accent under the lowest
   // line, then each level's color up to the next line, the top one open.
   const bands = useMemo(() => {
     const edges = activeOrder.map(id => ({ id, value: shown[id] ?? 0 }));
-    const list: Array<{ id: string; color: string; bottom: number; top: number }> = [{ id: "base", color: ACCENT[kind], bottom: 0, top: edges[0]?.value ?? Number.POSITIVE_INFINITY }];
-    edges.forEach((edge, index) => list.push({ id: edge.id, color: activeLevels[index]?.color ?? ACCENT[kind], bottom: edge.value, top: edges[index + 1]?.value ?? Number.POSITIVE_INFINITY }));
+    const list: Array<{ id: string; color: string; bottom: number; top: number }> = [{ id: "base", color: CHART_ACCENT, bottom: 0, top: edges[0]?.value ?? Number.POSITIVE_INFINITY }];
+    edges.forEach((edge, index) => list.push({ id: edge.id, color: activeLevels[index]?.color ?? CHART_ACCENT, bottom: edge.value, top: edges[index + 1]?.value ?? Number.POSITIVE_INFINITY }));
     return list;
-  }, [activeOrder, shown, activeLevels, kind]);
+  }, [activeOrder, shown, activeLevels]);
+  // The included part of the running total, painted green over the bands.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const includedPolygons = useMemo(() => (includedTop.length
+    ? cyclePolygons(cumulative.map((point, index) => ({ ...point, cumulative: includedTop[index]! })), xFor, yFor, PLOT.top + plotHeight, barSlot)
+    : []), [cumulative, includedTop, axis, plotWidth, plotHeight, barSlot]);
+  // A shared pool's ceiling, one stepped line per cycle.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const ceilingLines = useMemo(() => {
+    const groups = new Map<number, string[]>();
+    ceiling.forEach((value, index) => {
+      const cycle = cumulative[index]?.cycle ?? -1;
+      const group = groups.get(cycle) ?? [];
+      group.push(`${xFor(index) - barSlot / 2},${yFor(value)}`, `${xFor(index) + barSlot / 2},${yFor(value)}`);
+      groups.set(cycle, group);
+    });
+    return [...groups.values()].map(group => group.join(" "));
+  }, [ceiling, cumulative, axis, plotWidth, barSlot]);
   const colorById = useMemo(() => new Map(levels.map(level => [level.id, level.color])), [levels]);
   const cycleStarts = cycles.filter(cycle => cycle.startsAt > dayStart(window.fromDay) && cycle.startsAt <= dayStart(window.toDay));
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
-  const accent = ACCENT[kind];
+  const accent = CHART_ACCENT;
   const chartLabel = label ?? `${kind === "cost" ? "Cost" : "Usage"} per ${limitWindow === "day" ? "day" : "billing cycle"}`;
   const trackHover = (event: PointerEvent<SVGRectElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = event.clientX - rect.left;
     const index = Math.floor((x - PLOT.left) / barSlot);
-    if (index < 0 || index >= dense.length) { setHoverDay(null); return; }
+    if (index < 0 || index >= dense.length + remainingDays) { setHoverDay(null); return; }
     setHoverDay({ index, x, y: event.clientY - rect.top });
   };
   const highlightLevel = dragging ?? hoverLevel;
-  const hovered = hoverDay && !dragging && !hoverLevel ? dense[hoverDay.index] : null;
+  // Hover covers the projected days too: those report the forecast, since
+  // there is no actual value to show yet.
+  const hovered = useMemo(() => {
+    if (!hoverDay || dragging || hoverLevel) return null;
+    const point = dense[hoverDay.index];
+    if (point) return { day: point.day, value: point.value, projected: false, index: hoverDay.index };
+    const ahead = hoverDay.index - dense.length + 1;
+    if (!projection || ahead < 1 || ahead > remainingDays) return null;
+    return { day: dayOf(dayStart(today) + ahead * DAY_MS), value: projection.rate, projected: true, index: hoverDay.index, ahead };
+  }, [hoverDay, dragging, hoverLevel, dense, projection, remainingDays, today]);
+  // Tooltip rows: one labeled line per fact instead of a single run-on string.
+  const hoverRows = ((): Array<[string, string]> => {
+    if (!hovered) return [];
+    const rows: Array<[string, string]> = [];
+    if (cycleMode) {
+      if (!hovered.projected) rows.push(["So far this cycle", formatLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
+      else rows.push(["Projected by this day", formatLimitValue(projection!.toDate + projection!.rate * hovered.ahead!, unit)]);
+      return rows;
+    }
+    rows.push([hovered.projected ? "Projected usage" : "Usage", formatLimitValue(hovered.value, unit)]);
+    if (!hovered.projected && partsDense.length > 1 && composition) {
+      partsDense.forEach((part, which) => rows.push([composition[which]!.label, compactValue(part[hovered.index]?.value ?? 0, unit)]));
+    }
+    const free = hovered.projected
+      ? Math.max(0, (freeLeft.at(-1)?.after ?? 0) - projection!.rate * hovered.ahead!)
+      : freeLeft[hovered.index]?.after;
+    if (chartIncluded && free !== undefined) rows.push(["Free left", formatLimitValue(free, unit)]);
+    return rows;
+  })();
+  // Free-usage-left area per cycle: starts at the allotment, falls with each
+  // day's usage (start-of-day to end-of-day), closed on the baseline.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const freeAreas = useMemo(() => {
+    const groups = new Map<number, { points: string[]; left: number; right: number }>();
+    const base = PLOT.top + plotHeight;
+    freeLeft.forEach((point, index) => {
+      const left = xFor(index) - barSlot / 2;
+      const right = xFor(index) + barSlot / 2;
+      const group = groups.get(point.cycle) ?? { points: [], left, right };
+      group.points.push(`${left},${yFor(point.before)}`, `${right},${yFor(point.after)}`);
+      group.right = right;
+      groups.set(point.cycle, group);
+    });
+    return [...groups.values()].map(group => ({ area: [`${group.left},${base}`, ...group.points, `${group.right},${base}`].join(" ") }));
+  }, [freeLeft, axis, plotWidth, plotHeight, barSlot]);
+  // Projected burn-down for the rest of the current cycle at the recent pace:
+  // the same area, plus a dashed top edge so it reads as a forecast.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const projectedFree = useMemo(() => {
+    const last = freeLeft.at(-1);
+    if (!last || !projection || last.cycle !== projection.cycle || remainingDays <= 0) return null;
+    const base = PLOT.top + plotHeight;
+    const area: string[] = [];
+    let left = last.after;
+    for (let day = 1; day <= remainingDays; day += 1) {
+      const index = dense.length - 1 + day;
+      const after = Math.max(0, left - projection.rate);
+      area.push(`${xFor(index) - barSlot / 2},${yFor(left)}`, `${xFor(index) + barSlot / 2},${yFor(after)}`);
+      left = after;
+    }
+    const start = xFor(dense.length) - barSlot / 2;
+    const end = xFor(dense.length - 1 + remainingDays) + barSlot / 2;
+    return { area: [`${start},${base}`, ...area, `${end},${base}`].join(" ") };
+  }, [freeLeft, projection, remainingDays, dense.length, axis, plotWidth, plotHeight, barSlot]);
   // Bars are memoized on data and geometry only, so per-pointer-move hover
   // state re-renders the overlay and tooltip, never the full bar set. The
   // hovered bar's lit look is an overlay rect drawn above this layer.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
-  const barsLayer = useMemo(() => dense.map((point, index) => {
-    const crossed = crossedLevel(activeOrder, shown, point.value);
-    const color = (crossed && colorById.get(crossed)) || accent;
-    const top = yFor(point.value);
+  // A day bar is blue up to the first level and wears each level's color
+  // only for the part above that level, so overage reads as "how far over".
+  const barSegments = (value: number) => {
+    const edges = activeOrder.map(id => ({ id, value: shown[id] ?? 0 })).filter(edge => edge.value > 0 && edge.value < value);
+    const bounds = [0, ...edges.map(edge => edge.value), value];
+    return bounds.slice(1).map((top, index) => ({ bottom: bounds[index]!, top, color: index === 0 ? accent : colorById.get(edges[index - 1]!.id) ?? accent }));
+  };
+  // Bar edges snap to whole pixels so every day is the same width and the
+  // separators stay true hairlines instead of smearing across half pixels.
+  const barEdges = (index: number) => {
+    const left = Math.round(xFor(index) - barSlot / 2);
+    const right = Math.round(xFor(index) + barSlot / 2);
+    return { left, width: Math.max(1, right - left) };
+  };
+  const barsLayer = useMemo(() => cycleMode ? null : dense.map((point, index) => {
     const base = PLOT.top + plotHeight;
+    const { left, width: barPixels } = barEdges(index);
+    const top = yFor(point.value);
     return (
-      <rect key={point.day} x={xFor(index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
-        pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.16 : crossed ? 1 : 0.9}
-        style={{ transition: dragging ? "none" : `fill 200ms ${EASE}, opacity 120ms ${EASE}, y 260ms ${EASE}, height 260ms ${EASE}` }} />
+      <g key={point.day} pointerEvents="none" style={{ transition: dragging ? "none" : `opacity 120ms ${EASE}` }}>
+        {barSegments(point.value).map((segment, part) => {
+          const segmentTop = yFor(segment.top);
+          const bottom = part === 0 ? base : yFor(segment.bottom);
+          return <rect key={part} data-day-bar={part === 0 ? "" : undefined} x={left} y={Math.min(segmentTop, bottom - 0.5)} width={barPixels} height={Math.max(0.5, bottom - segmentTop)} fill={segment.color} opacity="0.9" shapeRendering="crispEdges" />;
+        })}
+        {index > 0 && <line x1={left + 0.5} x2={left + 0.5} y1={Math.min(top, base - 0.5)} y2={base} stroke="var(--panel)" strokeWidth="1" opacity=".22" shapeRendering="crispEdges" />}
+        {/* Composition: folded parts stack above the meter's own usage, each
+            behind a seam and a panel-dot texture so the split reads at a glance. */}
+        {partsDense.length > 1 && (() => {
+          let stacked = 0;
+          return partsDense.map((part, which) => {
+            const value = part[index]?.value ?? 0;
+            const bottom = stacked;
+            stacked += value;
+            if (which === 0 || value <= 0) return null;
+            const y0 = yFor(stacked);
+            const y1 = yFor(bottom);
+            return <g key={which}>
+              <rect x={left} y={y0} width={barPixels} height={Math.max(0, y1 - y0)} fill={`url(#${patternId}-part)`} shapeRendering="crispEdges" />
+              <line x1={left} x2={left + barPixels} y1={y1 + 0.5} y2={y1 + 0.5} stroke="var(--panel)" strokeWidth="1" opacity=".7" shapeRendering="crispEdges" />
+            </g>;
+          });
+        })()}
+      </g>
     );
-  }), [dense, activeOrder, shown, colorById, accent, cycleMode, dragging, axis, plotWidth, plotHeight, barSlot, barWidth]);
+  }), [dense, partsDense, activeOrder, shown, colorById, accent, cycleMode, dragging, axis, plotWidth, plotHeight, barSlot]);
 
   const belowReference = limitWindow === "cycle" && reference
     ? activeLevels.find(level => (shown[level.id] ?? Number.POSITIVE_INFINITY) < (reference[level.id] ?? Number.NEGATIVE_INFINITY))
@@ -344,33 +481,41 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
       >
         <defs>
           <clipPath id={`${patternId}-plot`}><rect x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} /></clipPath>
-          <pattern id={`${patternId}-hatch`} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="1" opacity=".22" />
+          <pattern id={`${patternId}-dither`} width="3" height="3" patternUnits="userSpaceOnUse">
+            <rect width="3" height="3" fill={INCLUDED_COLOR} opacity=".03" />
+            <circle cx=".75" cy=".75" r=".5" fill={INCLUDED_COLOR} opacity=".48" />
+            <circle cx="2.25" cy="2.25" r=".5" fill={INCLUDED_COLOR} opacity=".48" />
           </pattern>
+          <pattern id={`${patternId}-part`} width="3" height="3" patternUnits="userSpaceOnUse">
+            <circle cx=".75" cy=".75" r=".55" fill="var(--panel)" opacity=".55" />
+            <circle cx="2.25" cy="2.25" r=".55" fill="var(--panel)" opacity=".55" />
+          </pattern>
+          {/* Projections use a lighter dither in the color of the band they land in. */}
+          {[{ id: "included", color: INCLUDED_COLOR }, ...bands.map(band => ({ id: band.id, color: band.color }))].map(item => (
+            <pattern key={item.id} id={`${patternId}-projection-${item.id}`} width="3" height="3" patternUnits="userSpaceOnUse">
+              <circle cx=".75" cy=".75" r=".5" fill={item.color} opacity=".3" />
+              <circle cx="2.25" cy="2.25" r=".5" fill={item.color} opacity=".3" />
+            </pattern>
+          ))}
         </defs>
-        {/* Axes */}
-        <line x1={PLOT.left} x2={PLOT.left} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" />
-        <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={PLOT.top + plotHeight} y2={PLOT.top + plotHeight} className="stroke-line-strong" />
-        {cycleMode && includedBand && (
-          <rect
-            data-included-band
-            data-clamped={includedBand.clamped ? "true" : undefined}
-            x={PLOT.left}
-            y={PLOT.top + (1 - includedBand.top) * plotHeight}
-            width={plotWidth}
-            height={Math.max(0, (includedBand.top - includedBand.bottom) * plotHeight)}
-            fill="currentColor"
-            opacity=".055"
-            pointerEvents="none"
-          />
-        )}
         {/* Y ticks */}
         {axis.ticks.map(tick => (
           <g key={tick}>
-            {tick > 0 && <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(tick)} y2={yFor(tick)} className="stroke-line-soft" strokeDasharray="2 5" style={{ transition: dragging ? "none" : `y1 260ms ${EASE}, y2 260ms ${EASE}` }} />}
-            <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums" style={{ transition: dragging ? "none" : `y 260ms ${EASE}` }}>{formatTick(tick, unit)}</text>
+            {(freeMarkY === null || Math.abs(yFor(tick) - freeMarkY) > 9) && (
+              <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums" style={{ transition: dragging ? "none" : `y 260ms ${EASE}` }}>{formatTick(tick, unit)}</text>
+            )}
           </g>
         ))}
+        {freeMark && freeMarkY !== null && (() => {
+          const textWidth = freeMark.label.length * 6.4;
+          const width = textWidth + 18;
+          return (
+            <g data-included-pill pointerEvents="none">
+              <rect x={PLOT.left - 8 - width} y={freeMarkY - 8} width={width} height={16} rx={4} fill={INCLUDED_COLOR} opacity=".14" />
+              <text x={PLOT.left - 13} y={freeMarkY + 3.5} textAnchor="end" fill={INCLUDED_COLOR} className="text-[10.5px] font-[700] tabular-nums">{freeMark.label}</text>
+            </g>
+          );
+        })()}
 
         {/* Cumulative sawtooth per cycle */}
         {cycleMode ? (
@@ -386,38 +531,61 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
               ))}
             </defs>
             {bands.map(band => sawtooth.map((points, index) => (
-              <polygon key={`${band.id}-${index}`} points={points} fill={band.color} opacity=".82" clipPath={`url(#${patternId}-band-${band.id})`} />
+              <polygon key={`${band.id}-${index}`} points={points} fill={band.color} opacity="0.82" clipPath={`url(#${patternId}-band-${band.id})`} />
             )))}
+            {/* The panel-colored base also strokes its own outline so the blue band's
+                anti-aliased edge cannot peek out along steep slopes. */}
+            {includedPolygons.map((points, index) => <polygon key={`included-base-${index}`} points={points} fill="var(--panel)" stroke="var(--panel)" strokeWidth="1.5" strokeLinejoin="round" />)}
+            {includedPolygons.map((points, index) => <polygon key={`included-${index}`} data-included-usage points={points} fill={`url(#${patternId}-dither)`} />)}
           </>
-        ) : (
-          <g clipPath={`url(#${patternId}-plot)`}>
-            {sawtooth.map((points, index) => <polygon key={index} points={points} fill="currentColor" opacity=".07" />)}
+        ) : null}
+        {/* Free usage left: a faint green area behind the bars, the inverse
+            of the cumulative usage. It starts each cycle at the allotment and
+            falls to zero once the allotment is spent. */}
+        {freeAreas.length > 0 && (
+          <g data-free-left pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
+            {freeAreas.map((shape, index) => <polygon key={`area-${index}`} points={shape.area} fill={`url(#${patternId}-dither)`} />)}
+            {projectedFree && (
+              <g data-free-left-projected>
+                <polygon points={projectedFree.area} fill={`url(#${patternId}-projection-included)`} />
+              </g>
+            )}
           </g>
         )}
-        {projection && remainingDays > 0 && (() => {
+        {cycleMode && projection && remainingDays > 0 && (() => {
           const x1 = xFor(dense.length - 1) + barSlot / 2;
           const x2 = xFor(dense.length - 1 + remainingDays) + barSlot / 2;
           const y1 = yFor(projection.toDate);
           const y2 = yFor(projection.projected);
           const base = PLOT.top + plotHeight;
-          return <g clipPath={`url(#${patternId}-plot)`}>
-            <polygon points={`${x1},${base} ${x1},${y1} ${x2},${y2} ${x2},${base}`} fill={`url(#${patternId}-hatch)`} />
-            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="currentColor" opacity=".4" strokeDasharray="2 3" strokeWidth="1" />
+          const points = `${x1},${base} ${x1},${y1} ${x2},${y2} ${x2},${base}`;
+          // The remaining room under the allotment at cycle end, for the
+          // included part of the projection (a shared pool's ceiling is
+          // carried forward from today).
+          const includedCap = chartIncluded === undefined ? 0 : ceiling.length ? ceiling.at(-1)! : chartIncluded;
+          return <g data-cycle-projection clipPath={`url(#${patternId}-plot)`}>
+            {bands.map(band => <polygon key={band.id} points={points} fill={`url(#${patternId}-projection-${band.id})`} clipPath={`url(#${patternId}-band-${band.id})`} />)}
+            {includedCap > 0 && (
+              <>
+                <clipPath id={`${patternId}-projection-included-clip`}><rect x={PLOT.left} width={plotWidth} y={yFor(includedCap)} height={Math.max(0, base - yFor(includedCap))} /></clipPath>
+                <polygon points={points} fill="var(--panel)" clipPath={`url(#${patternId}-projection-included-clip)`} />
+                <polygon points={points} fill={`url(#${patternId}-projection-included)`} clipPath={`url(#${patternId}-projection-included-clip)`} />
+              </>
+            )}
           </g>;
         })()}
-        {secondaryLines.length > 0 && (
-          <g data-secondary-cost-series pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
-            {secondaryLines.map((points, index) => <polyline key={index} points={points} fill="none" stroke="#7c5cc4" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
-          </g>
-        )}
+        {/* The boundary is a faint solid system line, unlike the dashed,
+            colored, draggable levels. The axis pill names it; the split tint
+            on the sawtooth shows the included region. */}
         {cycleMode && includedBand && includedBand.boundary !== null && includedPerCycle !== undefined && (
-          <g data-included-boundary pointerEvents="none">
-            <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(includedPerCycle)} y2={yFor(includedPerCycle)} stroke="currentColor" opacity=".62" strokeDasharray="5 4" strokeWidth="1.25" />
-            <text x={PLOT.left + 7} y={yFor(includedPerCycle) - 6} className="fill-faint text-[10.5px]">{includedBoundaryLabel}</text>
+          <g data-included-boundary pointerEvents="none" clipPath={ceilingLines.length ? `url(#${patternId}-plot)` : undefined}>
+            {ceilingLines.length
+              ? ceilingLines.map((points, index) => <polyline key={index} points={points} fill="none" stroke={INCLUDED_COLOR} opacity=".6" strokeWidth="1.25" strokeLinejoin="round" />)
+              : <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(includedPerCycle)} y2={yFor(includedPerCycle)} stroke={INCLUDED_COLOR} opacity=".5" strokeWidth="1" />}
           </g>
         )}
         {cycleMode && projectedCrossing && remainingDays > 0 && (
-          <text data-projected-crossing data-day={projectedCrossing} x={PLOT.left + plotWidth - 4} y={PLOT.top + 13} textAnchor="end" className="fill-faint text-[10.5px]" pointerEvents="none">
+          <text data-projected-crossing data-day={projectedCrossing} x={PLOT.left + plotWidth - 4} y={PLOT.top + 13} textAnchor="end" paintOrder="stroke" stroke="var(--panel)" strokeWidth="3.5" strokeLinejoin="round" className="fill-ink text-[10.5px] font-[600]" pointerEvents="none">
             projected billable from {dayLabel(projectedCrossing)}
           </text>
         )}
@@ -428,7 +596,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
           if (index === undefined) return null;
           const x = PLOT.left + index * barSlot;
           return <g key={cycle.startsAt}>
-            <line x1={x} x2={x} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" strokeDasharray="1 3" />
+            <line x1={x} x2={x} y1={PLOT.top} y2={PLOT.top + plotHeight} stroke="currentColor" opacity=".25" />
             <text x={x + 4} y={PLOT.top + plotHeight + 16} className="fill-faint text-[10.5px]">{monthLabel(cycle.startsAt)}</text>
           </g>;
         })}
@@ -443,21 +611,26 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
 
         {/* Bars (memoized) plus a lit overlay copy of the hovered day's bar. */}
         {barsLayer}
-        {hovered && (() => {
-          const point = dense[hoverDay!.index]!;
-          const crossed = crossedLevel(activeOrder, shown, point.value);
-          const color = (crossed && colorById.get(crossed)) || accent;
-          const top = yFor(point.value);
+        {hovered && !hovered.projected && !cycleMode && (() => {
           const base = PLOT.top + plotHeight;
-          return (
-            <rect x={xFor(hoverDay!.index) - barWidth / 2} y={Math.min(top, base - 0.5)} width={barWidth} height={Math.max(0.5, base - top)} rx={Math.min(1.5, barWidth / 3)}
-              pointerEvents="none" fill={cycleMode ? "currentColor" : color} opacity={cycleMode ? 0.26 : 1} />
-          );
+          const { left, width: barPixels } = barEdges(hovered.index);
+          return <g pointerEvents="none">
+            {barSegments(hovered.value).map((segment, part) => {
+              const top = yFor(segment.top);
+              const bottom = part === 0 ? base : yFor(segment.bottom);
+              return <rect key={part} x={left} y={Math.min(top, bottom - 0.5)} width={barPixels} height={Math.max(0.5, bottom - top)} fill={segment.color} opacity={1} shapeRendering="crispEdges" />;
+            })}
+          </g>;
         })()}
+
 
         {/* Day hover tracking: sits above the bars, below the level lines. */}
         <rect data-hover-layer x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} fill="transparent"
           onPointerMove={trackHover} onPointerLeave={() => setHoverDay(null)} />
+
+        {/* Axes sit above the data layers so fills can never cover them. */}
+        <line x1={PLOT.left} x2={PLOT.left} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
+        <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={PLOT.top + plotHeight} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
 
         {/* Level lines and handles */}
         {activeLevels.map(level => {
@@ -487,7 +660,10 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
               onKeyDown={keyStep(level.id)}
             >
               <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke="transparent" strokeWidth="14" />
-              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke={level.color} strokeWidth="2" strokeDasharray="7 5" />
+              {/* A panel-colored line under the dashes turns the gaps white, so the
+                  line stays legible where it crosses a fill of its own color. */}
+              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke="var(--panel)" strokeWidth="1.25" opacity=".9" />
+              <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke={level.color} strokeWidth="1.25" strokeDasharray="7 5" opacity=".85" />
               <polygon points={diamond(PLOT.left - 3, 0, 6.5)} fill={level.color} stroke="var(--panel)" strokeWidth="1.5" />
 
             </g>
@@ -501,25 +677,39 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, secondary
         </div>
       )}
       {hovered && (
-        <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-x-1/2 -translate-y-full`}
-          style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left + 40), width - PLOT.right - 40), top: hoverDay!.y - 10 }}>
-          <b className="font-[720]">{dayLabel(hovered.day)}</b>
-          <span className="ml-1.5 tabular-nums text-muted">
-            {cycleMode
-              ? `${formatLimitValue(cumulative[hoverDay!.index]?.cumulative ?? 0, unit)} so far this cycle`
-              : formatLimitValue(hovered.value, unit)}
+        // Near either edge the tooltip hangs inward from the pointer instead of centering, so it never clips.
+        <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${hoverDay!.x > width * 0.7 ? "-translate-x-full" : hoverDay!.x < width * 0.3 ? "" : "-translate-x-1/2"}`}
+          // The anchor side eases across when it flips near an edge; the position itself tracks the pointer directly.
+          style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left), width - PLOT.right), top: hoverDay!.y - 10, transition: `translate 220ms ${EASE}` }}>
+          <b className="font-[720]">{dayLabel(hovered.day)}</b>{hovered.projected && <span className="ml-1.5 text-[10px] font-[700] uppercase tracking-[.06em] text-faint">Projected</span>}
+          <span className="mt-1 grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+            {hoverRows.map(([label, value], index) => <span key={label} className="contents">
+              <span className={index === 0 ? "text-ink" : "text-muted"}>{label}</span>
+              <span className={`text-right tabular-nums ${index === 0 ? "font-[720] text-ink" : "text-muted"}`}>{value}</span>
+            </span>)}
           </span>
         </div>
       )}
       </div>
 
-      {secondaryLines.length > 0 && secondaryLabel && (
-        <div data-cost-series-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
-          <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px] bg-[#2f6fd6]" aria-hidden="true" />Cost series</span>
-          <span className="inline-flex items-center gap-1.5"><i className="h-0.5 w-3 rounded bg-[#7c5cc4]" aria-hidden="true" />{secondaryLabel}</span>
+
+      {chartIncluded && (
+        <div data-included-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
+          {cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2.5 rounded-[1px] border" style={{ ...DITHER_SWATCH, borderColor: INCLUDED_COLOR }} aria-hidden="true" />Included usage</span>}
+          {cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: CHART_ACCENT }} aria-hidden="true" />Billable usage</span>}
+          {!cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: CHART_ACCENT }} aria-hidden="true" />Daily usage</span>}
+          {!cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2.5 rounded-[1px] border" style={{ ...DITHER_SWATCH, borderColor: INCLUDED_COLOR }} aria-hidden="true" />Free usage left</span>}
         </div>
       )}
-
+      {!cycleMode && composition && composition.length > 1 && (
+        <div data-composition-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
+          {composition.map((part, which) => (
+            <span key={part.id} className="inline-flex items-center gap-1.5">
+              <i className="size-2.5 rounded-[1px]" style={{ background: CHART_ACCENT, backgroundImage: which === 0 ? undefined : "radial-gradient(#ffffffa6 0.6px, transparent 0.7px)", backgroundSize: "3px 3px" }} aria-hidden="true" />{part.label}
+            </span>
+          ))}
+        </div>
+      )}
       {!fields ? null : readOnly ? (
         <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
@@ -598,8 +788,8 @@ function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { histor
 
 function formatTick(value: number, unit: string): string {
   if (value === 0) return unit === "USD" ? "$0" : "0";
-  if (unit === "USD") return value >= 10 ? `$${formatNumber(value)}` : money(value);
-  return formatNumber(value);
+  if (unit === "USD") return value >= 10 ? `$${compactValue(value, unit)}` : money(value);
+  return compactValue(value, unit);
 }
 
 const DAY_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -640,21 +830,3 @@ function cyclePolygons(
   });
 }
 
-/** Polyline point lists, split at cycle boundaries for cumulative charts. */
-function chartLinePoints(
-  points: Array<DayPoint & { cycle?: number }>,
-  splitCycles: boolean,
-  xFor: (index: number) => number,
-  yFor: (value: number) => number,
-): string[] {
-  if (!points.length) return [];
-  if (!splitCycles) return [points.map((point, index) => `${xFor(index)},${yFor(point.value)}`).join(" ")];
-  const groups = new Map<number, string[]>();
-  points.forEach((point, index) => {
-    const cycle = point.cycle ?? -1;
-    const group = groups.get(cycle) ?? [];
-    group.push(`${xFor(index)},${yFor(point.value)}`);
-    groups.set(cycle, group);
-  });
-  return [...groups.values()].map(group => group.join(" "));
-}
