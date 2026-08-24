@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money } from "../../format";
 import type { MetricPart } from "./api";
+import { BillableUsageTooltip, FLOAT_CHIP } from "./BillableUsageTooltip";
 import { ProductIcon } from "../ui";
 import { DAY_MS, type AggregationKind, type CycleBounds, type DayPoint, cycleCumulative, dayOf, dayStart, denseSeries, freeRemainingSeries, includedTops, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
@@ -44,6 +45,8 @@ export interface LimitsChartProps {
   poolSeries?: DayPoint[];
   /** Parts that make up `series` (meter first, then folded sources), each in this metric's units. */
   composition?: MetricPart[];
+  /** Daily list-rate cost attributable to this billed usage meter. */
+  billableCostSeries?: DayPoint[];
   /** How daily metric values combine within a billing cycle. Legacy data sums. */
   aggregationKind?: AggregationKind;
   onChange(next: LevelValues): void;
@@ -74,8 +77,6 @@ const EASE = "cubic-bezier(.2,.7,.2,1)";
 const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
 /** Left plot-area edge, exported so headings above a chart can align with its x axis. */
 export const CHART_PLOT_LEFT = PLOT.left;
-/** Floating readouts over the chart: the day tooltip and the axis value chip share one look. */
-const FLOAT_CHIP = "pointer-events-none absolute z-10 whitespace-nowrap rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
 /** One series accent for every chart, cost and usage alike: cool blue, outside the warm level ramp. */
 export const CHART_ACCENT = "#2f6fd6";
 /** Included (free-allotment) usage is green: it costs nothing. Blue is billable usage under the first level. */
@@ -94,7 +95,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -114,6 +115,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // Composition parts aligned to `dense`, for the seams inside day bars and the tooltip breakdown.
   const partsDense = useMemo(() => (composition && composition.length > 1 ? composition.map(part => denseSeries(part.series, window.fromDay, window.toDay)) : []), [composition, window]);
   const cumulative = useMemo(() => cycleCumulative(dense, cycles, aggregationKind), [dense, cycles, aggregationKind]);
+  const billableCostDense = useMemo(() => (billableCostSeries ? denseSeries(billableCostSeries, window.fromDay, window.toDay) : undefined), [billableCostSeries, window]);
+  const billableCostCumulative = useMemo(() => (billableCostDense ? cycleCumulative(billableCostDense, cycles, "sum") : undefined), [billableCostDense, cycles]);
   const projection = useMemo(() => projectCycle(dense, cycles, today, aggregationKind), [dense, cycles, today, aggregationKind]);
   const observedMax = useMemo(() => Math.max(0, ...dense.map(point => point.value)), [dense]);
   const seriesValues = useMemo(() => dense.map(point => point.value), [dense]);
@@ -126,7 +129,46 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // With a shared pool the free usage is judged against the whole pool.
   const poolDense = useMemo(() => (poolSeries && chartIncluded ? denseSeries(poolSeries, window.fromDay, window.toDay) : undefined), [poolSeries, chartIncluded, window]);
   const poolCumulative = useMemo(() => (poolDense ? cycleCumulative(poolDense, cycles, aggregationKind) : undefined), [poolDense, cycles, aggregationKind]);
-  const freeLeft = useMemo(() => (!cycleMode && chartIncluded ? freeRemainingSeries(poolDense ?? dense, cycles, chartIncluded, aggregationKind) : []), [cycleMode, chartIncluded, poolDense, dense, cycles, aggregationKind]);
+  const freeLeft = useMemo(() => (chartIncluded ? freeRemainingSeries(poolDense ?? dense, cycles, chartIncluded, aggregationKind) : []), [chartIncluded, poolDense, dense, cycles, aggregationKind]);
+  // One marker per cycle: the day its allotment ran out, or (day charts) the
+  // cycle's last charted day with the free usage still left.
+  const freeMarkers = useMemo(() => {
+    const byCycle = new Map<number, { kind: "exhausted" | "remaining"; index: number; day: string; dayOfCycle: number; cycleDays: number; left: number }>();
+    freeLeft.forEach((point, index) => {
+      if (point.cycle < 0) return;
+      const current = byCycle.get(point.cycle);
+      if (current?.kind === "exhausted") return;
+      const bounds = cycles[point.cycle]!;
+      const place = { index, day: point.day, dayOfCycle: Math.round((dayStart(point.day) - bounds.startsAt) / DAY_MS) + 1, cycleDays: Math.max(1, Math.round((bounds.endsAt - bounds.startsAt) / DAY_MS)) };
+      if (point.after <= 0 && point.before > 0) byCycle.set(point.cycle, { kind: "exhausted", ...place, left: 0 });
+      else if (point.after > 0) byCycle.set(point.cycle, { kind: "remaining", ...place, left: point.after });
+    });
+    return [...byCycle.values()];
+  }, [freeLeft, cycles]);
+  // Cycle chart: the exact point where the running total crosses the
+  // allotment on the exhaustion day, interpolated between that day and the
+  // one before, so the edge, the marker, and the tail all meet there.
+  const crossingPoint = (index: number) => {
+    const current = cumulative[index];
+    const previous = cumulative[index - 1];
+    const cap = includedTop[index] ?? chartIncluded ?? 0;
+    if (!current) return { x: xFor(index), y: yFor(cap) };
+    if (!previous || previous.cycle !== current.cycle || current.cumulative <= previous.cumulative) return { x: xFor(index) - barSlot / 2, y: Math.max(PLOT.top + 1, yFor(cap)) };
+    const t = Math.min(1, Math.max(0, (cap - previous.cumulative) / (current.cumulative - previous.cumulative)));
+    return { x: xFor(index - 1) + t * (xFor(index) - xFor(index - 1)), y: Math.max(PLOT.top + 1, yFor(cap)) };
+  };
+  // Where a marker sits: exhausted on the axis; remaining on the free curve
+  // (day chart) or on the included part of the running total (cycle chart).
+  // Every marker sits at the end of its green edge line: on the day chart
+  // the curve lands on the axis when the allotment runs out; on the cycle
+  // chart the included total stops at the boundary.
+  const markerPoint = (item: typeof freeMarkers[number]) => (item.kind === "exhausted" && cycleMode
+    ? crossingPoint(item.index)
+    : {
+      x: xFor(item.index) + barSlot / 2,
+      y: item.kind === "exhausted" ? PLOT.top + plotHeight : Math.max(PLOT.top + 1, yFor(cycleMode ? includedTop[item.index] ?? 0 : item.left)),
+    });
+  const [hoverExhausted, setHoverExhausted] = useState<string | null>(null);
   // Per day of the cycle chart: how much of the running total is included,
   // and where the ceiling sits once the pool's other members have spent.
   const includedTop = useMemo(() => (cycleMode && chartIncluded ? includedTops(cumulative.map(point => point.cumulative), poolCumulative?.map(point => point.cumulative), chartIncluded) : []), [cycleMode, chartIncluded, cumulative, poolCumulative]);
@@ -314,6 +356,27 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const includedPolygons = useMemo(() => (includedTop.length
     ? cyclePolygons(cumulative.map((point, index) => ({ ...point, cumulative: includedTop[index]! })), xFor, yFor, PLOT.top + plotHeight, barSlot)
     : []), [cumulative, includedTop, axis, plotWidth, plotHeight, barSlot]);
+  // The outer edge of the included part of the running total, per cycle,
+  // ending where the allotment ran out (the boundary takes over from there).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const includedEdges = useMemo(() => {
+    if (!includedTop.length) return [];
+    const stops = new Map(freeMarkers.filter(item => item.kind === "exhausted").map(item => [cumulative[item.index]?.cycle ?? -1, item.index]));
+    const groups = new Map<number, string[]>();
+    cumulative.forEach((point, index) => {
+      const stop = stops.get(point.cycle);
+      if (stop !== undefined && index > stop) return;
+      const y = Math.max(PLOT.top + 1, yFor(includedTop[index]!));
+      const group = groups.get(point.cycle) ?? [`${xFor(index) - barSlot / 2},${y}`];
+      if (index === stop) { const end = crossingPoint(index); group.push(`${end.x},${end.y}`); }
+      else {
+        group.push(`${xFor(index)},${y}`);
+        if (stop === undefined && (cumulative[index + 1]?.cycle ?? -2) !== point.cycle) group.push(`${xFor(index) + barSlot / 2},${y}`);
+      }
+      groups.set(point.cycle, group);
+    });
+    return [...groups.values()].map(group => group.join(" "));
+  }, [cumulative, includedTop, freeMarkers, axis, plotWidth, barSlot]);
   // A shared pool's ceiling, one stepped line per cycle.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const ceilingLines = useMemo(() => {
@@ -330,6 +393,33 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const cycleStarts = cycles.filter(cycle => cycle.startsAt > dayStart(window.fromDay) && cycle.startsAt <= dayStart(window.toDay));
   const indexForDay = new Map(dense.map((point, index) => [point.day, index]));
   const accent = CHART_ACCENT;
+  // Cycle chart: once the allotment is spent, the running total's outer edge
+  // continues from the exhaustion point in the color of the zone it is in,
+  // ending with a marker at the cycle's last charted day.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
+  const billable = useMemo(() => {
+    const runs: Array<{ points: string[]; color: string }> = [];
+    const markers: Array<{ index: number; day: string; value: number; color: string; label: string; dayOfCycle: number; cycleDays: number; costUsd?: number }> = [];
+    if (!cycleMode || !includedTop.length) return { runs: [] as Array<{ points: string; color: string }>, markers };
+    const stops = new Map(freeMarkers.filter(item => item.kind === "exhausted").map(item => [cumulative[item.index]?.cycle ?? -1, item.index]));
+    cumulative.forEach((point, index) => {
+      const stop = stops.get(point.cycle);
+      if (stop === undefined || index < stop) return;
+      const crossed = crossedLevel(activeOrder, shown, point.cumulative);
+      const color = (crossed && colorById.get(crossed)) || accent;
+      const y = Math.max(PLOT.top + 1, yFor(point.cumulative));
+      const last = runs.at(-1);
+      if (index === stop) { const start = crossingPoint(index); runs.push({ points: [`${start.x},${start.y}`], color }); }
+      else if (!last || last.color !== color) runs.push({ points: [last?.points.at(-1) ?? `${xFor(index) - barSlot / 2},${y}`], color });
+      runs.at(-1)!.points.push(`${xFor(index)},${y}`);
+      if ((cumulative[index + 1]?.cycle ?? -2) !== point.cycle) {
+        runs.at(-1)!.points.push(`${xFor(index) + barSlot / 2},${y}`);
+        const bounds = cycles[point.cycle]!;
+        markers.push({ index, day: point.day, value: point.cumulative, color, label: (crossed && levels.find(level => level.id === crossed)?.label) || "Billable", dayOfCycle: Math.round((dayStart(point.day) - bounds.startsAt) / DAY_MS) + 1, cycleDays: Math.max(1, Math.round((bounds.endsAt - bounds.startsAt) / DAY_MS)), costUsd: billableCostCumulative?.[index]?.cumulative });
+      }
+    });
+    return { runs: runs.map(run => ({ points: run.points.join(" "), color: run.color })), markers };
+  }, [cycleMode, includedTop, freeMarkers, cumulative, activeOrder, shown, colorById, accent, levels, cycles, billableCostCumulative, axis, plotWidth, barSlot]);
   const chartLabel = label ?? `${kind === "cost" ? "Cost" : "Usage"} per ${limitWindow === "day" ? "day" : "billing cycle"}`;
   const trackHover = (event: PointerEvent<SVGRectElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -373,24 +463,27 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   // day's usage (start-of-day to end-of-day), closed on the baseline.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const freeAreas = useMemo(() => {
-    const groups = new Map<number, { points: string[]; left: number; right: number }>();
+    const groups = new Map<number, { points: string[]; edge: string[]; left: number; right: number }>();
     const base = PLOT.top + plotHeight;
+    if (cycleMode) return [];
     freeLeft.forEach((point, index) => {
       const left = xFor(index) - barSlot / 2;
       const right = xFor(index) + barSlot / 2;
-      const group = groups.get(point.cycle) ?? { points: [], left, right };
+      const group = groups.get(point.cycle) ?? { points: [], edge: [], left, right };
       group.points.push(`${left},${yFor(point.before)}`, `${right},${yFor(point.after)}`);
+      // The edge line stops at the exhaustion diamond instead of running on along the baseline.
+      if (point.before > 0) group.edge.push(`${left},${Math.max(PLOT.top + 1, yFor(point.before))}`, `${right},${Math.max(PLOT.top + 1, yFor(point.after))}`);
       group.right = right;
       groups.set(point.cycle, group);
     });
-    return [...groups.values()].map(group => ({ area: [`${group.left},${base}`, ...group.points, `${group.right},${base}`].join(" ") }));
-  }, [freeLeft, axis, plotWidth, plotHeight, barSlot]);
+    return [...groups.values()].map(group => ({ area: [`${group.left},${base}`, ...group.points, `${group.right},${base}`].join(" "), edge: group.edge.join(" ") }));
+  }, [freeLeft, cycleMode, axis, plotWidth, plotHeight, barSlot]);
   // Projected burn-down for the rest of the current cycle at the recent pace:
   // the same area, plus a dashed top edge so it reads as a forecast.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- xFor/yFor derive from axis, plotWidth, and barSlot
   const projectedFree = useMemo(() => {
     const last = freeLeft.at(-1);
-    if (!last || !projection || last.cycle !== projection.cycle || remainingDays <= 0) return null;
+    if (cycleMode || !last || !projection || last.cycle !== projection.cycle || remainingDays <= 0) return null;
     const base = PLOT.top + plotHeight;
     const area: string[] = [];
     let left = last.after;
@@ -403,7 +496,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const start = xFor(dense.length) - barSlot / 2;
     const end = xFor(dense.length - 1 + remainingDays) + barSlot / 2;
     return { area: [`${start},${base}`, ...area, `${end},${base}`].join(" ") };
-  }, [freeLeft, projection, remainingDays, dense.length, axis, plotWidth, plotHeight, barSlot]);
+  }, [freeLeft, cycleMode, projection, remainingDays, dense.length, axis, plotWidth, plotHeight, barSlot]);
   // Bars are memoized on data and geometry only, so per-pointer-move hover
   // state re-renders the overlay and tooltip, never the full bar set. The
   // hovered bar's lit look is an overlay rect drawn above this layer.
@@ -431,7 +524,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {barSegments(point.value).map((segment, part) => {
           const segmentTop = yFor(segment.top);
           const bottom = part === 0 ? base : yFor(segment.bottom);
-          return <rect key={part} data-day-bar={part === 0 ? "" : undefined} x={left} y={Math.min(segmentTop, bottom - 0.5)} width={barPixels} height={Math.max(0.5, bottom - segmentTop)} fill={segment.color} opacity="0.9" shapeRendering="crispEdges" />;
+          return <rect key={part} data-day-bar={part === 0 ? "" : undefined} x={left} y={Math.min(segmentTop, bottom - 0.5)} width={barPixels} height={Math.max(0.5, bottom - segmentTop)} fill={segment.color} shapeRendering="crispEdges" />;
         })}
         {index > 0 && <line x1={left + 0.5} x2={left + 0.5} y1={Math.min(top, base - 0.5)} y2={base} stroke="var(--panel)" strokeWidth="1" opacity=".22" shapeRendering="crispEdges" />}
         {/* Composition: folded parts stack above the meter's own usage, each
@@ -577,17 +670,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {/* The boundary is a faint solid system line, unlike the dashed,
             colored, draggable levels. The axis pill names it; the split tint
             on the sawtooth shows the included region. */}
-        {cycleMode && includedBand && includedBand.boundary !== null && includedPerCycle !== undefined && (
+        {cycleMode && includedBand && includedBand.boundary !== null && includedPerCycle !== undefined && includedEdges.length === 0 && (
           <g data-included-boundary pointerEvents="none" clipPath={ceilingLines.length ? `url(#${patternId}-plot)` : undefined}>
             {ceilingLines.length
               ? ceilingLines.map((points, index) => <polyline key={index} points={points} fill="none" stroke={INCLUDED_COLOR} opacity=".6" strokeWidth="1.25" strokeLinejoin="round" />)
               : <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={yFor(includedPerCycle)} y2={yFor(includedPerCycle)} stroke={INCLUDED_COLOR} opacity=".5" strokeWidth="1" />}
           </g>
-        )}
-        {cycleMode && projectedCrossing && remainingDays > 0 && (
-          <text data-projected-crossing data-day={projectedCrossing} x={PLOT.left + plotWidth - 4} y={PLOT.top + 13} textAnchor="end" paintOrder="stroke" stroke="var(--panel)" strokeWidth="3.5" strokeLinejoin="round" className="fill-ink text-[10.5px] font-[600]" pointerEvents="none">
-            projected billable from {dayLabel(projectedCrossing)}
-          </text>
         )}
 
         {/* Cycle boundaries */}
@@ -669,11 +757,86 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             </g>
           );
         })}
+        {/* The free-usage curve's outer edge (day) or the included total's
+            outer edge (cycle), drawn above the level lines, with a one-sided
+            panel-colored casing on the inner side so it separates from the
+            fill and bars beneath it. */}
+        {(freeAreas.length > 0 || includedEdges.length > 0) && (
+          <g data-free-left-edge pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
+            {/* Panel-colored casing on the inner side only. The free curve falls
+                left to right with its fill below-left, so the casing is shifted
+                down and left: below on flat runs, left on steep drops. */}
+            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={`case-${index}`} points={points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(-1.25px, 1.25px)" }} />)}
+            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={index} points={points} fill="none" stroke={INCLUDED_COLOR} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+          </g>
+        )}
+
+        {billable.runs.length > 0 && (
+          <g data-billable-edge pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
+            {/* The total rises left to right with its fill below-right, so its casing shifts down and right. */}
+            {billable.runs.map((run, index) => <polyline key={`case-${index}`} points={run.points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(1.25px, 1.25px)" }} />)}
+            {billable.runs.map((run, index) => <polyline key={index} points={run.points} fill="none" stroke={run.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+          </g>
+        )}
+        {/* Where the free allotment ran out: a fixed marker on the x axis per
+            cycle, drawn last so nothing covers it; hover for the details. */}
+        {freeMarkers.map(item => {
+          const { x, y } = markerPoint(item);
+          return (
+            <g key={item.day} data-free-exhausted={item.kind === "exhausted" ? item.day : undefined} data-free-remaining={item.kind === "remaining" ? item.day : undefined} className="cursor-default" onPointerEnter={() => setHoverExhausted(item.day)} onPointerLeave={() => setHoverExhausted(null)}>
+              <circle cx={x} cy={y} r="9" fill="transparent" />
+              {/* A panel-colored halo outside the colored outline cuts whatever the marker overlaps. */}
+              <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke="var(--panel)" strokeWidth="4.75" strokeLinejoin="round" />
+              <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke={INCLUDED_COLOR} strokeWidth="1.6" />
+            </g>
+          );
+        })}
+        {billable.markers.map(item => {
+          const x = xFor(item.index) + barSlot / 2;
+          const y = Math.max(PLOT.top + 1, yFor(item.value));
+          return (
+            <g key={`total:${item.day}`} data-billable-marker={item.day} className="cursor-default" onPointerEnter={() => setHoverExhausted(`total:${item.day}`)} onPointerLeave={() => setHoverExhausted(null)}>
+              <circle cx={x} cy={y} r="9" fill="transparent" />
+              <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke="var(--panel)" strokeWidth="4.75" strokeLinejoin="round" />
+              <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke={item.color} strokeWidth="1.6" />
+            </g>
+          );
+        })}
       </svg>
+      {hoverExhausted?.startsWith("total:") && (() => {
+        const item = billable.markers.find(entry => `total:${entry.day}` === hoverExhausted);
+        if (!item) return null;
+        const x = Math.min(Math.max(xFor(item.index) + barSlot / 2, PLOT.left), width - PLOT.right);
+        const y = Math.max(PLOT.top + 1, yFor(item.value));
+        return <BillableUsageTooltip x={x} y={y} width={width} color={item.color} label={item.label} day={dayLabel(item.day)}
+          dayOfCycle={item.dayOfCycle} cycleDays={item.cycleDays} total={item.value} included={chartIncluded} costUsd={item.costUsd} unit={unit} />;
+      })()}
+      {hoverExhausted && !hoverExhausted.startsWith("total:") && (() => {
+        const item = freeMarkers.find(entry => entry.day === hoverExhausted);
+        if (!item) return null;
+        const exhausted = item.kind === "exhausted";
+        const { x: markerX, y: markerY } = markerPoint(item);
+        const x = Math.min(Math.max(markerX, PLOT.left), width - PLOT.right);
+        return (
+          <div data-free-exhausted-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
+            style={{ left: x, top: markerY - 12 }}>
+            <span className="flex items-baseline justify-between gap-4">
+              <b className="font-[720]" style={{ color: INCLUDED_COLOR }}>{exhausted ? "Free usage exhausted" : "Free usage remaining"}</b>
+              {chartIncluded !== undefined && <b data-free-percent className="rounded-[4px] px-1 text-[10.5px] font-[740] tabular-nums" style={{ color: INCLUDED_COLOR, background: `${INCLUDED_COLOR}1a` }}>{Math.round((exhausted ? 0 : item.left) / chartIncluded * 100)}%</b>}
+            </span>
+            <span className="mt-0.5 block text-muted">{dayLabel(item.day)} · Cycle: {item.dayOfCycle} of {item.cycleDays}</span>
+            {chartIncluded !== undefined && <span className="block tabular-nums text-ink">{exhausted
+              ? `${compactValue((poolCumulative ?? cumulative)[item.index]?.cumulative ?? 0, unit)} of ${formatLimitValue(chartIncluded, unit)}`
+              : `${compactValue(item.left, unit)} of ${formatLimitValue(chartIncluded, unit)} left`}</span>}
+            {!exhausted && projectedCrossing && cumulative[item.index]?.cycle === projection?.cycle && <span className="block text-muted">Projected to run out {dayLabel(projectedCrossing)}</span>}
+          </div>
+        );
+      })()}
       {highlightLevel && (
-        <div data-line-value className={`${FLOAT_CHIP} -translate-y-1/2 font-[740] tabular-nums`}
-          style={{ left: PLOT.left - 6, top: yFor(shown[highlightLevel] ?? 0), transform: "translate(-100%, -50%)", color: colorById.get(highlightLevel) }}>
-          {formatLimitValue(shown[highlightLevel] ?? 0, unit)}
+        // Anchored inside the chart's left edge (not hanging off it) so no ancestor can clip it.
+        <div data-line-value className={`${FLOAT_CHIP} font-[740] tabular-nums`}
+          style={{ left: 2, top: yFor(shown[highlightLevel] ?? 0), transform: "translateY(-50%)", color: colorById.get(highlightLevel) }}>
+          {unit === "USD" ? formatLimitValue(shown[highlightLevel] ?? 0, unit) : compactValue(shown[highlightLevel] ?? 0, unit)}
         </div>
       )}
       {hovered && (
@@ -747,7 +910,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   );
 }
 
-function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { history: LimitHistory; canReset: boolean; onReset(): void; onUndo(): void; onRedo(): void }) {
+export function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { history: LimitHistory; canReset: boolean; onReset(): void; onUndo(): void; onRedo(): void }) {
   return (
     <div className="inline-flex items-center gap-1" role="group" aria-label="Chart history">
       {canReset && <button
@@ -829,4 +992,3 @@ function cyclePolygons(
     return [...list, `${lastX},${yFor(last.cumulative)}`, `${lastX},${baseline}`].join(" ");
   });
 }
-

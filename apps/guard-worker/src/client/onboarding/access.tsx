@@ -306,7 +306,14 @@ function UsageAccessResults({ result, checking, revealed, billingUnavailable, on
             className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-panel border border-line bg-panel px-4 py-3">
             <span className="grid size-9 place-items-center rounded-lg bg-panel-soft text-muted"><Icon name={row.icon} className="size-5" /></span>
             <div className="min-w-0">
-              <strong className="block text-sm leading-5">{row.label}</strong>
+              <div className="flex items-center gap-2">
+                <strong className="text-sm leading-5">{row.label}</strong>
+                {row.key === "billing" && (
+                  <InfoTip label="Why Brolly requests billing access">
+                    <p>Cloudflare keeps billing behind a separate token, and Brolly&apos;s access is <strong className="text-ink">read-only</strong>. Brolly reads your actual billable charges, reconciles spend against your invoice every hour, and triggers alerts and actions in real dollars. It cannot change your billing.</p>
+                  </InfoTip>
+                )}
+              </div>
               <span className="block text-xs leading-4 text-muted">{row.detail}</span>
             </div>
             {row.key === "billing" && billingUnavailable
@@ -317,11 +324,6 @@ function UsageAccessResults({ result, checking, revealed, billingUnavailable, on
           </article>
         );
       })}
-      {!billingUnavailable && !checking && result && revealed >= 2 && result.access.billing.state !== "connected" && (
-        <p className="animate-access-resolve px-1 text-[12px] leading-5 text-muted motion-reduce:animate-none">
-          <strong className="text-ink">Why Brolly requests this:</strong> Cloudflare keeps billing behind a separate token, and Brolly&apos;s access is <strong className="text-ink">read-only</strong>. Brolly reads your actual billable charges, reconciles spend against your invoice every hour, and triggers alerts and actions in real dollars. It cannot change your billing.
-        </p>
-      )}
     </div>
   );
 }

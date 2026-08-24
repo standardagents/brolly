@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { billableMetricIds, costSeries, metricAggregationKind, metricComposition, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
+import { billableMetricIds, costSeries, metricAggregationKind, metricBillableCostSeries, metricComposition, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
 import type { AggregationKind } from "./cycles";
 import { cycleDaysFor, dailyMultiple, dailyToleranceDefaults, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
 import type { LevelValues } from "./levels";
-import { LevelTrack } from "./LevelTrack";
+import { LevelTrackPanel } from "./LevelTrackPanel";
 import { LimitsChart, type LimitsChartLevel } from "./LimitsChart";
 import { useLimitHistories } from "./use-limit-history";
 
@@ -103,7 +103,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
   const costChart = (title?: string): ReactNode => {
     if (!data) return null;
     if (!floorReady(costFloor)) return waitingNote;
-    if (!hasUsage) return <LevelTrack levels={levels} unit="USD" value={cost} onChange={onCostChange} readOnly={readOnly} levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} />;
+    if (!hasUsage) return <LevelTrackPanel title={title} levels={levels} unit="USD" value={cost} onChange={onCostChange} history={histories("cost")} resetTo={defaultsFor(costSeries(data), costFloor)} readOnly={readOnly} levelEnabled={costLevelEnabled} onLevelEnabledChange={onCostLevelEnabledChange} />;
     const series = costSeries(data);
     const fromTolerance = dayTolerance ? toleranceDefaults(series, data.today, order, dayTolerance) : undefined;
     const reset = defaultsFor(series, costFloor);
@@ -119,7 +119,8 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
     if (!data) return null;
     const aggregationKind = metricAggregationKind(data, id);
     if (!floorReady(usageFloor?.[id], aggregationKind)) return waitingNote;
-    if (!hasUsage) return <LevelTrack levels={levels} unit={data.metrics[id]?.unit ?? ""} value={usage[id] ?? {}} onChange={next => changeUsage(id, next)} readOnly={readOnly}
+    if (!hasUsage) return <LevelTrackPanel levels={levels} unit={data.metrics[id]?.unit ?? ""} value={usage[id] ?? {}} onChange={next => changeUsage(id, next)} history={histories(id)}
+      resetTo={defaultsFor(rowSeries(data, id), usageFloor?.[id], quotaScope && data.planTier !== "free" ? metricIncluded(data, id) : undefined, aggregationKind)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined} />;
     const series = rowSeries(data, id);
     const included = quotaScope && data.planTier !== "free" ? metricIncluded(data, id) : undefined;
@@ -130,6 +131,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
       cycles={data.cycles} today={data.today} levels={levels} value={usage[id] ?? {}} seed={scaleFloor(usageFloor?.[id], aggregationKind)}
       tolerance={fromTolerance} resetToTolerance={reset} reference={window === "cycle" ? usageFloor?.[id] : undefined}
       includedPerCycle={included} poolSeries={poolSeries} composition={metricComposition(data, id)} aggregationKind={aggregationKind}
+      billableCostSeries={metricBillableCostSeries(data, id)}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}
       levelEnabled={usageLevelEnabled?.[id]} onLevelEnabledChange={onUsageLevelEnabledChange ? next => onUsageLevelEnabledChange({ ...usageLevelEnabled, [id]: next }) : undefined}
       history={histories(id)} fields="inline" />;

@@ -20,6 +20,11 @@ export interface EstimatedBillableCostPoint {
   costUsd: number;
 }
 
+export interface EstimatedBillableCostBreakdown {
+  total: EstimatedBillableCostPoint[];
+  byMetric: Record<string, EstimatedBillableCostPoint[]>;
+}
+
 /**
  * Gross unit prices used by the existing Workers and Durable Objects
  * collectors in cloudflare.ts. These are deliberately keyed by the full
@@ -54,7 +59,21 @@ export function estimatedBillableCostSeries(
   allotments: readonly IncludedAllotment[],
   planTier: PlanTier,
 ): EstimatedBillableCostPoint[] {
-  if (planTier !== "paid" && planTier !== "unknown") return [];
+  return estimatedBillableCostBreakdownSeries(points, cycles, allotments, planTier).total;
+}
+
+/**
+ * The same estimate split by billed meter for usage-chart tooltips. Every
+ * metric series contains one point per input day, including zero-cost days,
+ * so clients can align it with usage without repeating pricing logic.
+ */
+export function estimatedBillableCostBreakdownSeries(
+  points: readonly EstimatedBillableUsagePoint[],
+  cycles: readonly EstimatedBillableCostCycle[],
+  allotments: readonly IncludedAllotment[],
+  planTier: PlanTier,
+): EstimatedBillableCostBreakdown {
+  if (planTier !== "paid" && planTier !== "unknown") return { total: [], byMetric: {} };
 
   const includedByMetric = new Map<string, number>();
   for (const allotment of allotments) {
@@ -72,10 +91,17 @@ export function estimatedBillableCostSeries(
     .map((point, index) => ({ point, index }))
     .sort((left, right) => left.point.day.localeCompare(right.point.day) || left.index - right.index);
   const cycleUsage = new Map<number, Map<string, number>>();
+  const presentMetricIds = new Set(orderedPoints.flatMap(({ point }) => Object.keys(foldBilledVia(point.metrics))));
+  const pricedMetricIds = [...includedByMetric.keys()].filter(metricId => presentMetricIds.has(metricId) && ESTIMATED_BILLABLE_GROSS_RATES[metricId] !== undefined);
+  const byMetric = Object.fromEntries(pricedMetricIds.map(metricId => [metricId, [] as EstimatedBillableCostPoint[]]));
 
-  return orderedPoints.map(({ point }) => {
+  const total = orderedPoints.map(({ point }) => {
     const cycle = cycleForDay(orderedCycles, point.day);
-    if (!cycle) return { day: point.day, costUsd: 0 };
+    const costByMetric = Object.fromEntries(pricedMetricIds.map(metricId => [metricId, 0])) as Record<string, number>;
+    if (!cycle) {
+      for (const metricId of pricedMetricIds) byMetric[metricId]!.push({ day: point.day, costUsd: 0 });
+      return { day: point.day, costUsd: 0 };
+    }
 
     const usageByMetric = cycleUsage.get(cycle.index) ?? new Map<string, number>();
     cycleUsage.set(cycle.index, usageByMetric);
@@ -89,11 +115,15 @@ export function estimatedBillableCostSeries(
       const currentUsage = previousUsage + value;
       const previousBillable = Math.max(0, previousUsage - included);
       const currentBillable = Math.max(0, currentUsage - included);
-      costUsd += (currentBillable - previousBillable) * grossRate;
+      const metricCostUsd = (currentBillable - previousBillable) * grossRate;
+      costUsd += metricCostUsd;
+      costByMetric[metricId] = metricCostUsd;
       usageByMetric.set(metricId, currentUsage);
     }
+    for (const metricId of pricedMetricIds) byMetric[metricId]!.push({ day: point.day, costUsd: costByMetric[metricId] ?? 0 });
     return { day: point.day, costUsd };
   });
+  return { total, byMetric };
 }
 
 /**

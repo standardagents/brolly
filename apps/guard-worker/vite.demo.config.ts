@@ -35,7 +35,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget, PlanTier } from "./src/client/types.ts";
-import { estimatedBillableCostSeries } from "./src/estimated-billable-cost.js";
+import { estimatedBillableCostBreakdownSeries } from "./src/estimated-billable-cost.js";
 import { BILLED_VIA, WORKERS_PAID_INCLUDED } from "./src/included-quota.js";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
 
@@ -640,11 +640,15 @@ const realUsage: RealUsageFixture | null = (() => {
 function demoUsageSeries(scope: string): UsageSeriesResponse {
   const real = realUsageSeries(scope);
   const response = real ?? syntheticUsageSeries(scope);
+  const family = scope.startsWith("family:") ? scope.slice("family:".length) : null;
+  const allotments = scope === "account"
+    ? WORKERS_PAID_INCLUDED
+    : family ? WORKERS_PAID_INCLUDED.filter(item => item.metricId.startsWith(`${family}:`)) : [];
+  const estimate = estimatedBillableCostBreakdownSeries(response.series, response.cycles, allotments, demoPlan.planTier);
   return {
     ...response,
-    estimatedBillableCostSeries: scope === "account"
-      ? estimatedBillableCostSeries(response.series, response.cycles, WORKERS_PAID_INCLUDED, demoPlan.planTier)
-      : [],
+    estimatedBillableCostSeries: estimate.total,
+    estimatedBillableCostByMetric: estimate.byMetric,
   };
 }
 

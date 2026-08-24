@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimatedBillableCostSeries, type EstimatedBillableUsagePoint } from "../src/estimated-billable-cost";
+import { estimatedBillableCostBreakdownSeries, estimatedBillableCostSeries, type EstimatedBillableUsagePoint } from "../src/estimated-billable-cost";
 
 const CYCLE = { startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1) };
 const REQUESTS = { metricId: "workers:requests", includedPerCycle: 10_000_000, unit: "requests" };
@@ -19,6 +19,16 @@ describe("estimated billable cost series", () => {
 
     expect(series.map(item => item.day)).toEqual(["2026-08-01", "2026-08-02", "2026-08-03"]);
     expect(series.map(item => item.costUsd)).toEqual([0, 0.32, expect.closeTo(0.88, 10)]);
+  });
+
+  it("keeps each billed meter's cost separate from the daily total", () => {
+    const breakdown = estimatedBillableCostBreakdownSeries([
+      point("2026-08-01", { "workers:requests": 11_000_000, "workers:cpu_ms": 32_000_000 }),
+    ], [CYCLE], [REQUESTS, CPU], "paid");
+
+    expect(breakdown.total[0]?.costUsd).toBeCloseTo(0.34, 12);
+    expect(breakdown.byMetric["workers:requests"]?.[0]?.costUsd).toBeCloseTo(0.3, 12);
+    expect(breakdown.byMetric["workers:cpu_ms"]?.[0]?.costUsd).toBeCloseTo(0.04, 12);
   });
 
   it("resets the included quantity for every billing cycle", () => {

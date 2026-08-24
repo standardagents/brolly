@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { compactValue, formatLimitValue, unitLabel } from "./format";
 import { LevelValueField } from "./LevelValueField";
 import type { LimitsChartLevel } from "./LimitsChart";
 import { type LevelValues, pushLevels } from "./levels";
-import { chooseAxis, niceCeil, snapStep, snapToNice } from "./scale";
+import { type Axis, niceFloor, roundFloat, snapStep, snapToNice } from "./scale";
 import { useElementWidth } from "./use-element-width";
 
 /**
@@ -32,18 +32,39 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
   const dragBase = useRef<LevelValues | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const rect = useRef<DOMRect | null>(null);
-  // Axis frozen while dragging so the track does not rescale under the pointer.
-  const [frozenMax, setFrozenMax] = useState<number | null>(null);
-  const max = frozenMax ?? niceCeil(highest * 2);
-  const axis = useMemo(() => chooseAxis([], [max]), [max]);
-  const pad = 14;
+  // While a drag pushes past the right end the track extends under the
+  // pointer. On release the scale settles so the highest level sits near the
+  // right end (about 90%) when it was pushed there, stays put otherwise, and
+  // contracts only once every level sits in the left tenth.
+  const [trackMax, setTrackMax] = useState(() => settleMax(highest));
+  // Values that arrive from outside a drag (seeding, a typed edit, undo)
+  // settle the scale when they leave the track or sink into its left tenth.
+  useEffect(() => {
+    if (dragging) return;
+    setTrackMax(current => (highest > current * 0.9 || highest < current * 0.1 ? settleMax(highest) : current));
+  }, [highest, dragging]);
+  const max = trackMax;
+  // The track's scale is exactly `max`: no padding, so the right end of the
+  // track is the value the ticks say it is.
+  const axis = useMemo((): Axis => {
+    const step = niceFloor(max / 4) || max / 4;
+    const ticks: number[] = [];
+    for (let tick = 0; tick < max - step / 2; tick += step) ticks.push(roundFloat(tick));
+    ticks.push(max);
+    const clamp = (value: number) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+    return { kind: "linear", max, knee: 0, ticks, position: value => clamp(value / max), invert: fraction => clamp(fraction) * max };
+  }, [max]);
+  const pad = 16;
   const trackWidth = Math.max(120, width - pad * 2);
   const xFor = (item: number) => pad + axis.position(item) * trackWidth;
   const valueAt = (clientX: number, snap: boolean) => {
     const box = rect.current ?? svgRef.current?.getBoundingClientRect();
     if (!box) return 0;
     const x = ((clientX - box.left) / box.width) * width;
-    const raw = axis.invert((x - pad) / trackWidth);
+    const fraction = (x - pad) / trackWidth;
+    // Past the right end the track grows a little at a time, so the drag can keep going.
+    if (fraction > 0.97) setTrackMax(current => current * 1.12);
+    const raw = axis.invert(Math.min(1, fraction));
     return Math.max(0, snap ? snapToNice(raw) : raw);
   };
   const push = (base: LevelValues, id: string, next: number) => pushLevels(axis, order, base, id, next);
@@ -55,7 +76,6 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
     rect.current = svgRef.current?.getBoundingClientRect() ?? null;
     dragBase.current = value;
     draggingRef.current = id;
-    setFrozenMax(max);
     setDragging(id);
     setDragValues(push(value, id, valueAt(event.clientX, false)));
   };
@@ -68,12 +88,14 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
     if (!id) return;
     if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     const final = push(dragBase.current ?? value, id, valueAt(event.clientX, true));
+    // Settle the scale on release so a level pushed past the end lands near
+    // it and the end label is a round number.
+    setTrackMax(settleMax(Math.max(1, ...order.map(level => final[level] ?? 0))));
     draggingRef.current = null;
     dragBase.current = null;
     rect.current = null;
     setDragging(null);
     setDragValues(null);
-    setFrozenMax(null);
     onChange(final);
   };
   const keyDown = (id: string) => (event: KeyboardEvent<SVGElement>) => {
@@ -132,4 +154,15 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
       )}
     </div>
   );
+}
+
+/**
+ * A settled track end for a highest level: 10% of headroom, rounded up to
+ * the tick step so the end label is a round number and the level sits
+ * close to the right end.
+ */
+function settleMax(highest: number): number {
+  const target = Math.max(1, highest) * 1.1;
+  const step = niceFloor(target / 5) || target / 5;
+  return roundFloat(Math.ceil(target / step - 1e-9) * step);
 }

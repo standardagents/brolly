@@ -37,17 +37,18 @@ spend can accrue.
 
 `GET /api/usage-series` adds an optional `includedPerCycle` value to eligible
 metric definitions on their product-family scope. The response also includes
-the effective plan tier, its source, and the catalog version. Account responses
-include an `estimatedBillableCostSeries` for paid and unknown tiers. This
-additive series prices daily usage above each catalog allotment at Brolly's
-existing gross rates and resets at each billing-cycle boundary. Incoming
+the effective plan tier, its source, and the catalog version. Account and
+product-family responses include an `estimatedBillableCostSeries` for paid and
+unknown tiers. They also include the same daily estimate split by billed meter
+in `estimatedBillableCostByMetric`. These additive series price daily usage
+above each catalog allotment at Brolly's existing gross rates and reset at each
+billing-cycle boundary. Incoming
 Durable Objects WebSocket messages have no meter of their own: the estimator
 folds them into the Durable Objects request meter at 20 messages per billed
-request, and their dashboard row notes that conversion. The dashboard does
-not currently render the estimated billable-cost series; the response field
-remains for API consumers. The primary
-cost series keeps its existing authoritative-then-estimated selection. Free
-and Enterprise tiers return no estimated billable-cost points.
+request, and their dashboard row notes that conversion. Product usage charts
+show the matching meter estimate in the billable-usage marker tooltip. The
+primary cost series keeps its existing authoritative-then-estimated selection.
+Free and Enterprise tiers return no estimated billable-cost points.
 
 Product billing-cycle usage charts shade the included range and draw a fixed
 system boundary at the allotment for each eligible meter. The line is outside

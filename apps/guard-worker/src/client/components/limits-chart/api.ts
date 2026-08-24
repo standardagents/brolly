@@ -12,6 +12,7 @@ export interface UsageSeriesResponse {
   metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string }; aggregationKind?: AggregationKind }>;
   series: Array<{ day: string; costUsd: number; metrics: Record<string, number>; sealed: boolean }>;
   estimatedBillableCostSeries?: Array<{ day: string; costUsd: number }>;
+  estimatedBillableCostByMetric?: Record<string, Array<{ day: string; costUsd: number }>>;
   cycles: Array<CycleBounds & { approximate: boolean }>;
   includedQuotaCatalogVersion?: string;
   planTier?: PlanTier;
@@ -60,6 +61,13 @@ function cachedSeries(data: UsageSeriesResponse, key: string, build: () => DayPo
 
 export function costSeries(data: UsageSeriesResponse): DayPoint[] {
   return cachedSeries(data, "cost", () => data.series.map(point => ({ day: point.day, value: point.costUsd, sealed: point.sealed })));
+}
+
+/** Daily list-rate cost attributable to one billed usage meter. */
+export function metricBillableCostSeries(data: UsageSeriesResponse, metricId: string): DayPoint[] | undefined {
+  const series = data.estimatedBillableCostByMetric?.[metricId];
+  if (!series) return undefined;
+  return cachedSeries(data, `billable-cost:${metricId}`, () => series.map(point => ({ day: point.day, value: point.costUsd })));
 }
 
 

@@ -37,10 +37,10 @@ describe("LimitsChart", () => {
     const html = render({ value: { warn: 5, critical: 30, emergency: 100 } });
     // The 40-dollar spike crosses "critical"; ordinary days (3–6) cross "warn".
     // Each bar stays blue to the first level and wears a level's color only above it.
-    expect(html).toContain('fill="#c9412c" opacity="0.9"');
-    expect(html).toContain('fill="#e79021" opacity="0.9"');
-    expect(html).toContain('fill="#2f6fd6" opacity="0.9"');
-    expect(html).not.toContain('fill="#561a55" opacity="0.9"');
+    expect(html).toContain('fill="#c9412c" shape-rendering="crispEdges"');
+    expect(html).toContain('fill="#e79021" shape-rendering="crispEdges"');
+    expect(html).toContain('fill="#2f6fd6" shape-rendering="crispEdges"');
+    expect(html).not.toContain('fill="#561a55" shape-rendering="crispEdges"');
   });
 
   it("renders a numeric field per level and hides handles and fields in read-only mode", () => {
@@ -76,11 +76,11 @@ describe("LimitsChart", () => {
 
   it("draws the allotment boundary on cycle charts and the free runway on day charts", () => {
     const cycle = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 50 });
-    expect((cycle.match(/data-included-boundary/g) ?? []).length).toBe(1);
-    expect((cycle.match(/data-projected-crossing/g) ?? []).length).toBe(1);
+    // The included edge line (with its markers) replaces a full-width boundary line.
+    expect((cycle.match(/data-free-left-edge/g) ?? []).length).toBe(1);
     expect((cycle.match(/data-included-pill/g) ?? []).length).toBe(1);
     expect((cycle.match(/data-included-legend/g) ?? []).length).toBe(1);
-    expect(cycle).not.toContain("data-free-left");
+    expect(cycle).not.toMatch(/data-free-left(?!-edge)/);
     const day = render({ kind: "usage", unit: "requests", window: "day", includedPerCycle: 50 });
     expect(day).not.toContain("data-included-boundary");
     expect((day.match(/data-free-left(?!-)/g) ?? []).length).toBe(1);
@@ -92,6 +92,9 @@ describe("LimitsChart", () => {
     expect(distant).toContain("data-included-legend");
     const cost = render({ window: "day", includedPerCycle: 50 });
     expect(cost).not.toContain("data-free-left");
+    // The fixture's July spend passes 50 within the cycle, so that cycle gets an exhaustion marker on both charts.
+    expect((day.match(/data-free-exhausted=/g) ?? []).length).toBeGreaterThanOrEqual(1);
+    expect((cycle.match(/data-free-exhausted=/g) ?? []).length).toBeGreaterThanOrEqual(1);
   });
 
 

@@ -36,6 +36,17 @@ afterEach(() => {
 });
 
 describe("step-one access actions", () => {
+  it("places billing access context in the billing capability tooltip", async () => {
+    await render(<AccessActions accountId="account" families={[]} busy result={null} notice="" error="" token="test"
+      billingDialogOpen={false} onCheckComplete={() => {}} onCloseBilling={() => {}} onOpenBilling={() => {}}
+      onVerify={() => {}} onVerified={() => {}} />);
+
+    const cards = document.querySelectorAll('[aria-label="Verified Cloudflare permissions"] article');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.querySelector('[role="tooltip"]')).toBeNull();
+    expect(cards[1]!.querySelector('[role="tooltip"]')).not.toBeNull();
+  });
+
   it("reports completion after both visible checks resolve", async () => {
     vi.useFakeTimers();
     const onCheckComplete = vi.fn();

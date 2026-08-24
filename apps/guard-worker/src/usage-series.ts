@@ -1,6 +1,6 @@
 import { resourceId } from "@standardagents/brolly-core";
 import { BILLED_VIA, INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
-import { estimatedBillableCostSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
+import { estimatedBillableCostBreakdownSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
 import { readPlanState } from "./plan-tier.js";
 
 /**
@@ -29,6 +29,7 @@ export interface UsageSeriesResponse {
   metrics: Record<string, { key: string; label: string; unit: string; aggregationKind: "sum" | "maximum" | "latest"; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string } }>;
   series: UsageSeriesPoint[];
   estimatedBillableCostSeries?: EstimatedBillableCostPoint[];
+  estimatedBillableCostByMetric?: Record<string, EstimatedBillableCostPoint[]>;
   cycles: Array<{ startsAt: number; endsAt: number; approximate: boolean }>;
   includedQuotaCatalogVersion: string;
   planTier: PlanTier;
@@ -125,11 +126,12 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const cycleRows = cycles.results.map(cycle => ({ startsAt: cycle.starts_at, endsAt: cycle.ends_at, approximate: cycle.approximate === 1 }));
   const billableCostAllotments = scope === "account" ? includedAllotments : familyAllotments;
   const billableCost = scope === "account" || family
-    ? estimatedBillableCostSeries(series, cycleRows, billableCostAllotments, planState.planTier)
-    : [];
+    ? estimatedBillableCostBreakdownSeries(series, cycleRows, billableCostAllotments, planState.planTier)
+    : { total: [], byMetric: {} };
   const body: UsageSeriesResponse = {
     scope, resourceId: id, found: Boolean(resource), today, metrics, series,
-    estimatedBillableCostSeries: billableCost,
+    estimatedBillableCostSeries: billableCost.total,
+    estimatedBillableCostByMetric: billableCost.byMetric,
     cycles: cycleRows,
     includedQuotaCatalogVersion: INCLUDED_QUOTA_CATALOG_VERSION,
     planTier: planState.planTier,

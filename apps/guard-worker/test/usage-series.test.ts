@@ -85,6 +85,9 @@ describe("usage series", () => {
     expect(body.series[0]?.metrics["workers:requests"]).toBe(11_000_000);
     expect(body.series[0]?.costUsd).toBe(3.3);
     expect(body.estimatedBillableCostSeries).toEqual([{ day: "2026-08-15", costUsd: 0.3 }]);
+    expect(body.estimatedBillableCostByMetric).toEqual({
+      "workers:requests": [{ day: "2026-08-15", costUsd: 0.3 }],
+    });
   });
 
   it("exposes maximum aggregation for storage metrics and their family quota", async () => {

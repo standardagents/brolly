@@ -32,6 +32,18 @@ const paidQuotaResponse: UsageSeriesResponse = {
   metrics: { requests: { ...response.metrics.requests, includedPerCycle: 20_000 } },
 };
 const familyQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, scope: "family:workers", resourceId: "workers" };
+const billableFamilyResponse: UsageSeriesResponse = {
+  ...familyQuotaResponse,
+  metrics: { requests: { ...response.metrics.requests, includedPerCycle: 200 } },
+  estimatedBillableCostByMetric: {
+    requests: [
+      { day: "2026-08-15", costUsd: 0 },
+      { day: "2026-08-16", costUsd: 0.01 },
+      { day: "2026-08-17", costUsd: 0.01 },
+      { day: "2026-08-18", costUsd: 3.25 },
+    ],
+  },
+};
 const resourceQuotaResponse: UsageSeriesResponse = { ...paidQuotaResponse, scope: "asset:workers:resource:api", resourceId: "api" };
 const storageFamilyResponse: UsageSeriesResponse = {
   ...familyQuotaResponse,
@@ -68,7 +80,16 @@ describe("LimitsChartDual tolerance behavior", () => {
     await waitFor(() => expect(readWindow(container, "cycle").usage.requests).toEqual({ warn: 30_000, critical: 160_000 }));
     expect(container.querySelector("[aria-label='Expand Requests']")).not.toBeNull();
     await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
-    await waitFor(() => expect(container.querySelector("[data-included-boundary]")).not.toBeNull());
+    await waitFor(() => expect(container.querySelector("[data-free-left-edge]")).not.toBeNull());
+  });
+
+  it("formats the current cycle's estimated billable cost in the usage marker tooltip", async () => {
+    const container = await render(<Harness data={billableFamilyResponse} />);
+    await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
+    await waitFor(() => expect(container.querySelector("[data-billable-marker='2026-08-18']")).not.toBeNull());
+    const marker = container.querySelector("[data-billable-marker='2026-08-18']")!;
+    await act(async () => hover(marker));
+    expect(container.querySelector("[data-billable-cost]")?.textContent).toBe("$3.27");
   });
 
   it("keeps enterprise usage active while disabling only the cost row", async () => {
@@ -85,14 +106,14 @@ describe("LimitsChartDual tolerance behavior", () => {
     await waitFor(() => expect(readWindow(container, "cycle").usage.requests).not.toEqual({ warn: 30_000, critical: 160_000 }));
     await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
     await waitFor(() => expect(container.querySelectorAll("[data-limits-chart='usage']")).toHaveLength(2));
-    expect(container.querySelector("[data-included-boundary]")).toBeNull();
+    expect(container.querySelector("[data-free-left-edge]")).toBeNull();
   });
 
   it("uses running maxima for family storage cycle seeds", async () => {
     const container = await render(<Harness data={storageFamilyResponse} />);
     await waitFor(() => expect(readWindow(container, "cycle").usage.storage).toEqual({ warn: 150, critical: 800 }));
     await act(async () => (container.querySelector("[aria-label='Expand Storage']") as HTMLButtonElement).click());
-    await waitFor(() => expect(container.querySelector("[data-included-boundary]")).not.toBeNull());
+    await waitFor(() => expect(container.querySelector("[data-free-left-edge]")).not.toBeNull());
   });
 
   it("keeps account cost-only policy maps free of usage seeds", async () => {

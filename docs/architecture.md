@@ -180,11 +180,13 @@ product meter and does not receive a separate allotment. Enterprise accounts
 use the same boundary as a labeled standard paid-plan baseline. Free accounts
 receive no quota boundary.
 
-Paid and unknown account series also expose estimated billable cost as a
-secondary chart line. Its daily values contain only usage above the catalog
-allotment at the existing conservative gross rates. The computation resets at
-each billing-cycle boundary and leaves the primary reconciled or gross cost
-series unchanged. Free and Enterprise accounts omit this series.
+Paid and unknown account and product-family series expose estimated billable
+cost as a scope total and as a per-meter breakdown. Daily values contain only
+usage above the catalog allotment at the existing conservative gross rates.
+The computation resets at each billing-cycle boundary. Product usage charts
+show the cycle-to-date meter estimate in the billable-usage marker tooltip.
+The primary reconciled or gross cost series remains unchanged. Free and
+Enterprise accounts omit these series.
 
 Risk tolerance is one ordered percentage map shared by account cost, product
 and resource cost, and every billable usage dimension. Conservative spans 120%

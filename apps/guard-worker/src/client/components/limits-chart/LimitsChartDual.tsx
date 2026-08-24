@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { billableMetricIds, costSeries, metricAggregationKind, metricComposition, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
+import { billableMetricIds, costSeries, metricAggregationKind, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
 import type { AggregationKind, DayPoint } from "./cycles";
 import { windowDefaults } from "./defaults";
 import { formatLimitValue, unitLabel } from "./format";
@@ -93,6 +93,10 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
   });
   const metricIds = dayWindow.metricIds;
   const order = dayWindow.order;
+  // A scope with no recorded usage has nothing to collapse: its rows are
+  // level tracks, shown open with their own history controls.
+  const trackOnly = !!data && !data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
+  const bare = headerless || trackOnly;
   const costUnsupported = data?.planTier === "enterprise";
   // Capped chip columns keep each level's diamond and value a tight pair with
   // even spacing between levels, instead of stretching across the cell; the
@@ -128,7 +132,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     { id: "cost", label: "Cost", unit: "USD", series: costSeries(data) },
     ...(costOnly ? [] : metricIds.map(id => {
       const quota = quotaScope && data.planTier !== "free";
-      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: rowSeries(data, id), includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, includes: metricComposition(data, id)?.slice(1).map(part => part.label), aggregationKind: metricAggregationKind(data, id) };
+      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: rowSeries(data, id), includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, aggregationKind: metricAggregationKind(data, id) };
     })),
   ] : [], [data, metricIds, costOnly, quotaScope]);
   // One switch per dimension, written to both windows; the day map is authoritative.
@@ -151,7 +155,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     <div className="@container">
       <div className={separators ? "grid" : "grid gap-1.5"}>
         {!chartHeadings && (
-          <div className="grid grid-cols-[minmax(110px,150px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-end gap-x-4 px-3 pb-1 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint max-lg:hidden">
+          <div className="grid grid-cols-[minmax(120px,164px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-end gap-x-4 px-3 pb-1 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint max-lg:hidden">
             <span />
             <span>Per day</span>
             <span>Per billing cycle</span>
@@ -162,7 +166,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
           const on = enabledFor(row.id);
           const unsupported = row.id === "cost" && costUnsupported;
           const isOpen = on && !unsupported && open === row.id;
-          if (headerless) {
+          if (bare) {
             return (
               <div key={row.id} className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
                 <div className="min-w-0">{row.id === "cost" ? dayWindow.costChart(chartHeadings?.day) : dayWindow.usageChart(row.id)}</div>
@@ -199,7 +203,7 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
 interface WindowCell { window: ScopeWindow; values: LevelValues; levelEnabled?: Record<string, boolean>; data: UsageSeriesResponse }
 
 function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns, levels, day, cycle, readOnly, unsupported, chartHeadings, separators }: {
-  row: { id: string; label: string; unit: string; series: DayPoint[]; includedPerCycle?: number; poolSeries?: DayPoint[]; includes?: string[]; aggregationKind?: AggregationKind };
+  row: { id: string; label: string; unit: string; series: DayPoint[]; includedPerCycle?: number; poolSeries?: DayPoint[]; aggregationKind?: AggregationKind };
   on: boolean;
   open: boolean;
   onToggleOpen(): void;
@@ -250,12 +254,11 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
     <div data-deviated={deviated || undefined} className={`isolate relative transition-colors duration-200 ${shell}`}>
       {/* Deviation glow: painted behind the row content so it can fade. */}
       <div aria-hidden="true" className={`pointer-events-none absolute inset-0 -z-10 rounded-panel bg-gradient-to-r from-orange-soft/40 via-transparent via-[96px] transition-opacity duration-300 ${deviated ? "opacity-100" : "opacity-0"}`} />
-      <div className="relative grid grid-cols-[minmax(110px,150px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-center gap-x-4 px-3 py-2 max-lg:grid-cols-[minmax(0,1fr)_36px] max-lg:gap-y-2">
+      <div className="relative grid grid-cols-[minmax(120px,164px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-center gap-x-4 px-3 py-2 max-lg:grid-cols-[minmax(0,1fr)_36px] max-lg:gap-y-2">
         <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${row.label}`} disabled={!on || unsupported} onClick={onToggleOpen} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
         <span className={`pointer-events-none relative min-w-0 ${dim}`}>
           <strong className="block truncate text-[12.5px]">{row.label}{deviated && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</strong>
           <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${formatLimitValue(row.includedPerCycle, row.unit)} included` : unitLabel(row.unit)}</small>
-          {row.includes?.length ? <small data-includes className="block text-[9.5px] leading-3 text-muted">Includes {row.includes.join(", ")}</small> : null}
         </span>
         <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("day", day)}</span>
         <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("cycle", cycle)}</span>

@@ -46,9 +46,9 @@ directory.
   included allotment when typical usage remains below the allotment. A metric
   whose typical cycle usage exceeds the allotment uses the complete
   tolerance-derived map.
-- Paid and unknown account cost charts may include an estimated billable-cost
-  comparison line. It remains separate from the primary cost series and has no
-  threshold handles or history state.
+- Paid and unknown product usage charts show the matching meter's estimated
+  billable cost in the cycle marker tooltip. The estimate remains separate
+  from the primary cost series and has no threshold or history state.
 
 ## Limits UI
 
