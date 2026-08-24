@@ -192,6 +192,69 @@
     from { opacity: 0; transform: scale(0.5); }
     to { opacity: 1; transform: none; }
   }
+  /* Chart tour: each stage's caption and chart rise in as a new layer. */
+  --animate-tour-stage: tour-stage 0.65s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  @keyframes tour-stage {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+  /* Chart tour: alarm badges pop in along a crossed level line, one after another. */
+  --animate-alarm-badge: alarm-badge 0.55s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  @keyframes alarm-badge {
+    from { opacity: 0; transform: scale(0.35); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+/* Chart tour: new layers animate in when a tour stage adds them. They are SVG
+   nodes inside LimitsChart, so utilities on the tour's own markup cannot reach
+   them; these scoped hooks are the Tailwind-inexpressible part. */
+@keyframes tour-layer { from { opacity: 0; } to { opacity: 1; } }
+[data-chart-tour] [data-level-line] {
+  animation: tour-layer 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+/* Levels stage: the glide is a per-frame value tween (see ChartTour), so the
+   bar fills track the lines exactly. The chart's own inline 260ms transform
+   transition would trail those per-frame updates; the !important override is
+   the only way a stylesheet can cancel an inline transition, and it is
+   scoped to the entrance and exit. The free-usage layers are revealed (and
+   rewound) by the tour's date-front sweep (useFreeSweep), which drives clip
+   paths per frame from script. */
+[data-chart-tour] [data-tour-stage="levels"] [data-level-line],
+[data-chart-tour] [data-tour-exit~="levels"] [data-level-line] {
+  transition-duration: 0ms !important;
+}
+/* Reversed exits while a layer's data-tour-exit token is set: the entrance
+   plays backward, then the layer unmounts. The exits are separate keyframes
+   (not `animation-direction: reverse`) because only an animation-name change
+   restarts a finished animation; flipping the direction of one that already
+   completed snaps straight to its first frame. */
+@keyframes tour-layer-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes alarm-badge-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.35); } }
+[data-chart-tour] [data-crossing-dim] {
+  animation: tour-layer 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+[data-chart-tour] [data-tour-exit~="levels"] [data-level-line] {
+  animation: tour-layer-out 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+[data-chart-tour] [data-tour-exit~="alarms"] [data-crossing-dim] {
+  animation: tour-layer-out 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+[data-chart-tour] [data-tour-exit~="alarms"] [data-alarm-badge] {
+  animation: alarm-badge-out 0.7s cubic-bezier(0.7, 0, 0.8, 0.3) both !important;
+}
+[data-chart-tour] [data-included-pill] {
+  animation: tour-layer 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) 3.4s both;
+}
+/* The tour renders its own fixed-height legends (TourLegend) so the rows
+   under the charts never move between stages; the charts' built-in legend
+   rows would stack above them and push them down. */
+[data-chart-tour] [data-included-legend],
+[data-chart-tour] [data-composition-legend] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-chart-tour] * { animation-duration: 0.01s !important; animation-delay: 0s !important; }
 }
 
 @layer base {

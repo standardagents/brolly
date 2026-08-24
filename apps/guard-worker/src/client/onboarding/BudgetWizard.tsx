@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Brand, Button, Eyebrow, Icon, Notice, Spinner } from "../components/ui";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Brand, Button, Eyebrow, Icon, Notice, Spinner, StepMarker } from "../components/ui";
 import { effectivePlanTier } from "../plan-tier";
 import type { OnboardingData } from "../types";
 import {
@@ -10,6 +10,7 @@ import {
 } from "./BudgetSteps";
 import { AlertsStep } from "./alerts";
 import { AlertLevelsStep, useAlertLevels } from "./levels";
+import { ChartTour } from "./ChartTour";
 import { RiskToleranceStep } from "./RiskToleranceStep";
 import { AccountLimitStep } from "./LimitSteps";
 import { ProductLimitsStep } from "./ProductLimitsStep";
@@ -47,22 +48,6 @@ const STEPS: readonly Step[] = [
 type StepKey = Step["key"];
 const stepIndex = (key: StepKey) => STEPS.findIndex(step => step.key === key);
 
-/** Round step marker: filled while active, green once done, outlined otherwise. */
-function StepMarker({ state = "todo", className = "", children }: { state?: "active" | "done" | "todo"; className?: string; children: ReactNode }) {
-  return (
-    <span
-      className={`grid size-[27px] flex-none place-items-center rounded-full border text-[12px] ${className} ${
-        state === "active"
-          ? "border-orange bg-orange text-white"
-          : state === "done"
-            ? "border-[#74b996] bg-good-bg dark:border-[#4a8a68]"
-            : "border-[#cbd1d7] dark:border-[#505862]"
-      }`}
-    >
-      {children}
-    </span>
-  );
-}
 
 export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, onLogout, onSaved }: {
   data: OnboardingData;
@@ -78,6 +63,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   const [accessCheckComplete, setAccessCheckComplete] = useState(false);
   const [breakerClaimed, setBreakerClaimed] = useState(false);
+  // Chart guide card between risk tolerance and the limit steps: it appears
+  // when the tolerance step's Continue is pressed on a first-run wizard, the
+  // account step unlocks when it finishes or is skipped, and the card stays
+  // in the flow afterwards for replay.
+  const [tour, setTour] = useState<"pending" | "open" | "done">(editing ? "done" : "pending");
   const board = useAlertLevels(token);
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
@@ -136,11 +126,15 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       </header>
       <div className="mx-auto max-w-[1440px] px-8 pt-8 pb-[100px] max-xl:px-6 max-xl:pb-20 max-md:px-3.5 max-md:pt-4 max-md:pb-[60px]">
         <div className="grid min-w-0 gap-5">
-          {STEPS.map((step, index) => index > navigation.unlocked
-            ? <LockedStep key={step.label} step={step} index={index} />
+          {STEPS.map((step, index) => <Fragment key={step.label}>
+            {step.key === "account" && tour !== "pending" && (
+              <ChartTour levels={board.levels} policy={policy} done={tour === "done"}
+                onDone={() => { setTour("done"); navigation.advance(); }} />
+            )}
+            {index > navigation.unlocked
+            ? <LockedStep step={step} index={index} />
             : (
               <section
-                key={step.label}
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
                 className="min-w-0 scroll-mt-[76px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:scroll-mt-[116px] max-md:px-4 max-md:py-[22px]"
               >
@@ -161,6 +155,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     onOpenBilling={() => setBillingDialogOpen(true)}
                     onContinue={() => {
                       if (step.key === "runtime") setBreakerClaimed(true);
+                      if (step.key === "tolerance" && tour !== "done") {
+                        setTour("open");
+                        if (tour === "open") document.querySelector("[data-chart-tour]")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        return;
+                      }
                       navigation.advance();
                     }}
                   />
@@ -176,7 +175,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                   />
                 )}
               </section>
-            ))}
+            )}
+          </Fragment>)}
         </div>
       </div>
     </main>

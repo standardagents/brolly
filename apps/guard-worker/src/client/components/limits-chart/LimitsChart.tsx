@@ -9,6 +9,7 @@ import { completeWithDefaults } from "./defaults";
 import { compactValue, formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
 import { type Axis, chooseAxisWithIncluded, includedBandGeometry, snapStep, snapToNice } from "./scale";
+import { CrossingAlarms, CrossingDim } from "./crossing-alarms";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
 
@@ -71,10 +72,11 @@ export interface LimitsChartProps {
   fields?: "cards" | "inline" | false;
   /** Content placed beside the history controls in the heading row. */
   headerContent?: ReactNode;
+  /** Teaching spotlight (day charts): dim days under every level and badge each bar-line intersection. */ crossingAlarms?: boolean;
 }
 
 const EASE = "cubic-bezier(.2,.7,.2,1)";
-const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
+export const PLOT = { left: 62, right: 14, top: 12, bottom: 28, height: 250 } as const;
 /** Left plot-area edge, exported so headings above a chart can align with its x axis. */
 export const CHART_PLOT_LEFT = PLOT.left;
 /** One series accent for every chart, cost and usage alike: cool blue, outside the warm level ramp. */
@@ -95,7 +97,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards" }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards", crossingAlarms = false }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -624,11 +626,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               ))}
             </defs>
             {bands.map(band => sawtooth.map((points, index) => (
-              <polygon key={`${band.id}-${index}`} points={points} fill={band.color} opacity="0.82" clipPath={`url(#${patternId}-band-${band.id})`} />
+              <polygon key={`${band.id}-${index}`} data-cycle-total={index} points={points} fill={band.color} opacity="0.82" clipPath={`url(#${patternId}-band-${band.id})`} />
             )))}
             {/* The panel-colored base also strokes its own outline so the blue band's
                 anti-aliased edge cannot peek out along steep slopes. */}
-            {includedPolygons.map((points, index) => <polygon key={`included-base-${index}`} points={points} fill="var(--panel)" stroke="var(--panel)" strokeWidth="1.5" strokeLinejoin="round" />)}
+            {includedPolygons.map((points, index) => <polygon key={`included-base-${index}`} data-included-base points={points} fill="var(--panel)" stroke="var(--panel)" strokeWidth="1.5" strokeLinejoin="round" />)}
             {includedPolygons.map((points, index) => <polygon key={`included-${index}`} data-included-usage points={points} fill={`url(#${patternId}-dither)`} />)}
           </>
         ) : null}
@@ -661,8 +663,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             {includedCap > 0 && (
               <>
                 <clipPath id={`${patternId}-projection-included-clip`}><rect x={PLOT.left} width={plotWidth} y={yFor(includedCap)} height={Math.max(0, base - yFor(includedCap))} /></clipPath>
-                <polygon points={points} fill="var(--panel)" clipPath={`url(#${patternId}-projection-included-clip)`} />
-                <polygon points={points} fill={`url(#${patternId}-projection-included)`} clipPath={`url(#${patternId}-projection-included-clip)`} />
+                <polygon data-projection-included points={points} fill="var(--panel)" clipPath={`url(#${patternId}-projection-included-clip)`} />
+                <polygon data-projection-included points={points} fill={`url(#${patternId}-projection-included)`} clipPath={`url(#${patternId}-projection-included-clip)`} />
               </>
             )}
           </g>;
@@ -699,6 +701,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
         {/* Bars (memoized) plus a lit overlay copy of the hovered day's bar. */}
         {barsLayer}
+        {crossingAlarms && !cycleMode && <CrossingDim levels={activeLevels} values={shown} dense={dense} geometry={{ xFor, yFor, barSlot, baseline: PLOT.top + plotHeight }} />}
         {hovered && !hovered.projected && !cycleMode && (() => {
           const base = PLOT.top + plotHeight;
           const { left, width: barPixels } = barEdges(hovered.index);
@@ -726,7 +729,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           const y = yFor(current);
           const interactive = !readOnly;
           return (
-            <g key={level.id}
+            <g key={level.id} data-level-line={level.id}
               role={interactive ? "slider" : undefined}
               tabIndex={interactive ? 0 : undefined}
               aria-label={interactive ? `${level.label} limit` : undefined}
@@ -757,6 +760,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             </g>
           );
         })}
+        {crossingAlarms && <CrossingAlarms levels={activeLevels} values={shown} mode={cycleMode ? "cycle" : "day"} points={cycleMode ? cumulative.map(point => ({ day: point.day, value: point.cumulative, group: point.cycle })) : dense.map(point => ({ day: point.day, value: point.value, group: 0 }))} geometry={{ xFor, yFor, barSlot, baseline: PLOT.top + plotHeight }} />}
         {/* The free-usage curve's outer edge (day) or the included total's
             outer edge (cycle), drawn above the level lines, with a one-sided
             panel-colored casing on the inner side so it separates from the
@@ -766,16 +770,16 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             {/* Panel-colored casing on the inner side only. The free curve falls
                 left to right with its fill below-left, so the casing is shifted
                 down and left: below on flat runs, left on steep drops. */}
-            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={`case-${index}`} points={points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(-1.25px, 1.25px)" }} />)}
-            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={index} points={points} fill="none" stroke={INCLUDED_COLOR} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={`case-${index}`} pathLength={1} points={points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(-1.25px, 1.25px)" }} />)}
+            {[...freeAreas.map(shape => shape.edge), ...includedEdges].map((points, index) => <polyline key={index} pathLength={1} points={points} fill="none" stroke={INCLUDED_COLOR} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
           </g>
         )}
 
         {billable.runs.length > 0 && (
           <g data-billable-edge pointerEvents="none" clipPath={`url(#${patternId}-plot)`}>
             {/* The total rises left to right with its fill below-right, so its casing shifts down and right. */}
-            {billable.runs.map((run, index) => <polyline key={`case-${index}`} points={run.points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(1.25px, 1.25px)" }} />)}
-            {billable.runs.map((run, index) => <polyline key={index} points={run.points} fill="none" stroke={run.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+            {billable.runs.map((run, index) => <polyline key={`case-${index}`} pathLength={1} points={run.points} fill="none" stroke="var(--panel)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" opacity=".95" style={{ transform: "translate(1.25px, 1.25px)" }} />)}
+            {billable.runs.map((run, index) => <polyline key={index} pathLength={1} points={run.points} fill="none" stroke={run.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
           </g>
         )}
         {/* Where the free allotment ran out: a fixed marker on the x axis per
@@ -874,7 +878,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         </div>
       )}
       {!fields ? null : readOnly ? (
-        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
+        <ul className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
             <li key={level.id} className={`inline-flex items-center gap-1.5 rounded-[5px] px-1.5 py-0.5 transition-colors ${highlightLevel === level.id ? "bg-field" : ""}`}>
               <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />

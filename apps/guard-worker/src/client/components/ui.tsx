@@ -614,6 +614,23 @@ export function KeyValueList({ rows, labelWidth = "150px", className }: { rows: 
   );
 }
 
+/** Round step marker: filled while active, green once done, outlined otherwise. */
+export function StepMarker({ state = "todo", className = "", children }: { state?: "active" | "done" | "todo"; className?: string; children: ReactNode }) {
+  return (
+    <span
+      className={`grid size-[27px] flex-none place-items-center rounded-full border text-[12px] ${className} ${
+        state === "active"
+          ? "border-orange bg-orange text-white"
+          : state === "done"
+            ? "border-[#74b996] bg-good-bg dark:border-[#4a8a68]"
+            : "border-[#cbd1d7] dark:border-[#505862]"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** Numbered step marker (control flow, install guides). */
 export function StepNumber({ children, size = 26 }: { children: ReactNode; size?: 24 | 26 }) {
   return (
