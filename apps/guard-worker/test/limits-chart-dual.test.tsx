@@ -297,6 +297,19 @@ describe("LimitsChartDual tolerance behavior", () => {
     expect(charts[0]!.querySelector("[data-line-value]")!.textContent).not.toBe("$40.00");
   });
 
+  it("uses compact axis units in usage tooltips", async () => {
+    const duration = {
+      ...response,
+      metrics: { requests: { ...response.metrics.requests, label: "Compute duration", unit: "GB-s" } },
+      series: response.series.map((point, index) => ({ ...point, metrics: { requests: index === 0 ? 769_623.6 : 0 } })),
+    };
+    const container = await render(<Harness data={duration} />);
+    await act(async () => (container.querySelector("[aria-label='Expand Compute duration']") as HTMLButtonElement).click());
+    const cycle = container.querySelectorAll("[data-limits-chart='usage']")[1]!;
+    await act(async () => pointerMove(cycle.querySelector("[data-hover-layer]") as SVGRectElement, { clientX: 63, clientY: 40 }));
+    expect(cycle.querySelector("[data-chart-tooltip]")?.textContent).toContain("769.6K GB-s");
+  });
+
   it("marks deviated rows with the edge glow", async () => {
     const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} deviated={new Set(["cost"])} />);
     await waitFor(() => expect(container.querySelectorAll("[data-deviated]")).toHaveLength(1));

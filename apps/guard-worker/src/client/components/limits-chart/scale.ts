@@ -124,9 +124,50 @@ export function chooseAxis(series: number[], extra: number[] = [], mode: AxisMod
   const middle = median(nonzero);
   const resolved = mode === "auto" ? recommendedAxisMode(data) : mode;
   if (resolved === "linear") return linearAxis(top);
-  // A knee above the median softens the logarithmic compression. Typical days
-  // sit lower while the outlier remains visible within the same domain.
-  return symlogAxis(top, middle * SYMLOG_KNEE_MULTIPLIER);
+  // The knee adapts to the outlier's severity: however extreme the spike, the
+  // typical range keeps the same share of the plot instead of flattening.
+  return symlogAxis(top, adaptiveSymlogKnee(top, middle * SYMLOG_KNEE_MULTIPLIER));
+}
+
+/**
+ * The knee that puts `typicalTop` (the ceiling of ordinary data) at
+ * TYPICAL_BAND_FRACTION of the plot height for this domain. Compression then
+ * scales with the outlier: a 100× spike and a 10,000× spike both leave the
+ * typical band equally readable. Data whose typical top already sits above
+ * that fraction is near-linear and keeps the plain softened knee.
+ */
+export const TYPICAL_BAND_FRACTION = 0.35;
+export function adaptiveSymlogKnee(top: number, typicalTop: number, target = TYPICAL_BAND_FRACTION): number {
+  if (!(top > 0) || !(typicalTop > 0) || typicalTop / top >= target) return typicalTop;
+  // position(typicalTop) falls monotonically as the knee grows; bisect on a
+  // geometric grid for the knee that lands it on the target.
+  let low = top * 1e-7;
+  let high = top;
+  for (let step = 0; step < 48; step += 1) {
+    const knee = Math.sqrt(low * high);
+    const position = Math.log10(1 + typicalTop / knee) / Math.log10(1 + top / knee);
+    if (position > target) low = knee; else high = knee;
+  }
+  return Math.sqrt(low * high);
+}
+
+/**
+ * A quota meter whose busiest cycle stays under this share of the included
+ * allotment is low usage: it renders linear even when its days are internally
+ * spiky, because a logarithmic scale would inflate trivial usage into what
+ * reads as heavy traffic.
+ */
+export const LOW_USAGE_QUOTA_RATIO = 0.5;
+
+/**
+ * The readable initial mode for a usage meter: daily spikes recommend
+ * logarithmic, except while the whole history sits comfortably inside the
+ * free allotment (see LOW_USAGE_QUOTA_RATIO).
+ */
+export function recommendedUsageScale(dailyValues: number[], maxCycleTotal?: number, includedPerCycle?: number): ResolvedAxisMode {
+  if (typeof includedPerCycle === "number" && Number.isFinite(includedPerCycle) && includedPerCycle > 0
+    && typeof maxCycleTotal === "number" && maxCycleTotal < includedPerCycle * LOW_USAGE_QUOTA_RATIO) return "linear";
+  return recommendedAxisMode(dailyValues);
 }
 
 /** Choose the readable initial mode from a chart's observed values. */
@@ -179,8 +220,11 @@ export function includedBandGeometry(axis: Axis, includedPerCycle?: number): Inc
 export const quotaBandGeometry = includedBandGeometry;
 
 export function linearAxis(top: number): Axis {
-  const max = niceCeil(top > 0 ? top * 1.05 : 1) || 1;
-  const step = niceFloor(max / 6) || max / 6;
+  // Ceiling to one tick step, not the next 1/2/5 rung: a level sitting on a
+  // round number (96K × headroom → 100.8K) must not double the domain to 200K.
+  const raw = top > 0 ? top * 1.05 : 1;
+  const step = niceFloor(raw / 5) || raw / 5;
+  const max = roundFloat(Math.ceil(raw / step - 1e-9) * step) || 1;
   const ticks: number[] = [];
   for (let tick = 0; tick < max - step / 2; tick += step) ticks.push(roundFloat(tick));
   ticks.push(max);

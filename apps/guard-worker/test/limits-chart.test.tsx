@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LimitsChart, levelColor } from "../src/client/components/limits-chart";
 import { compactValue, editableValue, parseCompact } from "../src/client/components/limits-chart/LimitsChart";
+import { compactLimitValue } from "../src/client/components/limits-chart/format";
 
 const LEVELS = [
   { id: "warn", label: "Warn", color: "#e79021" },
@@ -123,6 +124,7 @@ describe("LimitsChart", () => {
     expect(compactValue(2_100, "USD")).toBe("2.1K");
     expect(compactValue(950, "USD")).toBe("950");
     expect(compactValue(100_500_000, "rows")).toBe("100.5M");
+    expect(compactLimitValue(769_623.6, "GB-s")).toBe("769.6K GB-s");
     expect(parseCompact("5.8B")).toBe(5_800_000_000);
     expect(parseCompact("12k")).toBe(12_000);
     expect(parseCompact("$2,000")).toBe(2_000);

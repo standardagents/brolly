@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { billableMetricIds, costSeries, metricAggregationKind, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
 import { cycleCumulative, denseSeries, visibleWindow, type AggregationKind, type DayPoint } from "./cycles";
 import { displayPercent, windowBaseline, windowDefaults } from "./defaults";
-import { compactValue, unitLabel } from "./format";
+import { compactLimitValue, unitLabel } from "./format";
 import { LevelValueField } from "./LevelValueField";
 import type { LevelValues } from "./levels";
 import { CHART_ACCENT, type LimitsChartLevel } from "./LimitsChart";
@@ -10,7 +10,7 @@ import { Expander, Spinner } from "../ui";
 import { MiniChart } from "./UsageDimensions";
 import { sameMap, useScopeWindow, type ScopeWindow, type UsageLimitValues } from "./use-scope-window";
 import { ChartScaleProvider, type ChartScaleMode } from "./ChartScaleMode";
-import { recommendedAxisMode } from "./scale";
+import { recommendedUsageScale } from "./scale";
 
 export interface WindowLimits {
   cost: LevelValues;
@@ -135,7 +135,8 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
       const quota = quotaScope && data.planTier !== "free";
       const series = rowSeries(data, id);
       const aggregationKind = metricAggregationKind(data, id);
-      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series, includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, aggregationKind, initialScale: recommendedPairScale(series, data, aggregationKind) };
+      const includedPerCycle = quota ? metricIncluded(data, id) : undefined;
+      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series, includedPerCycle, poolSeries: quota ? metricPool(data, id)?.series : undefined, aggregationKind, initialScale: recommendedPairScale(series, data, aggregationKind, includedPerCycle) };
     })),
   ] : [], [data, metricIds, costOnly, quotaScope]);
   if (!dataProp && scope && fetched.loading) {
@@ -260,7 +261,7 @@ function DualRow({ row, open, onToggleOpen, deviated, levels, day, cycle, tolera
         <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${row.label}`} disabled={unsupported} onClick={onToggleOpen} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
         <span className={`pointer-events-none relative w-[140px] flex-none min-w-0 ${dim}`}>
           <strong className="block truncate text-[12.5px]">{row.label}{deviated && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</strong>
-          <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${compactValue(row.includedPerCycle, row.unit)} ${unitLabel(row.unit)} included` : unitLabel(row.unit)}</small>
+          <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${compactLimitValue(row.includedPerCycle, row.unit)} included` : unitLabel(row.unit)}</small>
         </span>
         <span className={`pointer-events-none relative max-lg:order-last ${dim}`}>{cell("day", day)}</span>
         <span className={`pointer-events-none relative ml-auto max-lg:order-last max-lg:ml-0 ${dim}`}>{cell("cycle", cycle)}</span>
@@ -282,11 +283,16 @@ function DualRow({ row, open, onToggleOpen, deviated, levels, day, cycle, tolera
   );
 }
 
-function recommendedPairScale(series: DayPoint[], data: UsageSeriesResponse, aggregationKind: AggregationKind = "sum"): ChartScaleMode {
+/**
+ * The scale a day/cycle pair opens on, from the daily usage alone. A running
+ * cycle total always spans tiny early-cycle values to a large cycle-end value,
+ * so it reads as spiky even for steady spend; only genuine daily spikes should
+ * open the pair on the logarithmic scale, and never while the whole history
+ * sits comfortably inside the free allotment.
+ */
+function recommendedPairScale(series: DayPoint[], data: UsageSeriesResponse, aggregationKind: AggregationKind = "sum", includedPerCycle?: number): ChartScaleMode {
   const window = visibleWindow(series, data.cycles, data.today);
   const dense = denseSeries(series, window.fromDay, window.toDay);
-  const cycle = cycleCumulative(dense, data.cycles, aggregationKind).map(point => point.cumulative);
-  return recommendedAxisMode(series.map(point => point.value)) === "logarithmic" || recommendedAxisMode(cycle) === "logarithmic"
-    ? "logarithmic"
-    : "linear";
+  const maxCycleTotal = Math.max(0, ...cycleCumulative(dense, data.cycles, aggregationKind).map(point => point.cumulative));
+  return recommendedUsageScale(series.map(point => point.value), maxCycleTotal, includedPerCycle);
 }

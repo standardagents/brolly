@@ -2,7 +2,7 @@ import { memo, useMemo } from "react";
 import { type AggregationKind, type CycleBounds, type DayPoint, freeRemainingSeries, includedTops } from "./cycles";
 import { deriveSeries } from "./defaults";
 import { type LevelValues, crossedLevel } from "./levels";
-import { chooseAxis } from "./scale";
+import { chooseAxis, recommendedUsageScale } from "./scale";
 import { INCLUDED_COLOR, type LimitsChartLevel } from "./LimitsChart";
 
 /**
@@ -49,8 +49,12 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
     }
     const levelValues = levels.map(level => values[level.id] ?? 0);
     // Sparklines normalize to their own peak: the tallest day or cycle total
-    // touches the top, and levels only color the bars, never the scale.
-    const axis = chooseAxis(points);
+    // touches the top, and levels only color the bars, never the scale. The
+    // scale mode follows the same rule as the full charts: daily spikes go
+    // logarithmic unless the whole history sits inside the free allotment.
+    const maxCycleTotal = Math.max(0, ...derived.cumulative.map(point => point.cumulative));
+    const mode = recommendedUsageScale(derived.dense.map(point => point.value), maxCycleTotal, included);
+    const axis = chooseAxis(points, [], mode);
     const order = levels.map(level => level.id);
     const colorById = new Map(levels.map(level => [level.id, level.color]));
     const width = 120;

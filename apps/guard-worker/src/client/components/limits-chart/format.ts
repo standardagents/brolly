@@ -19,6 +19,12 @@ export function compactValue(value: number, _unit: string): string {
     : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
 }
 
+/** Compact chart value with the same unit label used by rows and tooltips. */
+export function compactLimitValue(value: number, unit: string): string {
+  if (unit === "USD") return value >= 1_000 ? `$${compactValue(value, unit)}` : money(value);
+  return `${compactValue(value, unit)} ${unitLabel(unit)}`;
+}
+
 /** Level-field display form: dollar values under $100 always show two decimals; from $100 up they show none. Other units follow `compactValue`. */
 export function fieldValue(value: number, unit: string): string {
   if (unit === "USD" && value < 1_000) return value >= 100 ? String(Math.round(value)) : value.toFixed(2);

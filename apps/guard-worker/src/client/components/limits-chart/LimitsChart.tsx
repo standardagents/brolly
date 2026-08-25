@@ -5,7 +5,7 @@ import { ProductIcon } from "../ui";
 import { DAY_MS, type AggregationKind, type CycleBounds, type DayPoint, cycleCumulative, dayOf, dayStart, denseSeries, freeRemainingSeries, includedTops, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
 import { completeWithDefaults, displayPercent, windowBaseline } from "./defaults";
-import { compactValue, formatLimitValue } from "./format";
+import { compactLimitValue, compactValue, formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
 import { type Axis, chooseAxisWithIncluded, includedBandGeometry, recommendedAxisMode, snapStep, snapToNice } from "./scale";
 import { CrossingAlarms, CrossingDim } from "./crossing-alarms";
@@ -452,15 +452,15 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     if (!hovered) return [];
     const rows: Array<[string, string]> = [];
     if (cycleMode) {
-      if (!hovered.projected) rows.push(["So far this cycle", formatLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
-      else rows.push(["Projected by this day", formatLimitValue(projection!.toDate + projection!.rate * hovered.ahead!, unit)]);
+      if (!hovered.projected) rows.push(["So far this cycle", compactLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
+      else rows.push(["Projected by this day", compactLimitValue(projection!.toDate + projection!.rate * hovered.ahead!, unit)]);
       return rows;
     }
-    rows.push([hovered.projected ? "Projected usage" : "Usage", formatLimitValue(hovered.value, unit)]);
+    rows.push([hovered.projected ? "Projected usage" : "Usage", compactLimitValue(hovered.value, unit)]);
     const free = hovered.projected
       ? Math.max(0, (freeLeft.at(-1)?.after ?? 0) - projection!.rate * hovered.ahead!)
       : freeLeft[hovered.index]?.after;
-    if (chartIncluded && free !== undefined) rows.push(["Free left", formatLimitValue(free, unit)]);
+    if (chartIncluded && free !== undefined) rows.push(["Free left", compactLimitValue(free, unit)]);
     return rows;
   })();
   // Free-usage-left area per cycle: starts at the allotment, falls with each
@@ -857,7 +857,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         </ul>
       ) : fields === "inline" ? (
         // Aligned with the plot area, not the axis gutter, so values sit under the lines they set.
-        <div className="mt-2 flex flex-wrap gap-x-12 gap-y-2 border-t border-line-soft pt-2.5" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
+        <div className="mt-2 flex flex-wrap justify-center gap-x-12 gap-y-2 border-t border-line-soft pt-2.5" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
           {levels.map(level => (
             <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               highlight={highlightLevel === level.id}

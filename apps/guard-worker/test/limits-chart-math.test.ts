@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, recommendedAxisMode, snapToNice, snapUpToNice, SYMLOG_KNEE_MULTIPLIER } from "../src/client/components/limits-chart/scale";
+import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, recommendedAxisMode, snapToNice, snapUpToNice, SYMLOG_KNEE_MULTIPLIER, TYPICAL_BAND_FRACTION } from "../src/client/components/limits-chart/scale";
 import { interpolateAxis } from "../src/client/components/limits-chart/use-animated-axis";
 import { GAP_FRACTION, GAP_RATIO, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
 import { billableMetricIds, metricComposition, metricIncluded, metricPool, rowSeries } from "../src/client/components/limits-chart/api";
@@ -17,15 +17,18 @@ describe("axis selection", () => {
     expect(axis.invert(axis.position(3))).toBeCloseTo(3, 6);
   });
 
-  it("switches to a softened symlog when one day exceeds ten times the median", () => {
+  it("switches to an adaptive symlog when one day exceeds ten times the median", () => {
     const series = [5, 4, 6, 5, 5, 6, 4, 5, 900];
     const axis = chooseAxis(series);
     expect(axis.kind).toBe("symlog");
-    expect(axis.knee).toBe(5 * SYMLOG_KNEE_MULTIPLIER);
+    // The typical ceiling (median × knee multiplier) holds its share of the
+    // plot regardless of how extreme the outlier is.
+    expect(axis.position(5 * SYMLOG_KNEE_MULTIPLIER)).toBeCloseTo(TYPICAL_BAND_FRACTION, 1);
+    const severe = chooseAxis([5, 4, 6, 5, 5, 6, 4, 5, 90_000]);
+    expect(severe.position(5 * SYMLOG_KNEE_MULTIPLIER)).toBeCloseTo(TYPICAL_BAND_FRACTION, 1);
     expect(axis.position(0)).toBe(0);
-    expect(axis.position(5)).toBeLessThan(0.1);
-    expect(axis.position(900) - axis.position(5)).toBeGreaterThan(0.85);
     expect(axis.position(900)).toBeLessThanOrEqual(1);
+    expect(axis.position(900)).toBeGreaterThan(axis.position(10));
     expect(axis.invert(axis.position(42))).toBeCloseTo(42, 6);
     expect(axis.ticks[0]).toBe(0);
     expect(axis.ticks.at(-1)).toBe(axis.max);
