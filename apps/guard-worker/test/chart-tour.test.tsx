@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BudgetWizard } from "../src/client/onboarding/BudgetWizard";
 import { ChartTour } from "../src/client/onboarding/ChartTour";
 import type { AlertLevel, OnboardingData, Policy } from "../src/client/types";
+import { hover } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,6 +55,10 @@ function stageKey(): string | undefined {
   return container.querySelector<HTMLElement>("[data-tour-stage]")?.dataset.tourStage;
 }
 
+function pageIndex(): string | undefined {
+  return container.querySelector<HTMLElement>("[data-tour-stage]")?.dataset.tourPage;
+}
+
 async function next() {
   await act(async () => {
     container.querySelector<HTMLButtonElement>("button[data-action='tour-next']")!.click();
@@ -61,61 +66,120 @@ async function next() {
   });
 }
 
+async function back() {
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>("button[data-action='tour-back']")!.click();
+    await Promise.resolve();
+  });
+}
+
+async function goToStage(key: string) {
+  for (let attempt = 0; stageKey() !== key && attempt < 20; attempt += 1) await next();
+  expect(stageKey()).toBe(key);
+}
+
 describe("ChartTour", () => {
-  it("layers both charts stage by stage over one sample series, with pointer labels", async () => {
+  it("shows one card at a time and advances through each section's pagination", async () => {
     const onDone = vi.fn();
     await renderTour(onDone);
     await waitFor(() => expect(stageKey()).toBe("charts"));
-    // Both charts are present from the first stage, with pointer labels and no levels yet.
     expect(container.querySelectorAll("[data-limits-chart]").length).toBe(2);
+    expect(container.querySelector("[data-tour-legend]")).toBeNull();
     expect(container.querySelectorAll("[data-level-line]").length).toBe(0);
-    await waitFor(() => expect(container.querySelectorAll("[data-tour-callout]").length).toBeGreaterThan(0));
+    await waitFor(() => expect(container.querySelectorAll("[data-tour-callout]")).toHaveLength(1));
+    expect(container.querySelectorAll("[data-tour-section='charts'] [data-tour-page-dot]")).toHaveLength(4);
+    expect(container.querySelectorAll("[data-tour-section='levels'] [data-tour-page-dot]")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-tour-section='free'] [data-tour-page-dot]")).toHaveLength(3);
+
+    await next();
+    expect(stageKey()).toBe("charts");
+    expect(pageIndex()).toBe("1");
+    await next();
+    await next();
+    expect(stageKey()).toBe("charts");
+    expect(pageIndex()).toBe("3");
 
     await next();
     expect(stageKey()).toBe("levels");
-    // Level lines join both charts together, as one group.
     expect(container.querySelectorAll("[data-level-line]").length).toBe(levels.length * 2);
 
     await next();
+    await next();
     expect(stageKey()).toBe("alerts");
-    // Days under every level are washed out; every bar-line intersection gets
-    // an alarm bell, and the cycle chart badges where its total crossed a level.
     expect(container.querySelector("[data-crossing-dim]")).not.toBeNull();
     const charts = container.querySelectorAll("[data-limits-chart]");
     expect(charts[0]!.querySelectorAll("[data-alarm-badge]").length).toBeGreaterThan(0);
     expect(charts[1]!.querySelectorAll("[data-alarm-badge]").length).toBeGreaterThan(0);
 
     await next();
+    await next();
     await waitFor(() => expect(stageKey()).toBe("free"));
-    // The free-usage layers join the same charts once the alarms' exit has
-    // played out: the sample series never changes.
     await waitFor(() => expect(container.querySelector("[data-free-left]")).not.toBeNull());
     expect(container.querySelector("[data-included-pill]")).not.toBeNull();
 
     await next();
+    await next();
+    await next();
     expect(stageKey()).toBe("motion");
-    // The demonstration is animated: a pointer sprite, no interactive sliders.
     expect(container.querySelector("[data-tour-cursor]")).not.toBeNull();
     expect(container.querySelectorAll("[role='slider']").length).toBe(0);
 
     expect(onDone).not.toHaveBeenCalled();
     await next();
+    expect(stageKey()).toBe("motion");
+    expect(pageIndex()).toBe("1");
+    await next();
     expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("retracts the indicator before moving the card and drawing its next indicator", async () => {
+    await renderTour(() => {});
+    await waitFor(() => expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("shown"));
+    await next();
+    expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("retracting");
+    expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-card-index")).toBe("0");
+    await waitFor(() => expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("moving"));
+    expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-card-index")).toBe("1");
+    await waitFor(() => expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("shown"));
+  });
+
+  it("hides the card while a new section's chart animation runs", async () => {
+    await renderTour(() => {});
+    await waitFor(() => expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("shown"));
+    expect(container.querySelector("[data-tour-card]")?.textContent).toContain("primary interface");
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-tour-section='levels'] > span > button")!.click();
+      await Promise.resolve();
+    });
+    expect(stageKey()).toBe("levels");
+    expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("exiting");
+    expect(container.querySelector<HTMLElement>("[data-tour-card]")?.style.opacity).toBe("0");
+    expect(container.querySelector("[data-tour-card]")?.textContent).toContain("primary interface");
+    await waitFor(() => expect(container.querySelector("[data-tour-callout]")?.getAttribute("data-tour-phase")).toBe("shown"));
+    expect(container.querySelector("[data-tour-card]")?.textContent).toContain("dashed lines");
+  });
+
+  it("keeps the teaching charts inert under pointer movement", async () => {
+    await renderTour(() => {});
+    expect(container.querySelector("[data-hover-layer]")).toBeNull();
+    await goToStage("levels");
+    await act(async () => hover(container.querySelector("[data-level-line]")!));
+    expect(container.querySelector("[data-line-value]")).toBeNull();
+    await goToStage("free");
+    await waitFor(() => expect(container.querySelector("[data-free-exhausted]")).not.toBeNull());
+    await act(async () => hover(container.querySelector("[data-free-exhausted]")!));
+    expect(container.querySelector("[data-free-exhausted-tooltip]")).toBeNull();
+    expect(container.querySelector("[data-billable-tooltip]")).toBeNull();
   });
 
   it("plays layer exits in reverse when stepping backward", async () => {
     const onDone = vi.fn();
     await renderTour(onDone);
     await waitFor(() => expect(stageKey()).toBe("charts"));
-    await next();
-    await next();
-    await next();
+    await goToStage("free");
     expect(stageKey()).toBe("free");
     await waitFor(() => expect(container.querySelector("[data-free-left]")).not.toBeNull());
-    await act(async () => {
-      container.querySelector<HTMLButtonElement>("button[data-action='tour-back']")!.click();
-      await Promise.resolve();
-    });
+    await back();
     expect(stageKey()).toBe("alerts");
     // The quota layers hold through their reverse sweep and unmount when it
     // completes; only then do the alarms make their entrance.
@@ -133,17 +197,28 @@ describe("ChartTour", () => {
     const back = container.querySelector<HTMLButtonElement>("button[data-action='tour-back']")!;
     expect(back.disabled).toBe(true);
     await next();
+    expect(stageKey()).toBe("charts");
     expect(container.querySelector<HTMLButtonElement>("button[data-action='tour-back']")!.disabled).toBe(false);
+  });
+
+  it("can skip an unfinished tutorial from its current card", async () => {
+    const onDone = vi.fn();
+    await renderTour(onDone);
+    const skip = container.querySelector<HTMLButtonElement>("button[data-action='tour-skip']");
+    expect(skip?.textContent).toBe("Skip tutorial");
+    await act(async () => { skip!.click(); await Promise.resolve(); });
+    expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   it("stays replayable once done, without wizard side effects", async () => {
     const onDone = vi.fn();
     await renderTour(onDone, true);
     await waitFor(() => expect(stageKey()).toBe("charts"));
-    // Next still walks stages in the done state; the last stage's Next is
-    // disabled instead of finishing again.
+    expect(container.querySelector("button[data-action='tour-skip']")).toBeNull();
+    // Completed guides remain pageable without firing onboarding effects.
     await next();
-    expect(stageKey()).toBe("levels");
+    expect(stageKey()).toBe("charts");
+    expect(pageIndex()).toBe("1");
     expect(onDone).not.toHaveBeenCalled();
   });
 });
@@ -194,13 +269,10 @@ describe("BudgetWizard chart tour", () => {
     // The account step stays locked behind the guide.
     expect(container.querySelector("section[aria-label='Account limits (locked)']")).not.toBeNull();
 
-    // Walk to the last stage, then finish with "Set your limits".
-    for (let step = 0; step < 5; step += 1) {
-      await act(async () => {
-        container.querySelector<HTMLButtonElement>("[data-chart-tour] button[data-action='tour-next']")!.click();
-        await Promise.resolve();
-      });
-    }
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("[data-chart-tour] button[data-action='tour-skip']")!.click();
+      await Promise.resolve();
+    });
     // The account step unlocks and the guide card remains in the flow.
     await waitFor(() => expect(container.querySelector("section[aria-label='Account limits (locked)']")).toBeNull());
     expect(container.querySelector("[data-chart-tour]")).not.toBeNull();

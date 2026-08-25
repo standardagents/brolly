@@ -73,6 +73,7 @@ export interface LimitsChartProps {
   /** Content placed beside the history controls in the heading row. */
   headerContent?: ReactNode;
   /** Teaching spotlight (day charts): dim days under every level and badge each bar-line intersection. */ crossingAlarms?: boolean;
+  /** Enables chart hover bands, readouts, and marker tooltips. */ pointerInteractions?: boolean;
 }
 
 const EASE = "cubic-bezier(.2,.7,.2,1)";
@@ -97,7 +98,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards", crossingAlarms = false }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards", crossingAlarms = false, pointerInteractions = true }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -716,8 +717,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
 
         {/* Day hover tracking: sits above the bars, below the level lines. */}
-        <rect data-hover-layer x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} fill="transparent"
-          onPointerMove={trackHover} onPointerLeave={() => setHoverDay(null)} />
+        {pointerInteractions && <rect data-hover-layer x={PLOT.left} y={PLOT.top} width={plotWidth} height={plotHeight} fill="transparent" onPointerMove={trackHover} onPointerLeave={() => setHoverDay(null)} />}
 
         {/* Axes sit above the data layers so fills can never cover them. */}
         <line x1={PLOT.left} x2={PLOT.left} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
@@ -746,8 +746,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               onPointerMove={moveDrag(level.id)}
               onPointerUp={endDrag(level.id)}
               onPointerCancel={endDrag(level.id)}
-              onPointerEnter={() => setHoverLevel(level.id)}
-              onPointerLeave={() => setHoverLevel(null)}
+              onPointerEnter={pointerInteractions ? () => setHoverLevel(level.id) : undefined}
+              onPointerLeave={pointerInteractions ? () => setHoverLevel(null) : undefined}
               onKeyDown={keyStep(level.id)}
             >
               <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={0} y2={0} stroke="transparent" strokeWidth="14" />
@@ -787,7 +787,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {freeMarkers.map(item => {
           const { x, y } = markerPoint(item);
           return (
-            <g key={item.day} data-free-exhausted={item.kind === "exhausted" ? item.day : undefined} data-free-remaining={item.kind === "remaining" ? item.day : undefined} className="cursor-default" onPointerEnter={() => setHoverExhausted(item.day)} onPointerLeave={() => setHoverExhausted(null)}>
+            <g key={item.day} data-free-exhausted={item.kind === "exhausted" ? item.day : undefined} data-free-remaining={item.kind === "remaining" ? item.day : undefined} className={pointerInteractions ? "cursor-default" : undefined} pointerEvents={pointerInteractions ? undefined : "none"} onPointerEnter={pointerInteractions ? () => setHoverExhausted(item.day) : undefined} onPointerLeave={pointerInteractions ? () => setHoverExhausted(null) : undefined}>
               <circle cx={x} cy={y} r="9" fill="transparent" />
               {/* A panel-colored halo outside the colored outline cuts whatever the marker overlaps. */}
               <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke="var(--panel)" strokeWidth="4.75" strokeLinejoin="round" />
@@ -799,7 +799,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           const x = xFor(item.index) + barSlot / 2;
           const y = Math.max(PLOT.top + 1, yFor(item.value));
           return (
-            <g key={`total:${item.day}`} data-billable-marker={item.day} className="cursor-default" onPointerEnter={() => setHoverExhausted(`total:${item.day}`)} onPointerLeave={() => setHoverExhausted(null)}>
+            <g key={`total:${item.day}`} data-billable-marker={item.day} className={pointerInteractions ? "cursor-default" : undefined} pointerEvents={pointerInteractions ? undefined : "none"} onPointerEnter={pointerInteractions ? () => setHoverExhausted(`total:${item.day}`) : undefined} onPointerLeave={pointerInteractions ? () => setHoverExhausted(null) : undefined}>
               <circle cx={x} cy={y} r="9" fill="transparent" />
               <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke="var(--panel)" strokeWidth="4.75" strokeLinejoin="round" />
               <polygon points={diamond(x, y, 4.5)} fill="var(--panel)" stroke={item.color} strokeWidth="1.6" />

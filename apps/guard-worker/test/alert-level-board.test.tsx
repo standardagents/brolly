@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useNotificationTargets } from "../src/client/components/notifications.js";
 import { AlertLevelsStep, useAlertLevels } from "../src/client/onboarding/levels.js";
 import type { AlertLevel } from "../src/client/types.js";
-import { pointer } from "./pointer";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -63,10 +62,7 @@ describe("alert level board", () => {
     await waitFor(() => expect(document.querySelectorAll("section[data-level]")).toHaveLength(3));
 
     const warning = levelColumn("Warning");
-    // The board is fixed at three levels: the level menu only reorders.
-    await click(warning.querySelector("[aria-label='Level menu']") as HTMLButtonElement);
-    expect(document.querySelectorAll("[role='menu'] [role='menuitem']")).toHaveLength(2);
-    await click(warning.querySelector("[aria-label='Level menu']") as HTMLButtonElement);
+    expect(warning.querySelector("[aria-label='Level menu']")).toBeNull();
     expect(calls.filter(call => call.path === "/api/alert-levels")).toHaveLength(0);
 
     await click(warning.querySelector("[data-add-entry]") as HTMLButtonElement);
@@ -85,9 +81,8 @@ describe("alert level board", () => {
   });
 });
 
-describe("alert level board drag and drop", () => {
-  it("reorders a column with a pointer drag and offers each channel once", async () => {
-    const calls: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
+describe("alert level board columns", () => {
+  it("omits card reorder handles and offers each channel once", async () => {
     const levels: AlertLevel[] = [
       { id: "warning", position: 0, label: "Warning", entries: [{ id: "entry-1", levelId: "warning", kind: "channel", targetId: "target-1", repeatIntervalMs: null, position: 0 }] },
       { id: "critical", position: 1, label: "Critical", entries: [] },
@@ -95,19 +90,17 @@ describe("alert level board drag and drop", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "https://brolly.test").pathname;
       const method = init?.method ?? "GET";
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-      if (method !== "GET") calls.push({ path, method, body });
       if (path === "/api/targets") return json({ credentialStorageReady: true, targets: [{ id: "target-1", kind: "discord", label: "Ops server", providerId: null, enabled: true, createdAt: 1, updatedAt: 1, lastDeliveryAt: null, lastDeliveryOk: null, lastDeliveryError: null }] });
       if (path === "/api/providers") return json({ providers: [] });
       if (path === "/api/alert-levels" && method === "GET") return json({ levels });
       return json({ ok: true });
     }));
-    Object.assign(HTMLElement.prototype, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn(), hasPointerCapture: vi.fn(() => false) });
     const container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
     await act(async () => { root!.render(<Harness />); });
     await waitFor(() => expect(document.querySelectorAll("section[data-level]")).toHaveLength(2));
+    expect(document.querySelector("button[title='Drag to reorder']")).toBeNull();
 
     // The Critical column's "+ Add" menu does not offer Ops server, which already sits in Warning.
     await click(levelColumn("Critical").querySelector("[data-add-entry]") as HTMLButtonElement);
@@ -128,18 +121,6 @@ describe("alert level board drag and drop", () => {
     expect(document.querySelector("[role='dialog']")?.parentElement?.parentElement).toBe(document.body);
     await click(document.querySelector("[role='dialog'] button[aria-label='Close']") as HTMLButtonElement);
     await waitFor(() => expect(document.querySelector("[role='dialog']")).toBeNull());
-
-    // Drag Critical's handle left of Warning: every slot rect is 0×0 in this DOM, so the pointer lands at index 0.
-    const handle = levelColumn("Critical").querySelector("button[aria-label='Drag Critical to reorder']") as HTMLButtonElement;
-    await act(async () => {
-      pointer(handle, "pointerdown", { clientX: 400, clientY: 20, button: 0, pointerId: 1 });
-      pointer(handle, "pointermove", { clientX: 300, clientY: 20, pointerId: 1 });
-      pointer(handle, "pointermove", { clientX: -100, clientY: 20, pointerId: 1 });
-    });
-    expect(document.querySelector("[aria-hidden='true'].border-dashed")).not.toBeNull();
-    // The handle unmounts once its column becomes a placeholder; the browser still delivers pointerup to the document.
-    await act(async () => { pointer(document.documentElement, "pointerup", { clientX: -100, clientY: 20, pointerId: 1 }); });
-    await waitFor(() => expect(calls.some(call => call.method === "PATCH" && call.path === "/api/alert-levels/critical" && call.body.position === 0)).toBe(true));
   });
 });
 

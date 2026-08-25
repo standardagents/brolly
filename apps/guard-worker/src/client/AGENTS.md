@@ -53,6 +53,15 @@ directory.
 ## Limits UI
 
 - `components/ui.tsx` owns `Switch`.
+- Alert-level cards keep their configured order in the onboarding board. Their
+  entries and action groups remain draggable between cards.
+- The onboarding chart guide shows one callout per pagination position. Next,
+  Back, section labels, and section dots navigate the same reversible cursor.
+  The subtle Skip tutorial action completes an unfinished guide from any card.
+  Cards morph between pagination positions within one section. Section changes
+  fade the old card before chart motion and reveal the new card after it settles.
+  Its charts pass `pointerInteractions={false}` so hover bands, readouts, and
+  marker tooltips remain absent from the teaching visual.
 - `components/limits-chart/LevelValueField.tsx` owns every editable level
   value. Use `chip` for compact row values, `bare` below expanded charts, and
   `boxed` when a standalone chart needs cards.

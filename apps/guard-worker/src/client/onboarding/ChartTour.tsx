@@ -13,12 +13,12 @@ import { normalizeRiskTolerance } from "./risk-tolerance";
  * (daily and billing cycle) are visible from the first stage, over one fixed
  * sample meter series built to hold every layer the story needs (level
  * crossings, an included allotment, an exhausted cycle, a projection), so the
- * data never changes mid-story. Each stage explains itself with pointer
- * labels anchored to the chart features it introduces, and the level values
- * come from the viewer's own risk-tolerance percentages. It is an animation,
- * not a sandbox: the final stage moves a level with an animated pointer
- * instead of asking for a drag. The card stays in the flow after it
- * finishes, so it can be replayed from the dots.
+ * data never changes mid-story. Each stage presents one pointer card at a
+ * time, with pagination dots under its footer label. Next and Back traverse
+ * those cards before crossing a stage boundary. The level values come from
+ * the viewer's own risk-tolerance percentages. The chart itself is inert;
+ * the final stage demonstrates movement with an animated pointer. The card
+ * stays in the flow after it finishes, so every position remains replayable.
  */
 
 type StageKey = "charts" | "levels" | "alerts" | "free" | "motion";
@@ -66,77 +66,155 @@ function reducedMotion(): boolean {
  * choose the anchor point inside the target's box. A missing target (a layer
  * the current data does not produce) renders nothing.
  */
-interface CalloutSpec { chart: "day" | "cycle"; selector?: string; nth?: number; tx?: number; ty?: number; x: number; y: number; text: string; target?(wrapper: HTMLElement): Element | null }
+interface CalloutSpec { chart: "day" | "cycle"; selector?: string; nth?: number; tx?: number; ty?: number; x: number; y: number; center?: boolean; text: string; target?(wrapper: HTMLElement): Element | null }
+type CalloutPhase = "hidden" | "exiting" | "retracting" | "moving" | "appearing" | "drawing" | "shown";
+const CALLOUT_RETRACT_MS = 160;
+const CALLOUT_MOVE_MS = 520;
+const CALLOUT_FADE_MS = 180;
+const CALLOUT_DRAW_MS = 320;
 
-function Callout({ host, spec, number, delay }: { host: RefObject<HTMLDivElement | null>; spec: CalloutSpec; number: number; delay: number }) {
-  const [layout, setLayout] = useState<{ w: number; h: number; x: number; y: number } | null>(null);
-  const chipRef = useRef<HTMLSpanElement>(null);
+/**
+ * One persistent card shared by both charts. Pagination retracts its arm,
+ * moves and resizes the card, then draws the next arm. Section changes fade
+ * the old card before chart motion and reveal the next card after it settles.
+ */
+function Callout({ host, dayHost, cycleHost, spec, number, group, delay }: {
+  host: RefObject<HTMLDivElement | null>;
+  dayHost: RefObject<HTMLDivElement | null>;
+  cycleHost: RefObject<HTMLDivElement | null>;
+  spec: CalloutSpec;
+  number: number;
+  group: StageKey;
+  delay: number;
+}) {
+  const [displayed, setDisplayed] = useState(spec);
+  const [displayedNumber, setDisplayedNumber] = useState(number);
+  const [phase, setPhase] = useState<CalloutPhase>("hidden");
+  const settledGroup = useRef<StageKey | null>(null);
+  const requested = useRef<{ spec: CalloutSpec; number: number; group: StageKey } | null>(null);
+  useEffect(() => {
+    const requestChanged = requested.current?.spec !== spec || requested.current?.number !== number || requested.current?.group !== group;
+    requested.current = { spec, number, group };
+    const groupChanged = settledGroup.current !== group;
+    // A settle-delay update can restart an unfinished section transition. It
+    // must not replay a card after that section has finished appearing.
+    if (!requestChanged && !groupChanged) return;
+    if (reducedMotion()) {
+      settledGroup.current = group;
+      setDisplayed(spec);
+      setDisplayedNumber(number);
+      setPhase("shown");
+      return;
+    }
+    if (groupChanged) {
+      const first = settledGroup.current === null;
+      setPhase(first ? "hidden" : "exiting");
+      const switchAt = Math.max(first ? 0 : CALLOUT_RETRACT_MS, delay);
+      const revealAt = switchAt + 50;
+      const switchTimer = window.setTimeout(() => {
+        setDisplayed(spec);
+        setDisplayedNumber(number);
+        setPhase("hidden");
+      }, switchAt);
+      const revealTimer = window.setTimeout(() => {
+        settledGroup.current = group;
+        setPhase("appearing");
+      }, revealAt);
+      const drawTimer = window.setTimeout(() => setPhase("drawing"), revealAt + CALLOUT_FADE_MS);
+      const shownTimer = window.setTimeout(() => setPhase("shown"), revealAt + CALLOUT_FADE_MS + CALLOUT_DRAW_MS);
+      return () => [switchTimer, revealTimer, drawTimer, shownTimer].forEach(window.clearTimeout);
+    }
+    setPhase("retracting");
+    const switchAt = CALLOUT_RETRACT_MS;
+    const drawAt = switchAt + CALLOUT_MOVE_MS;
+    const switchTimer = window.setTimeout(() => {
+      setDisplayed(spec);
+      setDisplayedNumber(number);
+      setPhase("moving");
+    }, switchAt);
+    const drawTimer = window.setTimeout(() => setPhase("drawing"), drawAt);
+    const shownTimer = window.setTimeout(() => setPhase("shown"), drawAt + CALLOUT_DRAW_MS);
+    return () => [switchTimer, drawTimer, shownTimer].forEach(window.clearTimeout);
+  }, [spec, number, group, delay]);
+
+  const measureRef = useRef<HTMLSpanElement>(null);
   const [chip, setChip] = useState<{ w: number; h: number } | null>(null);
-  useEffect(() => {
-    const el = chipRef.current;
-    if (el) setChip({ w: el.offsetWidth, h: el.offsetHeight });
-  }, [spec, layout?.w]);
-  useEffect(() => {
+  const [layout, setLayout] = useState<{ w: number; h: number; labelX: number; labelY: number; targetX?: number; targetY?: number } | null>(null);
+  useLayoutEffect(() => {
     const measure = () => {
       const wrapper = host.current;
-      if (!wrapper) return;
-      // A spec with no target is a plain statement card: it anchors to its
-      // own label position and draws no arm.
-      if (!spec.selector && !spec.target) {
-        const box = wrapper.getBoundingClientRect();
-        setLayout({ w: box.width, h: box.height, x: spec.x * box.width, y: spec.y * box.height });
-        return;
-      }
-      const matches = spec.selector ? [...wrapper.querySelectorAll(spec.selector)] : [];
-      const target = spec.target
-        ? spec.target(wrapper)
-        : matches[Math.max(0, Math.min(matches.length - 1, Math.round((spec.nth ?? 0.5) * (matches.length - 1))))];
-      if (!target) { setLayout(null); return; }
+      const chart = displayed.chart === "day" ? dayHost.current : cycleHost.current;
+      if (!wrapper || !chart) return;
       const box = wrapper.getBoundingClientRect();
-      const rect = target.getBoundingClientRect();
-      setLayout({ w: box.width, h: box.height, x: rect.left - box.left + rect.width * (spec.tx ?? 0.5), y: rect.top - box.top + rect.height * (spec.ty ?? 0.5) });
+      const chartBox = chart.getBoundingClientRect();
+      const next = {
+        w: box.width,
+        h: box.height,
+        labelX: chartBox.left - box.left + displayed.x * chartBox.width,
+        labelY: chartBox.top - box.top + displayed.y * chartBox.height,
+      } as { w: number; h: number; labelX: number; labelY: number; targetX?: number; targetY?: number };
+      const matches = displayed.selector ? [...chart.querySelectorAll(displayed.selector)] : [];
+      const target = displayed.target
+        ? displayed.target(chart)
+        : matches[Math.max(0, Math.min(matches.length - 1, Math.round((displayed.nth ?? 0.5) * (matches.length - 1))))];
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        next.targetX = rect.left - box.left + rect.width * (displayed.tx ?? 0.5);
+        next.targetY = rect.top - box.top + rect.height * (displayed.ty ?? 0.5);
+      }
+      setLayout(next);
+      const card = measureRef.current;
+      if (card?.offsetWidth && card.offsetHeight) setChip({ w: card.offsetWidth, h: card.offsetHeight });
     };
-    // Measure after the chart's own easing settles, and again around the
-    // card's reveal: a stage reached backward mounts this card's target only
-    // after the previous layer's exit has played out.
-    const first = requestAnimationFrame(() => requestAnimationFrame(measure));
-    const timers = [400, Math.max(450, delay - 150), delay + 250].map(at => setTimeout(measure, at));
+    measure();
+    const frame = requestAnimationFrame(() => requestAnimationFrame(measure));
+    const timers = [250, 600, Math.max(700, delay), delay + 250].map(at => window.setTimeout(measure, at));
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    if (host.current) observer?.observe(host.current);
     window.addEventListener("resize", measure);
-    return () => { cancelAnimationFrame(first); timers.forEach(clearTimeout); window.removeEventListener("resize", measure); };
-  }, [host, spec, delay]);
+    return () => { cancelAnimationFrame(frame); timers.forEach(window.clearTimeout); observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, [displayed, host, dayHost, cycleHost, delay]);
   if (!layout) return null;
-  const labelX = spec.x * layout.w;
-  const labelY = spec.y * layout.h;
-  // The arm starts on the card's edge nearest the target, so no part of it
-  // runs behind the card. Until the card is measured, only the card renders.
+
   const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
+  const cardWidth = chip?.w ?? 250;
+  const cardHeight = chip?.h ?? 48;
+  const cardLeft = clamp(layout.labelX - cardWidth / 2, 4, Math.max(4, layout.w - cardWidth - 4));
+  const cardTop = clamp(layout.labelY - (displayed.center ? cardHeight / 2 : cardHeight + 3), 4, Math.max(4, layout.h - cardHeight - 4));
   const arm = (() => {
-    if (!chip) return null;
-    const box = { left: labelX - chip.w / 2, right: labelX + chip.w / 2, top: labelY - 3 - chip.h, bottom: labelY - 3 };
-    const start = layout.y > box.bottom
-      ? { x: clamp(layout.x, box.left + 10, box.right - 10), y: box.bottom }
-      : layout.y < box.top
-        ? { x: clamp(layout.x, box.left + 10, box.right - 10), y: box.top }
-        : { x: layout.x < labelX ? box.left : box.right, y: clamp(layout.y, box.top + 8, box.bottom - 8) };
+    if (layout.targetX === undefined || layout.targetY === undefined) return null;
+    const box = { left: cardLeft, right: cardLeft + cardWidth, top: cardTop, bottom: cardTop + cardHeight };
+    const start = layout.targetY > box.bottom
+      ? { x: clamp(layout.targetX, box.left + 10, box.right - 10), y: box.bottom }
+      : layout.targetY < box.top
+        ? { x: clamp(layout.targetX, box.left + 10, box.right - 10), y: box.top }
+        : { x: layout.targetX < layout.labelX ? box.left : box.right, y: clamp(layout.targetY, box.top + 8, box.bottom - 8) };
     const vertical = start.y === box.bottom || start.y === box.top;
-    const midX = (start.x + layout.x) / 2;
-    const midY = (start.y + layout.y) / 2;
+    const midX = (start.x + layout.targetX) / 2;
+    const midY = (start.y + layout.targetY) / 2;
     const curve = vertical
-      ? `C ${start.x} ${midY}, ${layout.x} ${midY}, ${layout.x} ${layout.y}`
-      : `C ${midX} ${start.y}, ${midX} ${layout.y}, ${layout.x} ${layout.y}`;
+      ? `C ${start.x} ${midY}, ${layout.targetX} ${midY}, ${layout.targetX} ${layout.targetY}`
+      : `C ${midX} ${start.y}, ${midX} ${layout.targetY}, ${layout.targetX} ${layout.targetY}`;
     return `M ${start.x} ${start.y} ${curve}`;
   })();
+  const indicatorShown = phase === "drawing" || phase === "shown";
+  const cardVisible = phase !== "hidden" && phase !== "exiting";
+  const positionDuration = phase === "moving" ? CALLOUT_MOVE_MS : 0;
   return (
-    <div data-tour-callout className="pointer-events-none absolute inset-0 z-10 animate-tour-stage motion-reduce:animate-none" style={{ animationDelay: `${delay}ms` }}>
-      {(spec.selector || spec.target) && (
-        <svg className="absolute inset-0 h-full w-full overflow-visible" aria-hidden="true">
-          {arm && <path d={arm} fill="none" stroke="var(--ink)" strokeWidth="1.25" opacity=".4" />}
-          <circle cx={layout.x} cy={layout.y} r="3" fill="var(--ink)" opacity=".65" />
-        </svg>
-      )}
-      <span ref={chipRef} className="absolute flex w-max max-w-[250px] -translate-x-1/2 -translate-y-full items-start gap-1.5 rounded-[6px] border border-line bg-panel py-1.5 pl-1.5 pr-2.5 shadow-[0_2px_8px_rgba(0,0,0,.1)]" style={{ left: labelX, top: labelY - 3 }}>
-        <i className="grid size-[17px] flex-none place-items-center rounded-full bg-orange text-[10.5px] font-bold not-italic text-white">{number}</i>
-        <span className="text-balance text-[11.5px] font-[560] leading-[1.45] text-ink">{spec.text}</span>
+    <div data-tour-callout data-tour-card-index={displayedNumber - 1} data-tour-phase={phase} className="pointer-events-none absolute inset-0 z-10">
+      {arm && <svg className="absolute inset-0 h-full w-full overflow-visible" aria-hidden="true">
+        <path data-tour-indicator d={arm} pathLength={1} fill="none" stroke="var(--ink)" strokeWidth="1.25" opacity=".4"
+          style={{ strokeDasharray: 1, strokeDashoffset: indicatorShown ? 0 : 1, transition: `stroke-dashoffset ${phase === "retracting" || phase === "exiting" ? CALLOUT_RETRACT_MS : CALLOUT_DRAW_MS}ms cubic-bezier(.2,.7,.2,1)` }} />
+        <circle cx={layout.targetX} cy={layout.targetY} r="3" fill="var(--ink)" opacity={indicatorShown ? ".65" : "0"} style={{ transition: `opacity ${CALLOUT_DRAW_MS}ms` }} />
+      </svg>}
+      <span ref={measureRef} aria-hidden="true" className="invisible absolute -left-[10000px] top-0 flex w-max max-w-[250px] items-start gap-1.5 rounded-[6px] border py-1.5 pl-1.5 pr-2.5">
+        <i className="grid size-[17px] flex-none place-items-center rounded-full text-[10.5px] font-bold not-italic">{displayedNumber}</i>
+        <span className="text-balance text-[11.5px] font-[560] leading-[1.45]">{displayed.text}</span>
+      </span>
+      <span data-tour-card className="absolute flex max-w-[250px] items-start gap-1.5 overflow-hidden rounded-[6px] border border-line bg-panel py-1.5 pl-1.5 pr-2.5 shadow-[0_2px_8px_rgba(0,0,0,.1)]"
+        style={{ left: cardLeft, top: cardTop, width: chip?.w, height: chip?.h, opacity: cardVisible ? 1 : 0, transition: `left ${positionDuration}ms cubic-bezier(.2,.7,.2,1), top ${positionDuration}ms cubic-bezier(.2,.7,.2,1), width ${positionDuration}ms cubic-bezier(.2,.7,.2,1), height ${positionDuration}ms cubic-bezier(.2,.7,.2,1), opacity ${phase === "exiting" ? CALLOUT_RETRACT_MS : CALLOUT_FADE_MS}ms` }}>
+        <i className="grid size-[17px] flex-none place-items-center rounded-full bg-orange text-[10.5px] font-bold not-italic text-white">{displayedNumber}</i>
+        <span className="text-balance text-[11.5px] font-[560] leading-[1.45] text-ink">{displayed.text}</span>
       </span>
     </div>
   );
@@ -203,6 +281,7 @@ function useCursorDemo(active: boolean, host: RefObject<HTMLDivElement | null>, 
 
 /** Every green or billable overlay the free-usage sweep reveals. */
 const FREE_SWEEP_GROUPS = "[data-free-left], [data-free-left-edge], [data-included-base], [data-included-usage], [data-included-boundary], [data-billable-edge], [data-projection-included]";
+const FREE_SWEEP_IN_MS = 2200;
 
 /**
  * The free-usage reveal: one shared date front crosses both charts, so the
@@ -219,7 +298,7 @@ function useFreeSweep(mode: "in" | "out" | null, hosts: Array<RefObject<HTMLDivE
   useLayoutEffect(() => {
     if (!mode || reducedMotion() || !weights.length) return;
     // Stepping back plays the same sweep in reverse, at a brisker pace.
-    const total = mode === "in" ? 3200 : 1100;
+    const total = mode === "in" ? FREE_SWEEP_IN_MS : 1100;
     const cumulative: number[] = [0];
     for (const weight of weights) cumulative.push(cumulative[cumulative.length - 1]! + weight);
     const weightTotal = cumulative[cumulative.length - 1]!;
@@ -288,24 +367,6 @@ function useFreeSweep(mode: "in" | "out" | null, hosts: Array<RefObject<HTMLDivE
 const noop = () => {};
 
 /**
- * Diamond-and-name key under each chart, one fixed-height row reserved from
- * the first stage so nothing shifts; it fades in place when the levels join
- * on stage two. Names only: the values live on the chart itself.
- */
-function TourLegend({ levels, show }: { levels: Array<{ id: string; label: string; color: string }>; show: boolean }) {
-  return (
-    <ul data-tour-legend className={`m-0 mt-2 flex min-h-[20px] list-none flex-wrap items-center justify-center gap-x-4 gap-y-1 p-0 text-[11.5px] font-bold text-muted transition-opacity duration-500 ${show ? "opacity-100" : "opacity-0"}`} aria-hidden={!show}>
-      {levels.map(level => (
-        <li key={level.id} className="inline-flex items-center gap-1.5">
-          <i className="size-2 flex-none rotate-45 rounded-[1.5px]" style={{ background: level.color }} aria-hidden="true" />
-          {level.label}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/**
  * The topmost color segment of the tallest day bar: each day's base segment
  * carries data-day-bar, its sibling rects stack the level colors above it,
  * and the last rect in the tallest day's group is the highest-level slice.
@@ -325,7 +386,7 @@ function tallestBarTopSegment(wrapper: HTMLElement): Element | null {
 
 /** Pointer cards hold back until each stage's chart animation has settled. */
 // motion covers the pointer demo's full single pass (600+250+1500+700+1500ms).
-const CALLOUT_SETTLE_MS: Record<StageKey, number> = { charts: 450, levels: 1000, alerts: 1000, free: 3400, motion: 4700 };
+const CALLOUT_SETTLE_MS: Record<StageKey, number> = { charts: 450, levels: 1000, alerts: 1000, free: FREE_SWEEP_IN_MS + 200, motion: 4700 };
 
 /**
  * Which chart layers each stage shows. Stepping in either direction diffs
@@ -400,12 +461,12 @@ function useStageLayers(stageKey: StageKey) {
   return { layers, exiting, sweepMode, settle, levelsEntrance };
 }
 
-const STAGES: Array<{ key: StageKey; title: string; short: string }> = [
-  { key: "charts", title: "Your days and your billing cycle", short: "Charts" },
-  { key: "levels", title: "Your alert levels", short: "Levels" },
-  { key: "alerts", title: "Where alerts fire", short: "Alerts" },
-  { key: "free", title: "Free usage", short: "Free usage" },
-  { key: "motion", title: "Levels move", short: "Adjust" },
+const STAGES: Array<{ key: StageKey; title: string; short: string; pages: number }> = [
+  { key: "charts", title: "Your days and your billing cycle", short: "Charts", pages: 4 },
+  { key: "levels", title: "Your alert levels", short: "Levels", pages: 2 },
+  { key: "alerts", title: "Where alerts fire", short: "Alerts", pages: 2 },
+  { key: "free", title: "Free usage", short: "Free usage", pages: 3 },
+  { key: "motion", title: "Levels move", short: "Adjust", pages: 2 },
 ];
 
 export function ChartTour({ levels, policy, done, onDone }: {
@@ -416,9 +477,11 @@ export function ChartTour({ levels, policy, done, onDone }: {
   onDone: () => void;
 }) {
   const sectionRef = useRef<HTMLElement>(null);
+  const tourHostRef = useRef<HTMLDivElement>(null);
   const dayHostRef = useRef<HTMLDivElement>(null);
   const cycleHostRef = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
+  const [page, setPage] = useState(0);
   const [demoValues, setDemoValues] = useState<LevelValues | null>(null);
 
   const order = useMemo(() => levels.map(level => level.id), [levels]);
@@ -477,12 +540,27 @@ export function ChartTour({ levels, policy, done, onDone }: {
       ];
       case "motion": return [
         { chart: "day", selector: `[data-level-line="${lowest}"] polygon`, x: 0.4, y: 0.28, text: "The initial placement of your levels is determined by your defined risk tolerance, but you can freely adjust them at will." },
-        { chart: "cycle", selector: `[data-level-line="${lowest}"]`, tx: 0.6, ty: 0.5, x: 0.55, y: 0.44, text: "Tune your limits between daily and cycle usage to fit your needs. In the next steps you'll define global spend thresholds and then (optionally) per product spend and usage limits across every billable metric." },
+        { chart: "cycle", selector: `[data-level-line="${lowest}"]`, tx: 0.6, ty: 0.5, x: 0.5, y: 0.5, center: true, text: "Tune your limits between daily and cycle usage to fit your needs. In the next steps you'll define global spend thresholds and then (optionally) per product spend and usage limits across every billable metric." },
       ];
     }
   }, [stage.key, chartLevels]);
+  const activeCallout = callouts[Math.min(page, callouts.length - 1)]!;
+  const selectPosition = (nextIndex: number, nextPage = 0) => {
+    setIndex(nextIndex);
+    setPage(Math.max(0, Math.min(STAGES[nextIndex]!.pages - 1, nextPage)));
+  };
+  const next = () => {
+    if (page < stage.pages - 1) { setPage(page + 1); return; }
+    if (index < STAGES.length - 1) { selectPosition(index + 1); return; }
+    if (done) sectionRef.current?.nextElementSibling?.scrollIntoView({ behavior: "smooth", block: "start" });
+    else onDone();
+  };
+  const back = () => {
+    if (page > 0) { setPage(page - 1); return; }
+    if (index > 0) selectPosition(index - 1, STAGES[index - 1]!.pages - 1);
+  };
 
-  useCursorDemo(stage.key === "motion", dayHostRef, dayValues, chartLevels[0]?.id, setDemoValues);
+  useCursorDemo(stage.key === "motion" && page === 0, dayHostRef, dayValues, chartLevels[0]?.id, setDemoValues);
   // One weight per plotted day (the window runs to the current cycle's end).
   // A day's weight follows how far the free-usage line VISIBLY falls that
   // day. The day chart's axis tops out around its bars and levels, so the
@@ -557,18 +635,15 @@ export function ChartTour({ levels, policy, done, onDone }: {
       <Eyebrow tone="orange">Chart guide</Eyebrow>
       <h2 className="text-[27px] tracking-[-.025em]">How to read the limit charts</h2>
       <p className="mb-6 mt-1 text-[12.5px] text-faint">This guide uses sample data. The steps after it use your account's real usage.</p>
-      <div data-tour-stage={stage.key} data-tour-exit={exiting.join(" ") || undefined} className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
-        {/* Fixed cell height across stages: legends come and go per stage, and
-            the footer controls must not move while the reader steps through. */}
+      <div ref={tourHostRef} data-tour-stage={stage.key} data-tour-page={page} data-tour-exit={exiting.join(" ") || undefined} className="relative grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+        {/* Fixed cell height keeps the footer controls stationary. */}
         <div ref={dayHostRef} className="relative min-h-[300px] min-w-0">
           <LimitsChart kind="usage" unit="requests" window="day" series={sample.series} cycles={sample.cycles} today={sample.today}
             title="Daily chart" titleIndent levels={chartLevels} levelEnabled={levelEnabled}
             value={stage.key === "motion" && demoValues ? demoValues : levelIntro?.day ?? dayValues}
             includedPerCycle={quotaOn ? SAMPLE_INCLUDED : undefined}
             crossingAlarms={layers.alarms} fields={false}
-            onChange={noop} readOnly label="Tour: daily chart" />
-          <TourLegend levels={chartLevels} show={LAYER_TARGETS[stage.key].levels} />
-          {callouts.map((spec, position) => spec.chart === "day" && <Callout key={`${stage.key}-${spec.text}`} host={dayHostRef} spec={spec} number={position + 1} delay={settle + position * 200} />)}
+            onChange={noop} readOnly pointerInteractions={false} label="Tour: daily chart" />
           {stage.key === "motion" && (
             <svg data-tour-cursor width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"
               className="pointer-events-none absolute left-0 top-0 z-10" style={{ visibility: "hidden" }}>
@@ -581,35 +656,43 @@ export function ChartTour({ levels, policy, done, onDone }: {
             title="Billing cycle chart" titleIndent levels={chartLevels} levelEnabled={levelEnabled} value={levelIntro?.cycle ?? cycleValues} reference={dayValues}
             includedPerCycle={quotaOn ? SAMPLE_INCLUDED : undefined} fields={false}
             crossingAlarms={layers.alarms}
-            onChange={noop} readOnly label="Tour: billing cycle chart" />
-          <TourLegend levels={chartLevels} show={LAYER_TARGETS[stage.key].levels} />
-          {callouts.map((spec, position) => spec.chart === "cycle" && <Callout key={`${stage.key}-${spec.text}`} host={cycleHostRef} spec={spec} number={position + 1} delay={settle + position * 200} />)}
+            onChange={noop} readOnly pointerInteractions={false} label="Tour: billing cycle chart" />
         </div>
+        {activeCallout && <Callout host={tourHostRef} dayHost={dayHostRef} cycleHost={cycleHostRef} spec={activeCallout} number={page + 1} group={stage.key} delay={settle} />}
       </div>
-      <footer className="mt-7 grid grid-cols-[1fr_auto_1fr] items-center gap-3 max-md:flex max-md:flex-wrap max-md:justify-between">
+      <footer className="mt-7 grid grid-cols-[1fr_auto_1fr] items-start gap-3 max-md:flex max-md:flex-wrap max-md:justify-between">
         <span aria-hidden="true" className="max-md:hidden" />
         <ol className="flex list-none items-center justify-self-center gap-1" aria-label="Tour progress">
           {STAGES.map((item, position) => (
-            <li key={item.key} className={`flex items-center text-[13px] font-[640] ${position === index ? "text-ink" : position < index ? "text-good" : "text-faint"}`}>
-              {position > 0 && <span className="mx-1 h-px w-3 bg-line max-lg:hidden" aria-hidden="true" />}
-              <button
-                type="button"
-                className="group/tour-step flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-field border-0 bg-transparent px-1.5 py-1 text-left text-inherit hover:bg-panel-soft"
-                aria-current={position === index ? "step" : undefined}
-                title={item.title}
-                onClick={() => setIndex(position)}
-              >
-                <StepMarker className="max-lg:size-[22px] max-lg:text-[11px]" state={position === index ? "active" : position < index ? "done" : "todo"}>{position < index ? "✓" : position + 1}</StepMarker>
-                <span className="max-lg:sr-only group-hover/tour-step:text-ink">{item.short}</span>
-              </button>
+            <li key={item.key} data-tour-section={item.key} className={`flex items-start text-[13px] font-[640] ${position === index ? "text-ink" : position < index ? "text-good" : "text-faint"}`}>
+              {position > 0 && <span className="mx-1 mt-[17px] h-px w-3 bg-line max-lg:hidden" aria-hidden="true" />}
+              <span className="flex flex-col items-center">
+                <button type="button" className="group/tour-step flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-field border-0 bg-transparent px-1.5 py-1 text-left text-inherit hover:bg-panel-soft"
+                  aria-current={position === index ? "step" : undefined} title={item.title} onClick={() => selectPosition(position)}>
+                  <StepMarker className="max-lg:size-[22px] max-lg:text-[11px]" state={position === index ? "active" : position < index ? "done" : "todo"}>{position < index ? "✓" : position + 1}</StepMarker>
+                  <span className="max-lg:sr-only group-hover/tour-step:text-ink">{item.short}</span>
+                </button>
+                <span className="-mt-0.5 flex w-full items-center justify-center gap-0.5 pl-9 max-lg:pl-0" aria-label={`${item.short} cards`}>
+                  {Array.from({ length: item.pages }, (_, dot) => {
+                    const active = position === index && dot === page;
+                    const visited = position < index || (position === index && dot < page);
+                    return <button key={dot} type="button" data-tour-page-dot={dot} aria-label={`${item.title}, card ${dot + 1} of ${item.pages}`} aria-current={active ? "true" : undefined}
+                      className="grid size-2 cursor-pointer place-items-center rounded-full border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-orange"
+                      onClick={() => selectPosition(position, dot)}><i className={`size-1 rounded-full ${active ? "bg-orange" : visited ? "bg-good" : "bg-line-strong"}`} /></button>;
+                  })}
+                </span>
+              </span>
             </li>
           ))}
         </ol>
-        <span className="flex items-center justify-self-end gap-2">
-          <Button data-action="tour-back" disabled={index === 0} onClick={() => setIndex(index - 1)}>Back</Button>
-          {index < STAGES.length - 1
-            ? <Button variant="primary" data-action="tour-next" onClick={() => setIndex(index + 1)}>Next</Button>
-            : <Button variant="primary" data-action="tour-next" onClick={() => (done ? sectionRef.current?.nextElementSibling?.scrollIntoView({ behavior: "smooth", block: "start" }) : onDone())}>Set global spend limits</Button>}
+        <span className="flex flex-col items-end justify-self-end gap-1">
+          <span className="flex items-center gap-2">
+            <Button data-action="tour-back" disabled={index === 0 && page === 0} onClick={back}>Back</Button>
+            {index < STAGES.length - 1 || page < stage.pages - 1
+              ? <Button variant="primary" data-action="tour-next" onClick={next}>Next</Button>
+              : <Button variant="primary" data-action="tour-next" onClick={next}>Set global spend limits</Button>}
+          </span>
+          {!done && <button type="button" data-action="tour-skip" className="border-0 bg-transparent p-1 text-[10.5px] font-[560] text-faint underline-offset-2 hover:text-muted hover:underline" onClick={onDone}>Skip tutorial</button>}
         </span>
       </footer>
     </section>

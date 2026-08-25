@@ -43,10 +43,8 @@ export function useAlertLevels(token: string) {
   return { levels, setLevels, loading, error, setError, load };
 }
 
-/** What is being dragged and where it would land. */
-type Drag =
-  | { kind: "column"; id: string; targetIndex: number; height: number }
-  | { kind: "entry"; id: string; action?: "prepare" | "auto"; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number };
+/** Which entry is being dragged and where it would land. */
+type Drag = { id: string; action?: "prepare" | "auto"; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number };
 
 export function AlertLevelsStep({ token, targets, board }: { token: string; targets: NotificationTargetsState; board: ReturnType<typeof useAlertLevels> }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -74,18 +72,6 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
   }, [updateScroll, board.levels.length, board.loading]);
   const step = (direction: 1 | -1) => scrollerRef.current?.scrollBy({ left: direction * SCROLL_STEP, behavior: "smooth" });
 
-  async function mutate(path: string, init: RequestInit) {
-    board.setError("");
-    try { await api(path, token, init); await board.load(); }
-    catch (cause) { board.setError(message(cause)); }
-  }
-
-  async function move(level: AlertLevel, position: number) {
-    if (position < 0 || position >= board.levels.length || position === level.position) return;
-    board.setLevels(current => reorder(current, level.id, position).map((item, index) => ({ ...item, position: index })));
-    await mutate(`/api/alert-levels/${encodeURIComponent(level.id)}`, { method: "PATCH", body: JSON.stringify({ position }) });
-  }
-
   /** Move a channel entry to `toLevelId` at `toIndex` (index among that level's channel entries). */
   async function moveEntry(entryId: string, fromLevelId: string, toLevelId: string, toIndex: number) {
     const from = board.levels.find(level => level.id === fromLevelId);
@@ -109,21 +95,6 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
       await board.load();
     } catch (cause) { board.setError(message(cause)); await board.load(); }
   }
-
-  const columnDrag = useDragSession<{ id: string }>({
-    onMove(session) {
-      const rects = columnRects(boardRef.current, session.data.id);
-      const targetIndex = slotIndexAt(rects, session.x, "x");
-      setDrag(current => (current?.kind === "column" && current.targetIndex === targetIndex ? current : { kind: "column", id: session.data.id, targetIndex, height: session.height }));
-    },
-    onDrop(session) {
-      const rects = columnRects(boardRef.current, session.data.id);
-      const targetIndex = slotIndexAt(rects, session.x, "x");
-      setDrag(null);
-      const level = board.levels.find(item => item.id === session.data.id);
-      if (level && targetIndex !== level.position) void move(level, targetIndex);
-    },
-  });
 
   /** Move a prepare/auto action group to another level (both entries of the group travel together). */
   async function moveAction(mode: "prepare" | "auto", fromLevelId: string, toLevelId: string) {
@@ -149,9 +120,9 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     onMove(session) {
       const target = entryTarget(boardRef.current, session);
       if (!target) return;
-      setDrag(current => (current?.kind === "entry" && current.targetLevelId === target.levelId && current.targetIndex === target.index
+      setDrag(current => (current?.targetLevelId === target.levelId && current.targetIndex === target.index
         ? current
-        : { kind: "entry", id: session.data.id, action: session.data.action, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index, height: session.height }));
+        : { id: session.data.id, action: session.data.action, fromLevelId: session.data.levelId, targetLevelId: target.levelId, targetIndex: target.index, height: session.height }));
     },
     onDrop(session) {
       const target = entryTarget(boardRef.current, session);
@@ -162,19 +133,13 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
     },
   });
 
-  // Visual model: columns in drop order with a placeholder for the dragged
-  // column, and entries per level with a placeholder for the dragged entry.
-  const visualLevels = useMemo(() => {
-    if (drag?.kind !== "column") return board.levels;
-    return reorder(board.levels, drag.id, drag.targetIndex);
-  }, [board.levels, drag]);
   const usedTargets = useMemo(() => new Set(board.levels.flatMap(level => level.entries.filter(entry => entry.kind === "channel").map(entry => entry.targetId))), [board.levels]);
-  const draggedEntry = drag?.kind === "entry" && !drag.action ? board.levels.flatMap(level => level.entries).find(entry => entry.id === drag.id) ?? null : null;
+  const draggedEntry = drag && !drag.action ? board.levels.flatMap(level => level.entries).find(entry => entry.id === drag.id) ?? null : null;
   const usedActions = useMemo(() => ({
     prepare: board.levels.some(level => groupedActions(level.entries).prepare.length > 0),
     auto: board.levels.some(level => groupedActions(level.entries).auto.length > 0),
   }), [board.levels]);
-  const columns = useLeaving(visualLevels, level => level.id);
+  const columns = useLeaving(board.levels, level => level.id);
 
   return <>
     <StepIntro title="Build alert levels">Brolly has three levels. Each entry applies to its column and every column to the right. Columns may stay empty.</StepIntro>
@@ -185,45 +150,29 @@ export function AlertLevelsStep({ token, targets, board }: { token: string; targ
       <div ref={scrollerRef} onScroll={updateScroll} className="-mx-[clamp(26px,4vw,48px)] min-w-0 overflow-x-auto px-[clamp(26px,4vw,48px)] pb-3 max-md:-mx-4 max-md:px-4" aria-label="Alert level board">
         <div ref={boardRef} className="flex items-stretch gap-3" style={{ minHeight: lockedHeight ?? undefined }}>
           {columns.map(({ item: level, leaving }) => {
-            const index = visualLevels.findIndex(item => item.id === level.id);
-            const isDraggedColumn = drag?.kind === "column" && drag.id === level.id;
+            const index = board.levels.findIndex(item => item.id === level.id);
             return (
               <div key={level.id} data-flip-key={`column:${level.id}`} data-column={level.id} className={`min-w-[300px] flex-1 basis-0 ${leaving ? "board-out" : "board-in"}`}>
-                {isDraggedColumn ? (
-                  <div className="rounded-panel border-2 border-dashed border-orange/60 bg-orange-soft/30" style={{ height: drag.kind === "column" ? drag.height : undefined, minHeight: 120 }} aria-hidden="true" />
-                ) : (
-                  <LevelColumn
-                    level={level}
-                    index={index}
-                    count={board.levels.length}
-                    token={token}
-                    targets={targets}
-                    usedTargets={usedTargets}
-                    usedActions={usedActions}
-                    entryDrag={drag?.kind === "entry" ? { ...drag, entry: draggedEntry } : null}
-                    onGrabColumn={(event, element) => columnDrag.startDrag(event, { id: level.id }, element, scrollerRef.current)}
-                    onGrabEntry={(event, entryId, element) => entryDrag.startDrag(event, { id: entryId, levelId: level.id }, element, scrollerRef.current)}
-                    onGrabAction={(event, mode, element) => entryDrag.startDrag(event, { id: `action:${mode}`, levelId: level.id, action: mode }, element, scrollerRef.current)}
-                    onMove={position => void move(level, position)}
-                    onChanged={board.load}
-                    onError={board.setError}
-                  />
-                )}
+                <LevelColumn
+                  level={level}
+                  index={index}
+                  count={board.levels.length}
+                  token={token}
+                  targets={targets}
+                  usedTargets={usedTargets}
+                  usedActions={usedActions}
+                  entryDrag={drag ? { ...drag, entry: draggedEntry } : null}
+                  onGrabEntry={(event, entryId, element) => entryDrag.startDrag(event, { id: entryId, levelId: level.id }, element, scrollerRef.current)}
+                  onGrabAction={(event, mode, element) => entryDrag.startDrag(event, { id: `action:${mode}`, levelId: level.id, action: mode }, element, scrollerRef.current)}
+                  onChanged={board.load}
+                  onError={board.setError}
+                />
               </div>
             );
           })}
         </div>
       </div>
     )}
-    {columnDrag.session && (() => {
-      const level = board.levels.find(item => item.id === columnDrag.session!.data.id);
-      return level ? <Ghost session={columnDrag.session}>
-        <div className="rounded-panel shadow-drawer" style={{ width: columnDrag.session.width, height: columnDrag.session.height }}>
-          <LevelColumn level={level} index={level.position} count={board.levels.length} token={token} targets={targets} usedTargets={usedTargets} usedActions={usedActions} entryDrag={null}
-            onGrabColumn={() => {}} onGrabEntry={() => {}} onGrabAction={() => {}} onMove={() => {}} onChanged={async () => {}} onError={() => {}} ghost />
-        </div>
-      </Ghost> : null;
-    })()}
     {entryDrag.session?.data.action && <Ghost session={entryDrag.session}>
       <div className="shadow-drawer" style={{ width: entryDrag.session.width }}><ActionEntry mode={entryDrag.session.data.action} onRemove={() => {}} onGrab={() => {}} ghost /></div>
     </Ghost>}
@@ -252,22 +201,17 @@ function Ghost({ session, children }: { session: DragSession<unknown>; children:
   );
 }
 
-function LevelColumn({ level, index, count, token, targets, usedTargets, usedActions, entryDrag, onGrabColumn, onGrabEntry, onGrabAction, onMove, onChanged, onError, ghost = false }: {
+function LevelColumn({ level, index, count, token, targets, usedTargets, usedActions, entryDrag, onGrabEntry, onGrabAction, onChanged, onError }: {
   level: AlertLevel; index: number; count: number; token: string; targets: NotificationTargetsState; usedTargets: Set<string | null>;
   usedActions: { prepare: boolean; auto: boolean };
   entryDrag: { id: string; action?: "prepare" | "auto"; fromLevelId: string; targetLevelId: string; targetIndex: number; height: number; entry: AlertLevelEntry | null } | null;
-  onGrabColumn: (event: React.PointerEvent, element: HTMLElement) => void;
   onGrabEntry: (event: React.PointerEvent, entryId: string, element: HTMLElement) => void;
   onGrabAction: (event: React.PointerEvent, mode: "prepare" | "auto", element: HTMLElement) => void;
-  onMove: (position: number) => void;
   onChanged: () => Promise<void>; onError: (error: string) => void;
-  /** Non-interactive copy rendered inside the drag ghost. */
-  ghost?: boolean;
 }) {
   const [label, setLabel] = useState(level.label);
   const [addOpen, setAddOpen] = useState(false);
   const [newChannel, setNewChannel] = useState<NotificationChannel | null>(null);
-  const sectionRef = useRef<HTMLElement>(null);
   const actionEntries = groupedActions(level.entries);
   useEffect(() => setLabel(level.label), [level.label]);
 
@@ -303,12 +247,10 @@ function LevelColumn({ level, index, count, token, targets, usedTargets, usedAct
   const listed = useLeaving(rows.filter((row): row is { kind: "entry"; entry: AlertLevelEntry } => row.kind === "entry").map(row => row.entry), entry => entry.id);
 
   return (
-    <section ref={sectionRef} data-level={ghost ? undefined : level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 transition-colors ${ghost ? "pointer-events-none border-orange" : entryDrag && entryDrag.targetLevelId === level.id ? "border-orange shadow-[0_0_0_3px_#f6821f1f]" : "border-line"}`}>
+    <section data-level={level.id} className={`flex h-full flex-col rounded-panel border bg-panel p-3.5 transition-colors ${entryDrag && entryDrag.targetLevelId === level.id ? "border-orange shadow-[0_0_0_3px_#f6821f1f]" : "border-line"}`}>
       <header className="mb-3 flex items-center gap-1.5">
-        <button type="button" className="cursor-grab touch-none rounded px-1 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag ${level.label} to reorder`} onPointerDown={event => onGrabColumn(event, sectionRef.current!)}>⠿</button>
         <span aria-hidden="true" className="text-[13px] leading-none" style={{ color: levelColor(index, count) }}>◆</span>
         <input aria-label={`Level name: ${level.label}`} className="min-w-0 flex-1 rounded-field border border-transparent bg-transparent px-1.5 py-1 text-[14px] font-[750] hover:border-field-line focus:border-orange focus:outline-none" value={label} onChange={event => setLabel(event.target.value)} onBlur={() => void rename()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
-        <LevelMenu index={index} count={count} onMove={onMove} />
       </header>
       <div className="grid gap-2" data-entry-list={level.id}>
         {rows.map((row, position) => row.kind === "slot"
@@ -480,33 +422,8 @@ const ACTION_PRODUCTS = [
   { family: "queues", label: "Queues" },
 ] as const;
 
-function LevelMenu({ index, count, onMove }: { index: number; count: number; onMove: (position: number) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
-  useOutsideClose([ref, panel], open, () => setOpen(false));
-  return <div ref={ref} className="relative"><button type="button" aria-label="Level menu" aria-haspopup="menu" aria-expanded={open} className="rounded-field px-2 py-1 text-faint hover:bg-panel-soft" onClick={() => setOpen(!open)}>•••</button><Popover anchor={ref} open={open} side="bottom" align="end"><div ref={panel} role="menu" className="grid min-w-[150px] gap-0.5 rounded-field border border-line bg-panel p-1 shadow-panel"><MenuButton disabled={index === 0} onClick={() => onMove(index - 1)}>Move left</MenuButton><MenuButton disabled={index === count - 1} onClick={() => onMove(index + 1)}>Move right</MenuButton></div></Popover></div>;
-}
-
-function MenuButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) { return <button type="button" role="menuitem" disabled={disabled} className="rounded px-2 py-1.5 text-left text-[12px] text-ink hover:bg-panel-soft disabled:opacity-40" onClick={onClick}>{children}</button>; }
-
 function groupedActions(entries: AlertLevelEntry[]) { return { prepare: entries.filter(entry => entry.kind === "prepare_stop" || entry.kind === "prepare_quarantine"), auto: entries.filter(entry => entry.kind === "auto_pause" || entry.kind === "auto_quarantine") }; }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
-
-/** Move the level with `id` to `index`, keeping the others in order. */
-function reorder(levels: AlertLevel[], id: string, index: number): AlertLevel[] {
-  const moved = levels.find(level => level.id === id);
-  if (!moved) return levels;
-  const rest = levels.filter(level => level.id !== id);
-  rest.splice(Math.max(0, Math.min(index, rest.length)), 0, moved);
-  return rest;
-}
-
-/** Column rects in board order, excluding the dragged column's own slot. */
-function columnRects(board: HTMLDivElement | null, draggedId: string): DOMRect[] {
-  if (!board) return [];
-  return [...board.querySelectorAll<HTMLElement>("[data-column]")].filter(node => node.dataset.column !== draggedId).map(node => node.getBoundingClientRect());
-}
 
 /** The level and channel-slot index under the pointer for an entry drag. */
 function entryTarget(board: HTMLDivElement | null, session: DragSession<{ id: string; levelId: string }>): { levelId: string; index: number } | null {
