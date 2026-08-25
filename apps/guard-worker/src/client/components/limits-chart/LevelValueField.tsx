@@ -17,6 +17,10 @@ export interface LevelValueFieldProps {
   percent?: number;
   /** Accent the percent in orange: the value has left its tolerance default. */
   percentAccent?: boolean;
+  /** Estimated list-rate cost of this level, e.g. "≈ $7.20". Shown under the value. */
+  costNote?: string;
+  /** Hover explanation for the cost note. */
+  costTitle?: string;
 }
 
 // Chip inputs hug their text exactly where field-sizing is supported; the
@@ -24,7 +28,7 @@ export interface LevelValueFieldProps {
 const CHIP_AUTO_SIZE = typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content");
 
 /** One alert-level value editor shared by chart fields, tracks, rows, and risk tolerance. */
-export function LevelValueField({ level, unit, value, onCommit, variant = "boxed", highlight = false, step, percent, percentAccent = false }: LevelValueFieldProps) {
+export function LevelValueField({ level, unit, value, onCommit, variant = "boxed", highlight = false, step, percent, percentAccent = false, costNote, costTitle }: LevelValueFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const cancelBlur = useRef(false);
   const display = value === undefined ? "–" : fieldValue(value, unit);
@@ -116,6 +120,7 @@ export function LevelValueField({ level, unit, value, onCommit, variant = "boxed
         {percentBadge}
       </span>
       {valueEditor}
+      {costNote && <small data-level-cost className="text-[10px] font-medium tabular-nums text-faint" title={costTitle}>{costNote}</small>}
     </div>
   );
 }

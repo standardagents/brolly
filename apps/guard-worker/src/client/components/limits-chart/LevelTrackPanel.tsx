@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { LevelTrack } from "./LevelTrack";
-import { HistoryButtons, type LimitsChartLevel } from "./LimitsChart";
+import { HistoryButtons } from "./HistoryButtons";
+import type { LimitsChartLevel } from "./LimitsChart";
 import type { LevelValues } from "./levels";
 import type { LimitHistory } from "./use-limit-history";
 

@@ -97,6 +97,26 @@ describe("LimitsChart", () => {
   });
 
 
+  it("annotates billed usage with list-rate costs anchored to the free allotment", () => {
+    const rows = Array.from({ length: 40 }, (_, index) => ({ day: new Date(Date.UTC(2026, 6, 1 + index)).toISOString().slice(0, 10), value: 40_000_000 }));
+    const rate = 0.001 / 1_000_000;
+    const cycle = renderToStaticMarkup(
+      <LimitsChart kind="usage" unit="rows" window="cycle" series={rows} today="2026-08-09" includedPerCycle={25_000_000_000}
+        unitRateUsd={rate} levels={LEVELS} value={{ warn: 27e9, critical: 60e9, emergency: 88e9 }} onChange={() => {}} fields="inline" />,
+    );
+    // $0 anchors at the allotment; the cycle level prices its overage.
+    expect(cycle).toContain("data-cost-axis");
+    expect(cycle).toContain(">$0<");
+    expect(cycle.match(/data-level-cost[^>]*>([^<]*)/)?.[1]).toBe("≈ $2.00");
+    expect(cycle.match(/data-on-pace[^>]*>([^<]*)/)?.[1]?.trim()).toMatch(/^Pace ≈ \$/);
+    const day = renderToStaticMarkup(
+      <LimitsChart kind="usage" unit="rows" window="day" series={rows} today="2026-08-09"
+        unitRateUsd={rate} levels={LEVELS} value={{ warn: 860e6, critical: 1.9e9, emergency: 2.9e9 }} onChange={() => {}} fields="inline" />,
+    );
+    expect(day.match(/data-level-cost[^>]*>([^<]*)/)?.[1]).toBe("≈ $0.86 /day");
+    expect(day).not.toContain("data-cost-axis");
+  });
+
   it("shows a non-blocking note when a cycle level is below its daily reference", () => {
     const html = render({ window: "cycle", value: { warn: 10, critical: 40, emergency: 80 }, reference: { warn: 20, critical: 30, emergency: 60 } });
     expect(html).toContain("Warn is below its daily limit ($20.00). A single day can trip this limit.");

@@ -8,6 +8,8 @@ import { completeWithDefaults, displayPercent, windowBaseline } from "./defaults
 import { compactLimitValue, compactValue, formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
 import { type Axis, chooseAxisWithIncluded, includedBandGeometry, recommendedAxisMode, snapStep, snapToNice } from "./scale";
+import { CostAxis } from "./CostAxis";
+import { HistoryButtons } from "./HistoryButtons";
 import { CrossingAlarms, CrossingDim } from "./crossing-alarms";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
@@ -49,6 +51,8 @@ export interface LimitsChartProps {
   poolSeries?: DayPoint[];
   /** Daily list-rate cost attributable to this billed usage meter. */
   billableCostSeries?: DayPoint[];
+  /** List-rate price per unit for a directly billed meter; enables the cost annotations. */
+  unitRateUsd?: number;
   /** How daily metric values combine within a billing cycle. Legacy data sums. */
   aggregationKind?: AggregationKind;
   onChange(next: LevelValues): void;
@@ -96,7 +100,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, tolerancePercent, reference, includedPerCycle, poolSeries, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, history: historyProp, fields = "cards", crossingAlarms = false, pointerInteractions = true }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, tolerancePercent, reference, includedPerCycle, poolSeries, billableCostSeries, unitRateUsd, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, history: historyProp, fields = "cards", crossingAlarms = false, pointerInteractions = true }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -217,7 +221,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     // eslint-disable-next-line react-hooks/exhaustive-deps -- record only when the map or order changes
   }, [complete, order, value]);
 
-  const plotWidth = Math.max(80, width - PLOT.left - PLOT.right);
+  // A chart with a dollar axis reserves a right gutter column for its labels,
+  // mirroring the unit gutter on the left.
+  const costAxisShown = cycleMode && !!unitRateUsd && kind === "usage";
+  const plotRight = costAxisShown ? 48 : PLOT.right;
+  const plotWidth = Math.max(80, width - PLOT.left - plotRight);
   const plotHeight = PLOT.height - PLOT.top - PLOT.bottom;
   const yFor = (item: number) => PLOT.top + (1 - axis.position(item)) * plotHeight;
   const valueForY = (y: number) => axis.invert(1 - (y - PLOT.top) / plotHeight);
@@ -283,24 +291,24 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     setDragValues(() => pushLevels(axis, order, dragBase.current ?? complete, move.id, next, floor));
   };
 
-  const startDrag = (id: string) => (event: PointerEvent<SVGElement>) => {
+  const startDrag = (id: string) => (event: PointerEvent<Element>) => {
     if (readOnly) return;
     event.preventDefault();
-    (event.currentTarget as SVGElement).setPointerCapture?.(event.pointerId);
+    (event.currentTarget as Element).setPointerCapture?.(event.pointerId);
     svgRect.current = svgRef.current?.getBoundingClientRect() ?? null;
     setFrozenAxis(axis);
     dragBase.current = complete;
     setDragValues(complete);
     setDragging(id);
   };
-  const moveDrag = (id: string) => (event: PointerEvent<SVGElement>) => {
+  const moveDrag = (id: string) => (event: PointerEvent<Element>) => {
     if (dragging !== id) return;
     pending.current = { id, clientY: event.clientY };
     if (frame.current === null) frame.current = requestAnimationFrame(flushDrag);
   };
-  const endDrag = (id: string) => (event: PointerEvent<SVGElement>) => {
+  const endDrag = (id: string) => (event: PointerEvent<Element>) => {
     if (dragging !== id) return;
-    (event.currentTarget as SVGElement).releasePointerCapture?.(event.pointerId);
+    (event.currentTarget as Element).releasePointerCapture?.(event.pointerId);
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     const last = pending.current ? valueAtClientY(pending.current.clientY) : null;
@@ -448,12 +456,33 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     return { day: dayOf(dayStart(today) + ahead * DAY_MS), value: projection.rate, projected: true, index: hoverDay.index, ahead };
   }, [hoverDay, dragging, hoverLevel, dense, projection, remainingDays, today]);
   // Tooltip rows: one labeled line per fact instead of a single run-on string.
+  // Estimated list-rate cost of a level: past the free allotment on cycle
+  // charts, per fully billable day on day charts.
+  const levelCost = (levelValue: number): string | undefined => {
+    if (!unitRateUsd || kind !== "usage") return undefined;
+    if (cycleMode) return `≈ ${formatTick(Math.max(0, levelValue - (chartIncluded ?? 0)) * unitRateUsd, "USD")}`;
+    return `≈ ${formatTick(levelValue * unitRateUsd, "USD")} /day`;
+  };
+  const levelCostTitle = cycleMode
+    ? "Estimated list-rate cost past the free allotment if this cycle reaches this level"
+    : "Estimated list-rate cost of one day at this level after the free allotment runs out";
+  const onPaceCost = cycleMode && unitRateUsd && kind === "usage" && projection
+    ? Math.max(0, projection.projected - (chartIncluded ?? 0)) * unitRateUsd
+    : undefined;
+
   const hoverRows = ((): Array<[string, string]> => {
     if (!hovered) return [];
     const rows: Array<[string, string]> = [];
     if (cycleMode) {
-      if (!hovered.projected) rows.push(["So far this cycle", compactLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
-      else rows.push(["Projected by this day", compactLimitValue(projection!.toDate + projection!.rate * hovered.ahead!, unit)]);
+      if (!hovered.projected) {
+        rows.push(["So far this cycle", compactLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
+        // Cumulative for the cycle to this day, never this one day's cost.
+        if (billableCostCumulative) rows.push(["Billable so far this cycle", money(billableCostCumulative[hovered.index]?.cumulative ?? 0)]);
+      } else {
+        const projectedUnits = projection!.toDate + projection!.rate * hovered.ahead!;
+        rows.push(["Projected by this day", compactLimitValue(projectedUnits, unit)]);
+        if (unitRateUsd) rows.push(["Projected billable by this day", money(Math.max(0, projectedUnits - (chartIncluded ?? 0)) * unitRateUsd)]);
+      }
       return rows;
     }
     rows.push([hovered.projected ? "Projected usage" : "Usage", compactLimitValue(hovered.value, unit)]);
@@ -461,6 +490,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       ? Math.max(0, (freeLeft.at(-1)?.after ?? 0) - projection!.rate * hovered.ahead!)
       : freeLeft[hovered.index]?.after;
     if (chartIncluded && free !== undefined) rows.push(["Free left", compactLimitValue(free, unit)]);
+    if (!hovered.projected && billableCostDense) rows.push(["Billable", money(billableCostDense[hovered.index]?.value ?? 0)]);
     return rows;
   })();
   // Free-usage-left area per cycle: starts at the allotment, falls with each
@@ -542,9 +572,14 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   return (
     <div ref={containerRef} className="@container min-w-0 select-none" data-limits-chart={kind} data-axis-kind={liveAxis.kind} data-scale-mode={scaleMode} data-axis-animating={axisAnimating || undefined} onKeyDown={historyKeyDown}>
       <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2" style={!title && limitWindow === "day" ? { marginLeft: PLOT.left } : undefined}>
+          <div className="flex min-w-0 items-center gap-2" style={!title ? { marginLeft: PLOT.left } : undefined}>
             {title && <h4 className="inline-flex items-center gap-2 text-[13px] font-bold" style={titleIndent ? { paddingLeft: PLOT.left } : undefined}>{family && <ProductIcon family={family} size="sm" />}{title}</h4>}
             {limitWindow === "day" && <ChartScaleToggle mode={scaleMode} onChange={setScaleMode} />}
+            {onPaceCost !== undefined && (
+              <span data-on-pace className="inline-flex h-7 items-center whitespace-nowrap rounded-full border border-line-soft bg-panel-soft px-3 text-[10px] font-semibold text-muted" title="Estimated list-rate cost past the free allotment at the current pace">
+                Pace ≈ {formatTick(onPaceCost, "USD")}
+              </span>
+            )}
           </div>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance) && order.some(id => resetToTolerance![id] !== complete[id])} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
@@ -596,6 +631,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           );
         })()}
 
+        {cycleMode && unitRateUsd && kind === "usage" && (
+          <CostAxis anchor={chartIncluded ?? 0} rate={unitRateUsd} axisMax={axis.max} x={PLOT.left + plotWidth} yFor={yFor} format={cost => (Number.isInteger(cost) && cost < 10 ? `$${cost}` : formatTick(cost, "USD"))} />
+        )}
         {/* Cumulative sawtooth per cycle */}
         {cycleMode ? (
           // Cycle step: the running total is the primary mark. Each horizontal
@@ -704,6 +742,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
         {/* Axes sit above the data layers so fills can never cover them. */}
         <line x1={PLOT.left} x2={PLOT.left} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
+        <line x1={PLOT.left + plotWidth} x2={PLOT.left + plotWidth} y1={PLOT.top} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
+        <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={PLOT.top} y2={PLOT.top} className="stroke-line-strong" pointerEvents="none" />
         <line x1={PLOT.left} x2={PLOT.left + plotWidth} y1={PLOT.top + plotHeight} y2={PLOT.top + plotHeight} className="stroke-line-strong" pointerEvents="none" />
 
         {/* Level lines and handles */}
@@ -793,7 +833,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       {hoverExhausted?.startsWith("total:") && (() => {
         const item = billable.markers.find(entry => `total:${entry.day}` === hoverExhausted);
         if (!item) return null;
-        const x = Math.min(Math.max(xFor(item.index) + barSlot / 2, PLOT.left), width - PLOT.right);
+        const x = Math.min(Math.max(xFor(item.index) + barSlot / 2, PLOT.left), width - plotRight);
         const y = Math.max(PLOT.top + 1, yFor(item.value));
         return <BillableUsageTooltip x={x} y={y} width={width} color={item.color} label={item.label} day={dayLabel(item.day)}
           dayOfCycle={item.dayOfCycle} cycleDays={item.cycleDays} total={item.value} included={chartIncluded} costUsd={item.costUsd} unit={unit} />;
@@ -803,7 +843,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         if (!item) return null;
         const exhausted = item.kind === "exhausted";
         const { x: markerX, y: markerY } = markerPoint(item);
-        const x = Math.min(Math.max(markerX, PLOT.left), width - PLOT.right);
+        const x = Math.min(Math.max(markerX, PLOT.left), width - plotRight);
         return (
           <div data-free-exhausted-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
             style={{ left: x, top: markerY - 12 }}>
@@ -823,9 +863,16 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         // Every line wears its value beside its handle. The text's right edge
         // sits exactly where the axis tick labels end (PLOT.left - 10), so the
         // values read as part of the axis; the quiet panel background masks
-        // whichever tick sits underneath.
-        <div key={level.id} data-line-value className={`pointer-events-none absolute z-10 whitespace-nowrap rounded-[4px] border border-line bg-panel py-px pl-1 pr-[3px] text-[10.5px] leading-[1.4] tabular-nums ${highlightLevel === level.id ? "font-[800]" : "font-[700]"}`}
-          style={{ left: PLOT.left - 6, top: yFor(shown[level.id] ?? 0), transform: "translate(-100%, -50%)", color: colorById.get(level.id) }}>
+        // whichever tick sits underneath. The chip is a drag handle like the
+        // line itself, and the hovered level's chip rises above its neighbors.
+        <div key={level.id} data-line-value className={`absolute whitespace-nowrap rounded-[4px] border border-line bg-panel py-px pl-1 pr-[3px] text-[10.5px] leading-[1.4] tabular-nums ${highlightLevel === level.id ? "z-20 font-[800]" : "z-10 font-[700]"} ${readOnly ? "pointer-events-none" : "cursor-ns-resize touch-none select-none"}`}
+          style={{ left: PLOT.left - 6, top: yFor(shown[level.id] ?? 0), transform: "translate(-100%, -50%)", color: colorById.get(level.id) }}
+          onPointerDown={readOnly ? undefined : startDrag(level.id)}
+          onPointerMove={readOnly ? undefined : moveDrag(level.id)}
+          onPointerUp={readOnly ? undefined : endDrag(level.id)}
+          onPointerCancel={readOnly ? undefined : endDrag(level.id)}
+          onPointerEnter={() => setHoverLevel(level.id)}
+          onPointerLeave={() => setHoverLevel(null)}>
           {unit === "USD" ? formatLimitValue(shown[level.id] ?? 0, unit) : compactValue(shown[level.id] ?? 0, unit)}
         </div>
       ))}
@@ -833,7 +880,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         // Near either edge the tooltip hangs inward from the pointer instead of centering, so it never clips.
         <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${hoverDay!.x > width * 0.7 ? "-translate-x-full" : hoverDay!.x < width * 0.3 ? "" : "-translate-x-1/2"}`}
           // The anchor side eases across when it flips near an edge; the position itself tracks the pointer directly.
-          style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left), width - PLOT.right), top: hoverDay!.y - 10, transition: `translate 220ms ${EASE}` }}>
+          style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left), width - plotRight), top: hoverDay!.y - 10, transition: `translate 220ms ${EASE}` }}>
           <b className="font-[720]">{dayLabel(hovered.day)}</b>{hovered.projected && <span className="ml-1.5 text-[10px] font-[700] uppercase tracking-[.06em] text-faint">Projected</span>}
           <span className="mt-1 grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
             {hoverRows.map(([label, value], index) => <span key={label} className="contents">
@@ -857,12 +904,13 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         </ul>
       ) : fields === "inline" ? (
         // Aligned with the plot area, not the axis gutter, so values sit under the lines they set.
-        <div className="mt-2 flex flex-wrap justify-center gap-x-12 gap-y-2 border-t border-line-soft pt-2.5" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
+        <div className="mt-2 flex flex-wrap justify-center gap-x-12 gap-y-2 border-t border-line-soft pt-2.5" style={{ marginLeft: PLOT.left, marginRight: plotRight }}>
           {levels.map(level => (
             <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               highlight={highlightLevel === level.id}
               percent={displayPercent(shown[level.id] ?? 0, percentBaseline, tolerancePercent?.[level.id], resetToTolerance?.[level.id])}
-              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]} />
+              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]}
+              costNote={levelCost(shown[level.id] ?? 0)} costTitle={levelCostTitle} />
           ))}
         </div>
       ) : (
@@ -872,52 +920,14 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             <LevelValueField key={level.id} variant="boxed" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               highlight={highlightLevel === level.id}
               percent={displayPercent(shown[level.id] ?? 0, percentBaseline, tolerancePercent?.[level.id], resetToTolerance?.[level.id])}
-              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]} />
+              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]}
+              costNote={levelCost(shown[level.id] ?? 0)} costTitle={levelCostTitle} />
           ))}
         </div>
       )}
       {belowReference && <p className="mt-2 text-[11.5px] leading-5 text-muted">
         {belowReference.label} is below its daily limit ({formatLimitValue(reference![belowReference.id]!, unit)}). A single day can trip this limit.
       </p>}
-    </div>
-  );
-}
-
-export function HistoryButtons({ history, canReset, onReset, onUndo, onRedo }: { history: LimitHistory; canReset: boolean; onReset(): void; onUndo(): void; onRedo(): void }) {
-  return (
-    <div className="inline-flex items-center gap-1" role="group" aria-label="Chart history">
-      {canReset && <button
-        type="button"
-        data-action="reset-tolerance"
-        className="h-7 cursor-pointer rounded border border-line bg-panel px-2 text-[10.5px] font-bold text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange"
-        onClick={onReset}
-      >Reset to tolerance</button>}
-      <button
-        type="button"
-        className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
-        data-action="undo"
-        aria-label="Undo last limit change"
-        title="Undo (Cmd/Ctrl+Z)"
-        disabled={!history.canUndo}
-        onClick={onUndo}
-      >
-        <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M9 7 4 12l5 5" /><path d="M5 12h8a6 6 0 0 1 6 6" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        className="grid size-7 cursor-pointer place-items-center rounded border border-line bg-panel text-muted hover:border-[#b7bfc8] hover:text-ink focus-visible:outline-2 focus-visible:outline-orange disabled:cursor-default disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
-        data-action="redo"
-        aria-label="Redo limit change"
-        title="Redo (Cmd/Ctrl+Shift+Z)"
-        disabled={!history.canRedo}
-        onClick={onRedo}
-      >
-        <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="m15 7 5 5-5 5" /><path d="M19 12h-8a6 6 0 0 0-6 6" />
-        </svg>
-      </button>
     </div>
   );
 }

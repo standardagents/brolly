@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { billableMetricIds, costSeries, metricAggregationKind, metricBillableCostSeries, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
+import { unitRateUsd } from "./metric-cost";
 import type { AggregationKind } from "./cycles";
 import { cycleDaysFor, dailyMultiple, dailyToleranceDefaults, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
 import type { LevelValues } from "./levels";
@@ -125,6 +126,7 @@ export function useScopeWindow({ data, window, levels, cost, onCostChange, usage
       tolerance={fromTolerance} resetToTolerance={reset} tolerancePercent={tolerance} reference={window === "cycle" ? usageFloor?.[id] : undefined}
       includedPerCycle={included} poolSeries={poolSeries} aggregationKind={aggregationKind}
       billableCostSeries={metricBillableCostSeries(data, id)}
+      unitRateUsd={unitRateUsd(id, data.planTier, data.metrics[id]?.billedVia)}
       onChange={next => changeUsage(id, next)} readOnly={readOnly}
       history={histories(id)} fields="inline" />;
   };
