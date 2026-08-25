@@ -1486,11 +1486,12 @@ var CloudflareClient = class {
 			})), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map((item) => item.family)))];
 		}
 	}
-	async durableObjectUsage(since, until) {
+	async durableObjectUsage(since, until, options = {}) {
+		const limit = Math.max(1, Math.min(options.limit ?? 1e3, 1e4));
 		const query = `query BrollyDurableObjects($account: String!, $since: Time!, $until: Time!) {
       viewer { accounts(filter: { accountTag: $account }) {
         byRowsRead: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_rowsRead_DESC]
         ) {
@@ -1498,7 +1499,7 @@ var CloudflareClient = class {
           sum { rowsRead rowsWritten }
         }
         byRowsWritten: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_rowsWritten_DESC]
         ) {
@@ -1506,7 +1507,7 @@ var CloudflareClient = class {
           sum { rowsRead rowsWritten }
         }
         byRequests: durableObjectsInvocationsAdaptiveGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_requests_DESC]
         ) {
@@ -1514,7 +1515,7 @@ var CloudflareClient = class {
           sum { requests }
         }
         byDuration: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_duration_DESC]
         ) {
@@ -1522,7 +1523,7 @@ var CloudflareClient = class {
           sum { duration }
         }
         byIncomingWebsocketMessages: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_inboundWebsocketMsgCount_DESC]
         ) {
@@ -1530,7 +1531,7 @@ var CloudflareClient = class {
           sum { inboundWebsocketMsgCount }
         }
         byStorageReadUnits: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageReadUnits_DESC]
         ) {
@@ -1538,7 +1539,7 @@ var CloudflareClient = class {
           sum { storageReadUnits }
         }
         byStorageWriteUnits: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageWriteUnits_DESC]
         ) {
@@ -1546,7 +1547,7 @@ var CloudflareClient = class {
           sum { storageWriteUnits }
         }
         byStorageDeletes: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageDeletes_DESC]
         ) {
@@ -1554,7 +1555,7 @@ var CloudflareClient = class {
           sum { storageDeletes }
         }
         sqlStorage: durableObjectsSqlStorageGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [max_storedBytes_DESC]
         ) {
@@ -1572,6 +1573,8 @@ var CloudflareClient = class {
     }`;
 		try {
 			this.budget.charge("apiCalls");
+			this.ledgerBudget?.charge("pagesPerDataset");
+			this.ledgerBudget?.charge("graphqlQueries", 10);
 			const response = await fetch(`${API$2}/graphql`, {
 				method: "POST",
 				headers: authHeaders(await this.token()),
@@ -1598,7 +1601,7 @@ var CloudflareClient = class {
 				account?.byStorageReadUnits ?? [],
 				account?.byStorageWriteUnits ?? [],
 				account?.byStorageDeletes ?? []
-			].some((list) => list.length >= 1e3);
+			].some((list) => list.length >= limit);
 			const operationDefinitions = [
 				[
 					account?.byDuration ?? [],
@@ -1719,8 +1722,8 @@ var CloudflareClient = class {
 						"kv_read_units",
 						"kv_write_units",
 						"kv_delete_requests"
-					], truncated ? "delayed" : "healthy", truncated ? "Per-metric top-1000 response was truncated; high consumers are included but the long tail is not enumerable" : void 0, "object"),
-					...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (account?.sqlStorage?.length ?? 0) >= 1e3 ? "delayed" : "healthy", void 0, "namespace"),
+					], truncated ? "delayed" : "healthy", truncated ? `Per-metric top-${limit} response was truncated; high consumers are included but the long tail is not enumerable` : void 0, "object"),
+					...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (account?.sqlStorage?.length ?? 0) >= limit ? "delayed" : "healthy", void 0, "namespace"),
 					...coverageForMetrics("durable_objects", ["kv_storage_bytes"], "healthy", void 0, "account")
 				]
 			};
@@ -1746,311 +1749,87 @@ var CloudflareClient = class {
 			};
 		}
 	}
-	async durableObjectUsagePaged(since, until, options = {}) {
-		const pageSize = 1e4;
-		const maxPages = Math.max(1, Math.min(options.maxPages ?? 30, 30));
-		const query = `query BrollyDurableObjectLedger(
-      $account: String!, $since: Time!, $until: Time!,
-      $requestsCursor: String!, $durationCursor: String!, $websocketCursor: String!,
-      $rowsReadCursor: String!, $rowsWrittenCursor: String!,
-      $storageReadsCursor: String!, $storageWritesCursor: String!, $storageDeletesCursor: String!,
-      $requestsMore: Boolean!, $durationMore: Boolean!, $websocketMore: Boolean!,
-      $rowsReadMore: Boolean!, $rowsWrittenMore: Boolean!,
-      $storageReadsMore: Boolean!, $storageWritesMore: Boolean!, $storageDeletesMore: Boolean!,
-      $firstPage: Boolean!
-    ) {
-      viewer { accounts(filter: { accountTag: $account }) {
-        requests: durableObjectsInvocationsAdaptiveGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $requestsCursor }
-        ) @include(if: $requestsMore) { dimensions { namespaceId objectId type } sum { requests } }
-        duration: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $durationCursor }
-        ) @include(if: $durationMore) { dimensions { namespaceId objectId } sum { duration } }
-        websocket: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $websocketCursor }
-        ) @include(if: $websocketMore) { dimensions { namespaceId objectId } sum { inboundWebsocketMsgCount } }
-        rowsRead: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $rowsReadCursor }
-        ) @include(if: $rowsReadMore) { dimensions { namespaceId objectId } sum { rowsRead } }
-        rowsWritten: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $rowsWrittenCursor }
-        ) @include(if: $rowsWrittenMore) { dimensions { namespaceId objectId } sum { rowsWritten } }
-        storageReads: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageReadsCursor }
-        ) @include(if: $storageReadsMore) { dimensions { namespaceId objectId } sum { storageReadUnits } }
-        storageWrites: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageWritesCursor }
-        ) @include(if: $storageWritesMore) { dimensions { namespaceId objectId } sum { storageWriteUnits } }
-        storageDeletes: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageDeletesCursor }
-        ) @include(if: $storageDeletesMore) { dimensions { namespaceId objectId } sum { storageDeletes } }
-        sqlStorage: durableObjectsSqlStorageGroups(
-          limit: 10000, filter: { datetime_geq: $since, datetime_lt: $until }, orderBy: [dimensions_namespaceId_ASC]
-        ) @include(if: $firstPage) { dimensions { namespaceId } max { storedBytes } }
-        kvStorage: durableObjectsStorageGroups(
-          limit: 1, filter: { datetime_geq: $since, datetime_lt: $until }, orderBy: [max_storedBytes_DESC]
-        ) @include(if: $firstPage) { max { storedBytes } }
-      } }
-    }`;
-		const names = [
-			"requests",
-			"duration",
-			"websocket",
-			"rowsRead",
-			"rowsWritten",
-			"storageReads",
-			"storageWrites",
-			"storageDeletes"
-		];
-		const cursors = {
-			requests: options.cursor?.requests ?? "",
-			duration: options.cursor?.duration ?? "",
-			websocket: options.cursor?.websocket ?? "",
-			rowsRead: options.cursor?.rowsRead ?? "",
-			rowsWritten: options.cursor?.rowsWritten ?? "",
-			storageReads: options.cursor?.storageReads ?? "",
-			storageWrites: options.cursor?.storageWrites ?? "",
-			storageDeletes: options.cursor?.storageDeletes ?? ""
-		};
-		const more = Object.fromEntries(names.map((name) => [name, true]));
-		const seen = Object.fromEntries(names.map((name) => [name, 0]));
-		const samples = /* @__PURE__ */ new Map();
-		let pages = 0;
-		let sqlStorage = [];
-		let kvStorage = [];
-		try {
-			while (pages < maxPages && names.some((name) => more[name])) {
-				this.budget.charge("apiCalls");
-				this.ledgerBudget?.charge("pagesPerDataset");
-				this.ledgerBudget?.charge("graphqlQueries", names.filter((name) => more[name]).length + (pages === 0 ? 2 : 0));
-				const variables = {
-					account: this.env.BROLLY_ACCOUNT_ID,
-					since: new Date(since).toISOString(),
-					until: new Date(until).toISOString(),
-					...Object.fromEntries(names.flatMap((name) => [[`${name}Cursor`, cursors[name]], [`${name}More`, more[name]]])),
-					firstPage: pages === 0
-				};
-				const response = await fetch(`${API$2}/graphql`, {
-					method: "POST",
-					headers: authHeaders(await this.token()),
-					body: JSON.stringify({
-						query,
-						variables
-					}),
-					signal: this.budget.signal
-				});
-				if (!response.ok) throw await cloudflareApiError(response);
-				const payload = await response.json();
-				if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
-				const account = payload.data?.viewer?.accounts?.[0] ?? {};
-				if (pages === 0) {
-					sqlStorage = account.sqlStorage ?? [];
-					kvStorage = account.kvStorage ?? [];
-				}
-				for (const name of names) {
-					if (!more[name]) continue;
-					const groups = account[name] ?? [];
-					seen[name] += groups.length;
-					for (const group of groups) addDurableObjectGroup(samples, this.env.BROLLY_ACCOUNT_ID, name, group, since, until);
-					const lastId = groups.at(-1)?.dimensions.objectId;
-					if (lastId) cursors[name] = lastId;
-					more[name] = groups.length === pageSize && (!options.expectedActiveObjects || seen[name] < options.expectedActiveObjects);
-				}
-				pages += 1;
-			}
-			for (const group of sqlStorage ?? []) {
-				if (group.max.storedBytes === void 0) continue;
-				const asset = {
-					accountId: this.env.BROLLY_ACCOUNT_ID,
-					family: "durable_objects",
-					id: group.dimensions.namespaceId,
-					scope: "namespace",
-					tier: "unclassified"
-				};
-				samples.set(`${asset.id}:sql_storage_bytes`, metric(asset, "sql_storage_bytes", "bytes", group.max.storedBytes, since, until, false));
-			}
-			if ((kvStorage?.length ?? 0) > 0) {
-				const value = Math.max(0, ...(kvStorage ?? []).map((group) => group.max.storedBytes ?? 0));
-				const asset = {
-					accountId: this.env.BROLLY_ACCOUNT_ID,
-					family: "durable_objects",
-					id: "legacy-kv-storage",
-					name: "Legacy key-value Durable Object storage",
-					scope: "account",
-					tier: "control_plane"
-				};
-				samples.set(`${asset.id}:kv_storage_bytes`, metric(asset, "kv_storage_bytes", "bytes", value, since, until, false));
-			}
-			const complete = !names.some((name) => more[name]);
-			const detail = complete ? void 0 : `Durable Object keyset pagination paused after ${pages} pages; the continuation is persisted`;
-			const result = [...samples.values()];
-			this.budget.charge("samples", result.length);
-			return {
-				samples: result,
-				coverage: [
-					...coverageForMetrics("durable_objects", [
-						"requests",
-						"duration_gb_seconds",
-						"incoming_websocket_messages",
-						"rows_read",
-						"rows_written",
-						"kv_read_units",
-						"kv_write_units",
-						"kv_delete_requests"
-					], complete ? "healthy" : "delayed", detail, "object"),
-					...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (sqlStorage?.length ?? 0) >= pageSize ? "delayed" : "healthy", void 0, "namespace"),
-					...coverageForMetrics("durable_objects", ["kv_storage_bytes"], "healthy", void 0, "account")
-				],
-				continuation: complete ? null : Object.fromEntries(names.filter((name) => more[name]).map((name) => [name, cursors[name]])),
-				complete,
-				pages,
-				watermarkAt: until
-			};
-		} catch (error) {
-			const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
-			const detail = error instanceof Error ? error.message : String(error);
-			return {
-				samples: [...samples.values()],
-				coverage: coverageForMetrics("durable_objects", [
-					"requests",
-					"duration_gb_seconds",
-					"incoming_websocket_messages",
-					"rows_read",
-					"rows_written",
-					"kv_read_units",
-					"kv_write_units",
-					"kv_delete_requests",
-					"sql_storage_bytes",
-					"kv_storage_bytes"
-				], state, detail, "object"),
-				continuation: Object.fromEntries(names.filter((name) => more[name]).map((name) => [name, cursors[name]])),
-				complete: false,
-				pages,
-				watermarkAt: until
-			};
-		}
-	}
 	async workerUsage(since, until, options = {}) {
 		const pageSize = 1e4;
-		const maxPages = Math.max(1, Math.min(options.maxPages ?? 10, 30));
-		const query = `query BrollyWorkers(
-      $account: String!, $since: Time!, $until: Time!,
-      $requestsCursor: String!, $cpuCursor: String!,
-      $requestsMore: Boolean!, $cpuMore: Boolean!
-    ) {
+		const query = `query BrollyWorkers($account: String!, $since: Time!, $until: Time!) {
       viewer { accounts(filter: { accountTag: $account }) {
         byRequests: workersInvocationsAdaptive(
-          limit: 10000
-          filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0, scriptName_gt: $requestsCursor }
-          orderBy: [dimensions_scriptName_ASC]
-        ) @include(if: $requestsMore) {
-          dimensions { scriptName }
-          sum { requests }
-        }
+        limit: 10000
+        filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0 }
+        orderBy: [sum_requests_DESC]
+      ) { dimensions { scriptName } sum { requests } }
         byCpu: workersInvocationsAdaptive(
-          limit: 10000
-          filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0, scriptName_gt: $cpuCursor }
-          orderBy: [dimensions_scriptName_ASC]
-        ) @include(if: $cpuMore) {
-          dimensions { scriptName }
-          sum { cpuTimeUs }
-        }
+        limit: 10000
+        filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0 }
+        orderBy: [sum_cpuTimeUs_DESC]
+      ) { dimensions { scriptName } sum { cpuTimeUs } }
       } }
     }`;
-		const cursors = {
-			requests: options.cursor?.requests ?? "",
-			cpu: options.cursor?.cpu ?? ""
-		};
-		const more = {
-			requests: true,
-			cpu: true
-		};
-		const samples = /* @__PURE__ */ new Map();
-		let pages = 0;
 		try {
-			while (pages < maxPages && (more.requests || more.cpu)) {
-				this.budget.charge("apiCalls");
-				this.ledgerBudget?.charge("pagesPerDataset");
-				this.ledgerBudget?.charge("graphqlQueries", Number(more.requests) + Number(more.cpu));
-				const response = await fetch(`${API$2}/graphql`, {
-					method: "POST",
-					headers: authHeaders(await this.token()),
-					body: JSON.stringify({
-						query,
-						variables: {
-							account: this.env.BROLLY_ACCOUNT_ID,
-							since: new Date(since).toISOString(),
-							until: new Date(until).toISOString(),
-							requestsCursor: cursors.requests,
-							cpuCursor: cursors.cpu,
-							requestsMore: more.requests,
-							cpuMore: more.cpu
-						}
-					}),
-					signal: this.budget.signal
-				});
-				if (!response.ok) throw await cloudflareApiError(response);
-				const payload = await response.json();
-				if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
-				const account = payload.data?.viewer?.accounts?.[0];
-				const requestGroups = account?.byRequests ?? [];
-				const cpuGroups = account?.byCpu ?? [];
-				for (const group of requestGroups) {
-					if (group.sum.requests === void 0 || !group.dimensions.scriptName) continue;
-					const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "requests", "requests", group.sum.requests, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
-					samples.set(`${group.dimensions.scriptName}:requests`, value);
-				}
-				for (const group of cpuGroups) {
-					if (group.sum.cpuTimeUs === void 0 || !group.dimensions.scriptName) continue;
-					const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "cpu_ms", "milliseconds", group.sum.cpuTimeUs / 1e3, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
-					samples.set(`${group.dimensions.scriptName}:cpu_ms`, value);
-				}
-				const lastRequest = requestGroups.at(-1)?.dimensions.scriptName;
-				const lastCpu = cpuGroups.at(-1)?.dimensions.scriptName;
-				if (lastRequest) cursors.requests = lastRequest;
-				if (lastCpu) cursors.cpu = lastCpu;
-				more.requests = requestGroups.length === pageSize;
-				more.cpu = cpuGroups.length === pageSize;
-				pages += 1;
+			this.budget.charge("apiCalls");
+			this.ledgerBudget?.charge("pagesPerDataset");
+			this.ledgerBudget?.charge("graphqlQueries", 2);
+			const response = await fetch(`${API$2}/graphql`, {
+				method: "POST",
+				headers: authHeaders(await this.token()),
+				body: JSON.stringify({
+					query,
+					variables: {
+						account: this.env.BROLLY_ACCOUNT_ID,
+						since: new Date(since).toISOString(),
+						until: new Date(until).toISOString()
+					}
+				}),
+				signal: this.budget.signal
+			});
+			if (!response.ok) throw await cloudflareApiError(response);
+			const payload = await response.json();
+			if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
+			const account = payload.data?.viewer?.accounts?.[0];
+			const requestGroups = account?.byRequests ?? [];
+			const cpuGroups = account?.byCpu ?? [];
+			const samples = /* @__PURE__ */ new Map();
+			for (const group of requestGroups) {
+				if (group.sum.requests === void 0 || !group.dimensions.scriptName) continue;
+				const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "requests", "requests", group.sum.requests, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
+				samples.set(`${group.dimensions.scriptName}:requests`, value);
 			}
-			const complete = !more.requests && !more.cpu;
-			const detail = complete ? void 0 : `Worker keyset pagination paused after ${pages} pages; the continuation is persisted`;
+			for (const group of cpuGroups) {
+				if (group.sum.cpuTimeUs === void 0 || !group.dimensions.scriptName) continue;
+				const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "cpu_ms", "milliseconds", group.sum.cpuTimeUs / 1e3, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
+				samples.set(`${group.dimensions.scriptName}:cpu_ms`, value);
+			}
+			const requestTruncated = requestGroups.length === pageSize;
+			const cpuTruncated = cpuGroups.length === pageSize;
+			const complete = !requestTruncated && !cpuTruncated;
+			const detail = complete ? void 0 : "Workers Analytics reached its bounded 10,000-script ranking; high consumers are included but complete enumeration is unavailable";
 			const result = [...samples.values()];
 			this.budget.charge("samples", result.length);
 			return {
 				samples: result,
 				coverage: [...coverageForMetrics("workers", ["requests", "cpu_ms"], complete ? "healthy" : "delayed", detail, "resource"), ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource")],
 				continuation: complete ? null : {
-					...more.requests ? { requests: cursors.requests } : {},
-					...more.cpu ? { cpu: cursors.cpu } : {}
+					...requestTruncated ? { requests: "" } : {},
+					...cpuTruncated ? { cpu: "" } : {}
 				},
 				complete,
-				pages,
+				pages: 1,
 				watermarkAt: until
 			};
 		} catch (error) {
-			const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
 			return {
-				samples: [...samples.values()],
+				samples: [],
 				coverage: coverageForMetrics("workers", [
 					"requests",
 					"cpu_ms",
 					"cache_requests"
-				], state, error instanceof Error ? error.message : String(error), "resource"),
+				], error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable", error instanceof Error ? error.message : String(error), "resource"),
 				continuation: {
-					...more.requests ? { requests: cursors.requests } : {},
-					...more.cpu ? { cpu: cursors.cpu } : {}
+					requests: "",
+					cpu: ""
 				},
 				complete: false,
-				pages,
+				pages: 0,
 				watermarkAt: until
 			};
 		}
@@ -2344,63 +2123,6 @@ function unwrapRows(value) {
 		"items"
 	]) if (Array.isArray(object[key])) return object[key];
 	return [];
-}
-function addDurableObjectGroup(samples, accountId, source, group, since, until) {
-	const [name, unit, rawValue] = source === "requests" ? group.dimensions.type === "hibernation" ? [
-		"incoming_websocket_messages",
-		"count",
-		group.sum.requests
-	] : [
-		"requests",
-		"requests",
-		group.sum.requests
-	] : source === "duration" ? [
-		"duration_gb_seconds",
-		"gb_seconds",
-		group.sum.duration
-	] : source === "websocket" ? [
-		"incoming_websocket_messages",
-		"count",
-		group.sum.inboundWebsocketMsgCount
-	] : source === "rowsRead" ? [
-		"rows_read",
-		"rows",
-		group.sum.rowsRead
-	] : source === "rowsWritten" ? [
-		"rows_written",
-		"rows",
-		group.sum.rowsWritten
-	] : source === "storageReads" ? [
-		"kv_read_units",
-		"count",
-		group.sum.storageReadUnits
-	] : source === "storageWrites" ? [
-		"kv_write_units",
-		"count",
-		group.sum.storageWriteUnits
-	] : [
-		"kv_delete_requests",
-		"requests",
-		group.sum.storageDeletes
-	];
-	if (rawValue === void 0 || !group.dimensions.objectId) return;
-	const asset = {
-		accountId,
-		family: "durable_objects",
-		id: group.dimensions.objectId,
-		parentId: group.dimensions.namespaceId,
-		scope: "object",
-		tier: "unclassified"
-	};
-	const key = `${asset.parentId}:${asset.id}:${name}`;
-	const next = metric(asset, name, unit, rawValue, since, until, false);
-	const existing = samples.get(key);
-	if (!existing) {
-		samples.set(key, next);
-		return;
-	}
-	existing.value += next.value;
-	existing.estimatedCostUsd = (existing.estimatedCostUsd ?? 0) + (next.estimatedCostUsd ?? 0);
 }
 function metric(asset, name, unit, value, start, end, sampled) {
 	const unitPrice = name === "rows_read" ? .001 / 1e6 : name === "rows_written" ? 1 / 1e6 : name === "requests" ? .15 / 1e6 : name === "duration_gb_seconds" ? 12.5 / 1e6 : name === "incoming_websocket_messages" ? .15 / 1e6 / 20 : name === "kv_read_units" ? .2 / 1e6 : name === "kv_write_units" || name === "kv_delete_requests" ? 1 / 1e6 : 0;
@@ -4327,10 +4049,7 @@ async function ingestWindow(options) {
 		};
 	}
 	const definition = productUsageDefinition(options.collector);
-	const result = options.collector === "graphql:durable-objects" ? await options.client.durableObjectUsagePaged(options.startsAt, options.endsAt, {
-		cursor: options.cursor,
-		maxPages: options.maxPages
-	}) : options.collector === "graphql:workers" ? await options.client.workerUsage(options.startsAt, options.endsAt, {
+	const result = options.collector === "graphql:durable-objects" ? await boundedDurableObjectUsage(options.client, options.startsAt, options.endsAt) : options.collector === "graphql:workers" ? await options.client.workerUsage(options.startsAt, options.endsAt, {
 		cursor: options.cursor,
 		maxPages: options.maxPages
 	}) : definition ? await options.client.productUsage(definition, options.startsAt, options.endsAt) : unreachableCollector(options.collector);
@@ -4348,6 +4067,17 @@ async function ingestWindow(options) {
 		changes,
 		watermarkAt: result.watermarkAt,
 		normalizedObservations: observations
+	};
+}
+async function boundedDurableObjectUsage(client, startsAt, endsAt) {
+	const result = await client.durableObjectUsage(startsAt, endsAt, { limit: 1e4 });
+	const complete = result.coverage.every((item) => item.state === "healthy");
+	return {
+		...result,
+		continuation: complete ? null : {},
+		complete,
+		pages: 1,
+		watermarkAt: endsAt
 	};
 }
 function unreachableCollector(collector) {
@@ -5192,19 +4922,18 @@ function parseUnknownRecord(value) {
 //#endregion
 //#region src/retention.ts
 async function runRetentionMaintenance(db, accountId, budget, now = Date.now(), timeZone = "UTC") {
-	const [capacitySetting, pageCountRow, pageSizeRow, rowEstimate] = await Promise.all([
+	const [capacitySetting, pageMetrics, rowEstimate] = await Promise.all([
 		db.prepare(`SELECT value FROM settings WHERE key='d1_capacity_bytes' LIMIT 1`).first(),
-		db.prepare(`PRAGMA page_count`).first(),
-		db.prepare(`PRAGMA page_size`).first(),
+		d1PageMetrics(db),
 		db.prepare(`SELECT COUNT(*) AS rows,AVG(length(u.metrics_json)+length(u.sampling_json)+192) AS average_bytes
        FROM usage_daily u JOIN resources r ON r.id=u.resource_id
        WHERE r.account_id=?1 AND r.resource_type NOT IN ('account','product')
          AND r.resource_type NOT LIKE '%:namespace'`).bind(accountId).first()
 	]);
 	budget?.charge("d1RowsRead", 4 + Number(rowEstimate?.rows ?? 0));
-	const usedBytes = (firstNumber(pageCountRow) ?? 0) * (firstNumber(pageSizeRow) ?? 4096);
+	const usedBytes = pageMetrics ? pageMetrics.pageCount * pageMetrics.pageSize : null;
 	const capacityBytes = positiveNumber(capacitySetting?.value) ?? 5e8;
-	const decision = capacityDecision(usedBytes, capacityBytes);
+	const decision = usedBytes === null ? null : capacityDecision(usedBytes, capacityBytes);
 	const today = localDayAt(now, timeZone);
 	const retentionCutoff = localDayAt(now - 63072e6, timeZone);
 	let prunedRows = 0;
@@ -5217,11 +4946,11 @@ async function runRetentionMaintenance(db, accountId, budget, now = Date.now(), 
          ORDER BY local_day ASC LIMIT 500
        )`).bind(localDayAt(now - 2592e5, timeZone))]);
 	for (const result of routine) chargeMeta(budget, result.meta);
-	if (decision.pauseBackfill) chargeMeta(budget, (await db.prepare(`UPDATE backfill_jobs SET status='paused',paused_reason='d1_capacity',updated_at=?1
+	if (decision?.pauseBackfill) chargeMeta(budget, (await db.prepare(`UPDATE backfill_jobs SET status='paused',paused_reason='d1_capacity',updated_at=?1
        WHERE account_id=?2 AND status IN ('pending','running')`).bind(now, accountId).run()).meta);
-	else chargeMeta(budget, (await db.prepare(`UPDATE backfill_jobs SET status='pending',paused_reason=NULL,updated_at=?1
+	else if (decision) chargeMeta(budget, (await db.prepare(`UPDATE backfill_jobs SET status='pending',paused_reason=NULL,updated_at=?1
        WHERE account_id=?2 AND status='paused' AND paused_reason='d1_capacity'`).bind(now, accountId).run()).meta);
-	if (decision.pruneIndividualHistory) {
+	if (decision?.pruneIndividualHistory && usedBytes !== null) {
 		const averageBytes = Math.max(256, Number(rowEstimate?.average_bytes ?? 512));
 		const needed = Math.ceil((usedBytes - decision.targetBytes) / averageBytes);
 		const limit = Math.min(2e4, Math.max(1, needed));
@@ -5245,7 +4974,7 @@ async function runRetentionMaintenance(db, accountId, budget, now = Date.now(), 
      ON CONFLICT(account_id,local_day) DO UPDATE SET
        storage_bytes=excluded.storage_bytes,storage_capacity_bytes=excluded.storage_capacity_bytes,
        oldest_resource_day=excluded.oldest_resource_day,updated_at=excluded.updated_at`).bind(accountId, today, usedBytes, capacityBytes, oldestResourceDay, now).run()).meta);
-	if (decision.warn) {
+	if (decision?.warn) {
 		const warningKey = `capacity-warning:${today}`;
 		chargeMeta(budget, (await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
        SELECT ?1,'brolly-retention','d1.capacity.warning',?2,?3,?4
@@ -5257,15 +4986,34 @@ async function runRetentionMaintenance(db, accountId, budget, now = Date.now(), 
 			pressure: decision.pressure,
 			prunedRows
 		}), now).run()).meta);
+	} else if (!decision) {
+		const unavailableKey = `capacity-unavailable:${today}`;
+		chargeMeta(budget, (await db.prepare(`INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
+       SELECT ?1,'brolly-retention','d1.capacity.unavailable',?2,?3,?4
+       WHERE NOT EXISTS(
+         SELECT 1 FROM audit_log WHERE action='d1.capacity.unavailable' AND target=?2
+       )`).bind(crypto.randomUUID(), unavailableKey, JSON.stringify({ reason: "D1 page metrics are unavailable in this runtime" }), now).run()).meta);
 	}
 	return {
 		usedBytes,
 		capacityBytes,
-		pressure: decision.pressure,
-		backfillPaused: decision.pauseBackfill,
+		pressure: decision?.pressure ?? null,
+		backfillPaused: decision?.pauseBackfill ?? null,
 		prunedRows,
 		oldestResourceDay
 	};
+}
+async function d1PageMetrics(db) {
+	try {
+		const [pageCountRow, pageSizeRow] = await Promise.all([db.prepare(`PRAGMA page_count`).first(), db.prepare(`PRAGMA page_size`).first()]);
+		return {
+			pageCount: firstNumber(pageCountRow) ?? 0,
+			pageSize: firstNumber(pageSizeRow) ?? 4096
+		};
+	} catch (error) {
+		if (/not authorized|SQLITE_AUTH/i.test(error instanceof Error ? error.message : String(error))) return null;
+		throw error;
+	}
 }
 function firstNumber(row) {
 	if (!row) return null;
@@ -5440,8 +5188,7 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 		targetResourceId: rootId,
 		metricDefinitionId: "account:estimated_cost_usd",
 		limits: chartCost(policy.limits?.day?.account, policy.accountDailySpend),
-		levelEnabled: policy.limits?.day?.account?.costLevelEnabled,
-		enabled: policy.limits?.day?.account?.costEnabled,
+		enabled: policy.limits?.day?.account?.enabled,
 		levels,
 		now
 	});
@@ -5464,8 +5211,7 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 			targetResourceId: productId,
 			metricDefinitionId: `${family}:estimated_cost_usd`,
 			limits: chartCost(scope, limits),
-			levelEnabled: scope?.costLevelEnabled,
-			enabled: scope?.costEnabled,
+			enabled: scope?.enabled,
 			levels,
 			now
 		});
@@ -5486,8 +5232,7 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 			targetResourceId: row.id,
 			metricDefinitionId: `${parsed.family}:estimated_cost_usd`,
 			limits: chartCost(scope, limits),
-			levelEnabled: scope?.costLevelEnabled,
-			enabled: scope?.costEnabled,
+			enabled: scope?.enabled,
 			levels,
 			now
 		});
@@ -5515,8 +5260,8 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 					metricDefinitionId: `${target.family}:estimated_cost_usd`,
 					measurement: "estimated_cost",
 					period,
-					enabled: scope.costEnabled,
-					lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
+					enabled: scope.enabled,
+					lines: materializedSpendLines(scope.cost, levels),
 					now
 				});
 				ruleCount += 1;
@@ -5538,8 +5283,8 @@ async function migrateLegacyPolicyRules(db, accountId, policy, force = false) {
 					metricDefinitionId,
 					measurement: "usage",
 					period,
-					enabled: scope.usageEnabled?.[metricDefinitionId],
-					lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
+					enabled: scope.enabled,
+					lines: materializedSpendLines(limits, levels),
 					now
 				});
 				ruleCount += 1;
@@ -5586,7 +5331,7 @@ function addSpendRule(db, statements, input) {
 		measurement: "estimated_cost",
 		period: "day",
 		enabled: input.enabled,
-		lines: materializedSpendLines(input.limits, input.levels, input.levelEnabled)
+		lines: materializedSpendLines(input.limits, input.levels)
 	});
 }
 function addUsageRule(db, statements, accountId, family, threshold, levels, now) {
@@ -5644,14 +5389,14 @@ function retireRuleByKey(db, statements, accountId, legacyPolicyKey, now) {
        )`).bind(accountId, now, legacyPolicyKey), db.prepare(`UPDATE alert_rules SET enabled=0,retired=1,updated_at=?3
        WHERE account_id=?1 AND legacy_policy_key=?2`).bind(accountId, legacyPolicyKey, now));
 }
-function materializedSpendLines(limits, levels, levelEnabled) {
+function materializedSpendLines(limits, levels) {
 	return levels.flatMap((level, index) => finiteLimit(limits[level.id]) ? [{
 		levelId: level.id,
 		label: level.label,
 		color: levelColor(index, levels.length),
 		priority: level.position * 10,
 		value: limits[level.id],
-		enabled: levelEnabled?.[level.id] !== false
+		enabled: true
 	}] : []);
 }
 function finiteLimit(value) {
@@ -7658,7 +7403,7 @@ async function configureOnboardingBillingAccess(env, token) {
 	if (env.CLOUDFLARE_BILLING_TOKEN) throw new Error("Billing access is managed by the CLOUDFLARE_BILLING_TOKEN Worker secret. Replace that secret in Cloudflare instead of saving a second token in Brolly.");
 	if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
 	const budget = new RunBudget({
-		apiCalls: 1,
+		apiCalls: 6,
 		databaseRows: 10,
 		samples: 1e4,
 		wallMs: 1e4
@@ -7909,7 +7654,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "644adc2e7176089f8f410e437873a2cedf0ef8c1";
+var BROLLY_RELEASE = "2e069628fe0dfdcb35fb33b11a0fc7b126dd9947";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -8080,16 +7825,15 @@ var ESTIMATED_BILLABLE_GROSS_RATES = {
 	"durable_objects:kv_delete_requests": 1 / 1e6
 };
 /**
-* Derive the daily cost attributable to usage above each metric's included
-* quantity. The included quantity is tracked independently for every metric
-* and reset at every billing-cycle boundary.
-*
-* `paid` and `unknown` use the regular paid-plan baseline. Free and Enterprise
-* plans have no supported list-rate estimate, so they return an empty series.
-* Authoritative billing costs remain the caller's responsibility.
+* The same estimate split by billed meter for usage-chart tooltips. Every
+* metric series contains one point per input day, including zero-cost days,
+* so clients can align it with usage without repeating pricing logic.
 */
-function estimatedBillableCostSeries(points, cycles, allotments, planTier) {
-	if (planTier !== "paid" && planTier !== "unknown") return [];
+function estimatedBillableCostBreakdownSeries(points, cycles, allotments, planTier) {
+	if (planTier !== "paid" && planTier !== "unknown") return {
+		total: [],
+		byMetric: {}
+	};
 	const includedByMetric = /* @__PURE__ */ new Map();
 	for (const allotment of allotments) if (Number.isFinite(allotment.includedPerCycle) && allotment.includedPerCycle >= 0) includedByMetric.set(allotment.metricId, allotment.includedPerCycle);
 	const orderedCycles = cycles.map((cycle, index) => ({
@@ -8101,32 +7845,50 @@ function estimatedBillableCostSeries(points, cycles, allotments, planTier) {
 		index
 	})).sort((left, right) => left.point.day.localeCompare(right.point.day) || left.index - right.index);
 	const cycleUsage = /* @__PURE__ */ new Map();
-	return orderedPoints.map(({ point }) => {
-		const cycle = cycleForDay(orderedCycles, point.day);
-		if (!cycle) return {
-			day: point.day,
-			costUsd: 0
-		};
-		const usageByMetric = cycleUsage.get(cycle.index) ?? /* @__PURE__ */ new Map();
-		cycleUsage.set(cycle.index, usageByMetric);
-		let costUsd = 0;
-		for (const [metricId, rawValue] of Object.entries(foldBilledVia(point.metrics))) {
-			const included = includedByMetric.get(metricId);
-			const grossRate = ESTIMATED_BILLABLE_GROSS_RATES[metricId];
-			if (included === void 0 || grossRate === void 0) continue;
-			const value = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
-			const previousUsage = usageByMetric.get(metricId) ?? 0;
-			const currentUsage = previousUsage + value;
-			const previousBillable = Math.max(0, previousUsage - included);
-			const currentBillable = Math.max(0, currentUsage - included);
-			costUsd += (currentBillable - previousBillable) * grossRate;
-			usageByMetric.set(metricId, currentUsage);
-		}
-		return {
-			day: point.day,
-			costUsd
-		};
-	});
+	const presentMetricIds = new Set(orderedPoints.flatMap(({ point }) => Object.keys(foldBilledVia(point.metrics))));
+	const pricedMetricIds = [...includedByMetric.keys()].filter((metricId) => presentMetricIds.has(metricId) && ESTIMATED_BILLABLE_GROSS_RATES[metricId] !== void 0);
+	const byMetric = Object.fromEntries(pricedMetricIds.map((metricId) => [metricId, []]));
+	return {
+		total: orderedPoints.map(({ point }) => {
+			const cycle = cycleForDay(orderedCycles, point.day);
+			const costByMetric = Object.fromEntries(pricedMetricIds.map((metricId) => [metricId, 0]));
+			if (!cycle) {
+				for (const metricId of pricedMetricIds) byMetric[metricId].push({
+					day: point.day,
+					costUsd: 0
+				});
+				return {
+					day: point.day,
+					costUsd: 0
+				};
+			}
+			const usageByMetric = cycleUsage.get(cycle.index) ?? /* @__PURE__ */ new Map();
+			cycleUsage.set(cycle.index, usageByMetric);
+			let costUsd = 0;
+			for (const [metricId, rawValue] of Object.entries(foldBilledVia(point.metrics))) {
+				const included = includedByMetric.get(metricId);
+				const grossRate = ESTIMATED_BILLABLE_GROSS_RATES[metricId];
+				if (included === void 0 || grossRate === void 0) continue;
+				const value = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
+				const previousUsage = usageByMetric.get(metricId) ?? 0;
+				const currentUsage = previousUsage + value;
+				const previousBillable = Math.max(0, previousUsage - included);
+				const metricCostUsd = (Math.max(0, currentUsage - included) - previousBillable) * grossRate;
+				costUsd += metricCostUsd;
+				costByMetric[metricId] = metricCostUsd;
+				usageByMetric.set(metricId, currentUsage);
+			}
+			for (const metricId of pricedMetricIds) byMetric[metricId].push({
+				day: point.day,
+				costUsd: costByMetric[metricId] ?? 0
+			});
+			return {
+				day: point.day,
+				costUsd
+			};
+		}),
+		byMetric
+	};
 }
 /**
 * Fold metrics that bill into another meter (see BILLED_VIA) into that
@@ -8232,7 +7994,10 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		endsAt: cycle.ends_at,
 		approximate: cycle.approximate === 1
 	}));
-	const billableCost = scope === "account" || family ? estimatedBillableCostSeries(series, cycleRows, scope === "account" ? includedAllotments : familyAllotments, planState.planTier) : [];
+	const billableCost = scope === "account" || family ? estimatedBillableCostBreakdownSeries(series, cycleRows, scope === "account" ? includedAllotments : familyAllotments, planState.planTier) : {
+		total: [],
+		byMetric: {}
+	};
 	const body = {
 		scope,
 		resourceId: id,
@@ -8240,7 +8005,8 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		today,
 		metrics,
 		series,
-		estimatedBillableCostSeries: billableCost,
+		estimatedBillableCostSeries: billableCost.total,
+		estimatedBillableCostByMetric: billableCost.byMetric,
 		cycles: cycleRows,
 		includedQuotaCatalogVersion: INCLUDED_QUOTA_CATALOG_VERSION,
 		planTier: planState.planTier,
@@ -9941,15 +9707,11 @@ function validPolicy(policy, requireEveryFamily = false, levelIds = [
 	if (policy.limits) {
 		if (!policy.limits.day || !policy.limits.cycle) return false;
 		const validOptionalSpend = (spend) => !spend || Object.keys(spend).length === 0 || validSpend(spend);
-		const validBooleanMap = (values) => !values || Object.values(values).every((value) => typeof value === "boolean");
 		for (const scopes of [policy.limits.day, policy.limits.cycle]) {
 			if (!scopes || typeof scopes !== "object") return false;
 			for (const scope of Object.values(scopes)) {
 				if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some((value) => !validOptionalSpend(value))) return false;
-				if (scope.costEnabled !== void 0 && typeof scope.costEnabled !== "boolean") return false;
 				if (scope.enabled !== void 0 && typeof scope.enabled !== "boolean") return false;
-				if (!validBooleanMap(scope.usageEnabled) || !validBooleanMap(scope.costLevelEnabled)) return false;
-				if (scope.usageLevelEnabled && Object.values(scope.usageLevelEnabled).some((value) => !validBooleanMap(value))) return false;
 			}
 		}
 	}
