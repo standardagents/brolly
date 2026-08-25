@@ -270,11 +270,12 @@ export class CloudflareClient {
     }
   }
 
-  async durableObjectUsage(since: number, until: number): Promise<{ samples: MetricSample[]; coverage: CoverageResult[] }> {
+  async durableObjectUsage(since: number, until: number, options: { limit?: number } = {}): Promise<{ samples: MetricSample[]; coverage: CoverageResult[] }> {
+    const limit = Math.max(1, Math.min(options.limit ?? 1_000, 10_000));
     const query = `query BrollyDurableObjects($account: String!, $since: Time!, $until: Time!) {
       viewer { accounts(filter: { accountTag: $account }) {
         byRowsRead: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_rowsRead_DESC]
         ) {
@@ -282,7 +283,7 @@ export class CloudflareClient {
           sum { rowsRead rowsWritten }
         }
         byRowsWritten: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_rowsWritten_DESC]
         ) {
@@ -290,7 +291,7 @@ export class CloudflareClient {
           sum { rowsRead rowsWritten }
         }
         byRequests: durableObjectsInvocationsAdaptiveGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_requests_DESC]
         ) {
@@ -298,7 +299,7 @@ export class CloudflareClient {
           sum { requests }
         }
         byDuration: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_duration_DESC]
         ) {
@@ -306,7 +307,7 @@ export class CloudflareClient {
           sum { duration }
         }
         byIncomingWebsocketMessages: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_inboundWebsocketMsgCount_DESC]
         ) {
@@ -314,7 +315,7 @@ export class CloudflareClient {
           sum { inboundWebsocketMsgCount }
         }
         byStorageReadUnits: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageReadUnits_DESC]
         ) {
@@ -322,7 +323,7 @@ export class CloudflareClient {
           sum { storageReadUnits }
         }
         byStorageWriteUnits: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageWriteUnits_DESC]
         ) {
@@ -330,7 +331,7 @@ export class CloudflareClient {
           sum { storageWriteUnits }
         }
         byStorageDeletes: durableObjectsPeriodicGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [sum_storageDeletes_DESC]
         ) {
@@ -338,7 +339,7 @@ export class CloudflareClient {
           sum { storageDeletes }
         }
         sqlStorage: durableObjectsSqlStorageGroups(
-          limit: 1000
+          limit: ${limit}
           filter: { datetime_geq: $since, datetime_lt: $until }
           orderBy: [max_storedBytes_DESC]
         ) {
@@ -356,6 +357,8 @@ export class CloudflareClient {
     }`;
     try {
       this.budget.charge("apiCalls");
+      this.ledgerBudget?.charge("pagesPerDataset");
+      this.ledgerBudget?.charge("graphqlQueries", 10);
       const response = await fetch(`${API}/graphql`, {
         method: "POST",
         headers: authHeaders(await this.token()),
@@ -403,7 +406,7 @@ export class CloudflareClient {
         account?.byStorageWriteUnits ?? [],
         account?.byStorageDeletes ?? [],
       ];
-      const truncated = lists.some(list => list.length >= 1000);
+      const truncated = lists.some(list => list.length >= limit);
       const operationDefinitions = [
         [account?.byDuration ?? [], "duration_gb_seconds", "gb_seconds", (group: Group) => group.sum.duration],
         [account?.byIncomingWebsocketMessages ?? [], "incoming_websocket_messages", "count", (group: Group) => group.sum.inboundWebsocketMsgCount],
@@ -486,10 +489,10 @@ export class CloudflareClient {
         coverage: [
           ...coverageForMetrics(
             "durable_objects", operationMetrics, truncated ? "delayed" : "healthy",
-            truncated ? "Per-metric top-1000 response was truncated; high consumers are included but the long tail is not enumerable" : undefined,
+            truncated ? `Per-metric top-${limit} response was truncated; high consumers are included but the long tail is not enumerable` : undefined,
             "object",
           ),
-          ...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (account?.sqlStorage?.length ?? 0) >= 1000 ? "delayed" : "healthy", undefined, "namespace"),
+          ...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (account?.sqlStorage?.length ?? 0) >= limit ? "delayed" : "healthy", undefined, "namespace"),
           ...coverageForMetrics("durable_objects", ["kv_storage_bytes"], "healthy", undefined, "account"),
         ],
       };
@@ -507,251 +510,69 @@ export class CloudflareClient {
     }
   }
 
-  async durableObjectUsagePaged(
-    since: number,
-    until: number,
-    options: { cursor?: DurableObjectUsageCursor; maxPages?: number; expectedActiveObjects?: number } = {},
-  ): Promise<DurableObjectUsageResult> {
-    const pageSize = 10_000;
-    const maxPages = Math.max(1, Math.min(options.maxPages ?? 30, 30));
-    const query = `query BrollyDurableObjectLedger(
-      $account: String!, $since: Time!, $until: Time!,
-      $requestsCursor: String!, $durationCursor: String!, $websocketCursor: String!,
-      $rowsReadCursor: String!, $rowsWrittenCursor: String!,
-      $storageReadsCursor: String!, $storageWritesCursor: String!, $storageDeletesCursor: String!,
-      $requestsMore: Boolean!, $durationMore: Boolean!, $websocketMore: Boolean!,
-      $rowsReadMore: Boolean!, $rowsWrittenMore: Boolean!,
-      $storageReadsMore: Boolean!, $storageWritesMore: Boolean!, $storageDeletesMore: Boolean!,
-      $firstPage: Boolean!
-    ) {
-      viewer { accounts(filter: { accountTag: $account }) {
-        requests: durableObjectsInvocationsAdaptiveGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $requestsCursor }
-        ) @include(if: $requestsMore) { dimensions { namespaceId objectId type } sum { requests } }
-        duration: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $durationCursor }
-        ) @include(if: $durationMore) { dimensions { namespaceId objectId } sum { duration } }
-        websocket: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $websocketCursor }
-        ) @include(if: $websocketMore) { dimensions { namespaceId objectId } sum { inboundWebsocketMsgCount } }
-        rowsRead: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $rowsReadCursor }
-        ) @include(if: $rowsReadMore) { dimensions { namespaceId objectId } sum { rowsRead } }
-        rowsWritten: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $rowsWrittenCursor }
-        ) @include(if: $rowsWrittenMore) { dimensions { namespaceId objectId } sum { rowsWritten } }
-        storageReads: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageReadsCursor }
-        ) @include(if: $storageReadsMore) { dimensions { namespaceId objectId } sum { storageReadUnits } }
-        storageWrites: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageWritesCursor }
-        ) @include(if: $storageWritesMore) { dimensions { namespaceId objectId } sum { storageWriteUnits } }
-        storageDeletes: durableObjectsPeriodicGroups(
-          limit: 10000, orderBy: [dimensions_objectId_ASC],
-          filter: { datetime_geq: $since, datetime_lt: $until, objectId_gt: $storageDeletesCursor }
-        ) @include(if: $storageDeletesMore) { dimensions { namespaceId objectId } sum { storageDeletes } }
-        sqlStorage: durableObjectsSqlStorageGroups(
-          limit: 10000, filter: { datetime_geq: $since, datetime_lt: $until }, orderBy: [dimensions_namespaceId_ASC]
-        ) @include(if: $firstPage) { dimensions { namespaceId } max { storedBytes } }
-        kvStorage: durableObjectsStorageGroups(
-          limit: 1, filter: { datetime_geq: $since, datetime_lt: $until }, orderBy: [max_storedBytes_DESC]
-        ) @include(if: $firstPage) { max { storedBytes } }
-      } }
-    }`;
-    type Group = {
-      dimensions: { namespaceId: string; objectId: string; type?: string };
-      sum: {
-        requests?: number; duration?: number; inboundWebsocketMsgCount?: number; rowsRead?: number;
-        rowsWritten?: number; storageReadUnits?: number; storageWriteUnits?: number; storageDeletes?: number;
-      };
-    };
-    type Account = {
-      requests?: Group[]; duration?: Group[]; websocket?: Group[]; rowsRead?: Group[]; rowsWritten?: Group[];
-      storageReads?: Group[]; storageWrites?: Group[]; storageDeletes?: Group[];
-      sqlStorage?: Array<{ dimensions: { namespaceId: string }; max: { storedBytes?: number } }>;
-      kvStorage?: Array<{ max: { storedBytes?: number } }>;
-    };
-    const names = ["requests", "duration", "websocket", "rowsRead", "rowsWritten", "storageReads", "storageWrites", "storageDeletes"] as const;
-    const cursors: Required<DurableObjectUsageCursor> = {
-      requests: options.cursor?.requests ?? "", duration: options.cursor?.duration ?? "",
-      websocket: options.cursor?.websocket ?? "", rowsRead: options.cursor?.rowsRead ?? "",
-      rowsWritten: options.cursor?.rowsWritten ?? "", storageReads: options.cursor?.storageReads ?? "",
-      storageWrites: options.cursor?.storageWrites ?? "", storageDeletes: options.cursor?.storageDeletes ?? "",
-    };
-    const more: Record<(typeof names)[number], boolean> = Object.fromEntries(names.map(name => [name, true])) as Record<(typeof names)[number], boolean>;
-    const seen = Object.fromEntries(names.map(name => [name, 0])) as Record<(typeof names)[number], number>;
-    const samples = new Map<string, MetricSample>();
-    let pages = 0;
-    let sqlStorage: Account["sqlStorage"] = [];
-    let kvStorage: Account["kvStorage"] = [];
-    try {
-      while (pages < maxPages && names.some(name => more[name])) {
-        this.budget.charge("apiCalls");
-        this.ledgerBudget?.charge("pagesPerDataset");
-        this.ledgerBudget?.charge("graphqlQueries", names.filter(name => more[name]).length + (pages === 0 ? 2 : 0));
-        const variables = {
-          account: this.env.BROLLY_ACCOUNT_ID,
-          since: new Date(since).toISOString(), until: new Date(until).toISOString(),
-          ...Object.fromEntries(names.flatMap(name => [[`${name}Cursor`, cursors[name]], [`${name}More`, more[name]]])),
-          firstPage: pages === 0,
-        };
-        const response = await fetch(`${API}/graphql`, {
-          method: "POST", headers: authHeaders(await this.token()), body: JSON.stringify({ query, variables }),
-          signal: this.budget.signal,
-        });
-        if (!response.ok) throw await cloudflareApiError(response);
-        const payload = await response.json() as { data?: { viewer?: { accounts?: Account[] } }; errors?: Array<{ message: string }> };
-        if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
-        const account = payload.data?.viewer?.accounts?.[0] ?? {};
-        if (pages === 0) {
-          sqlStorage = account.sqlStorage ?? [];
-          kvStorage = account.kvStorage ?? [];
-        }
-        for (const name of names) {
-          if (!more[name]) continue;
-          const groups = account[name] ?? [];
-          seen[name] += groups.length;
-          for (const group of groups) addDurableObjectGroup(samples, this.env.BROLLY_ACCOUNT_ID, name, group, since, until);
-          const lastId = groups.at(-1)?.dimensions.objectId;
-          if (lastId) cursors[name] = lastId;
-          more[name] = groups.length === pageSize
-            && (!options.expectedActiveObjects || seen[name] < options.expectedActiveObjects);
-        }
-        pages += 1;
-      }
-      for (const group of sqlStorage ?? []) {
-        if (group.max.storedBytes === undefined) continue;
-        const asset: AssetRef = {
-          accountId: this.env.BROLLY_ACCOUNT_ID, family: "durable_objects", id: group.dimensions.namespaceId,
-          scope: "namespace", tier: "unclassified",
-        };
-        samples.set(`${asset.id}:sql_storage_bytes`, metric(asset, "sql_storage_bytes", "bytes", group.max.storedBytes, since, until, false));
-      }
-      if ((kvStorage?.length ?? 0) > 0) {
-        const value = Math.max(0, ...(kvStorage ?? []).map(group => group.max.storedBytes ?? 0));
-        const asset: AssetRef = {
-          accountId: this.env.BROLLY_ACCOUNT_ID, family: "durable_objects", id: "legacy-kv-storage",
-          name: "Legacy key-value Durable Object storage", scope: "account", tier: "control_plane",
-        };
-        samples.set(`${asset.id}:kv_storage_bytes`, metric(asset, "kv_storage_bytes", "bytes", value, since, until, false));
-      }
-      const complete = !names.some(name => more[name]);
-      const detail = complete ? undefined : `Durable Object keyset pagination paused after ${pages} pages; the continuation is persisted`;
-      const result = [...samples.values()];
-      this.budget.charge("samples", result.length);
-      return {
-        samples: result,
-        coverage: [
-          ...coverageForMetrics("durable_objects", ["requests", "duration_gb_seconds", "incoming_websocket_messages", "rows_read", "rows_written", "kv_read_units", "kv_write_units", "kv_delete_requests"], complete ? "healthy" : "delayed", detail, "object"),
-          ...coverageForMetrics("durable_objects", ["sql_storage_bytes"], (sqlStorage?.length ?? 0) >= pageSize ? "delayed" : "healthy", undefined, "namespace"),
-          ...coverageForMetrics("durable_objects", ["kv_storage_bytes"], "healthy", undefined, "account"),
-        ],
-        continuation: complete ? null : Object.fromEntries(names.filter(name => more[name]).map(name => [name, cursors[name]])),
-        complete, pages, watermarkAt: until,
-      };
-    } catch (error) {
-      const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        samples: [...samples.values()],
-        coverage: coverageForMetrics("durable_objects", ["requests", "duration_gb_seconds", "incoming_websocket_messages", "rows_read", "rows_written", "kv_read_units", "kv_write_units", "kv_delete_requests", "sql_storage_bytes", "kv_storage_bytes"], state, detail, "object"),
-        continuation: Object.fromEntries(names.filter(name => more[name]).map(name => [name, cursors[name]])),
-        complete: false, pages, watermarkAt: until,
-      };
-    }
-  }
-
   async workerUsage(
     since: number,
     until: number,
     options: { cursor?: WorkerUsageCursor; maxPages?: number } = {},
   ): Promise<WorkerUsageResult> {
     const pageSize = 10_000;
-    const maxPages = Math.max(1, Math.min(options.maxPages ?? 10, 30));
-    const query = `query BrollyWorkers(
-      $account: String!, $since: Time!, $until: Time!,
-      $requestsCursor: String!, $cpuCursor: String!,
-      $requestsMore: Boolean!, $cpuMore: Boolean!
-    ) {
+    const query = `query BrollyWorkers($account: String!, $since: Time!, $until: Time!) {
       viewer { accounts(filter: { accountTag: $account }) {
         byRequests: workersInvocationsAdaptive(
-          limit: 10000
-          filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0, scriptName_gt: $requestsCursor }
-          orderBy: [dimensions_scriptName_ASC]
-        ) @include(if: $requestsMore) {
-          dimensions { scriptName }
-          sum { requests }
-        }
+        limit: 10000
+        filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0 }
+        orderBy: [sum_requests_DESC]
+      ) { dimensions { scriptName } sum { requests } }
         byCpu: workersInvocationsAdaptive(
-          limit: 10000
-          filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0, scriptName_gt: $cpuCursor }
-          orderBy: [dimensions_scriptName_ASC]
-        ) @include(if: $cpuMore) {
-          dimensions { scriptName }
-          sum { cpuTimeUs }
-        }
+        limit: 10000
+        filter: { datetime_geq: $since, datetime_lt: $until, isPreview: 0 }
+        orderBy: [sum_cpuTimeUs_DESC]
+      ) { dimensions { scriptName } sum { cpuTimeUs } }
       } }
     }`;
-    const cursors = { requests: options.cursor?.requests ?? "", cpu: options.cursor?.cpu ?? "" };
-    const more = { requests: true, cpu: true };
-    const samples = new Map<string, MetricSample>();
-    let pages = 0;
+    // This beta dataset supports aggregate ordering but not directives or a
+    // script-name keyset order. Keep the two metric rankings independently
+    // bounded and report an explicit partial result if either reaches the cap.
+    void options;
     try {
-      while (pages < maxPages && (more.requests || more.cpu)) {
-        this.budget.charge("apiCalls");
-        this.ledgerBudget?.charge("pagesPerDataset");
-        this.ledgerBudget?.charge("graphqlQueries", Number(more.requests) + Number(more.cpu));
-        const response = await fetch(`${API}/graphql`, {
-          method: "POST",
-          headers: authHeaders(await this.token()),
-          body: JSON.stringify({
-            query,
-            variables: {
-              account: this.env.BROLLY_ACCOUNT_ID,
-              since: new Date(since).toISOString(),
-              until: new Date(until).toISOString(),
-              requestsCursor: cursors.requests,
-              cpuCursor: cursors.cpu,
-              requestsMore: more.requests,
-              cpuMore: more.cpu,
-            },
-          }),
-          signal: this.budget.signal,
-        });
-        if (!response.ok) throw await cloudflareApiError(response);
-        type Group = { dimensions: { scriptName: string }; sum: { requests?: number; cpuTimeUs?: number } };
-        const payload = await response.json() as { data?: { viewer?: { accounts?: Array<{ byRequests?: Group[]; byCpu?: Group[] }> } }; errors?: Array<{ message: string }> };
-        if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
-        const account = payload.data?.viewer?.accounts?.[0];
-        const requestGroups = account?.byRequests ?? [];
-        const cpuGroups = account?.byCpu ?? [];
-        for (const group of requestGroups) {
-          if (group.sum.requests === undefined || !group.dimensions.scriptName) continue;
-          const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "requests", "requests", group.sum.requests, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
-          samples.set(`${group.dimensions.scriptName}:requests`, value);
-        }
-        for (const group of cpuGroups) {
-          if (group.sum.cpuTimeUs === undefined || !group.dimensions.scriptName) continue;
-          const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "cpu_ms", "milliseconds", group.sum.cpuTimeUs / 1000, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
-          samples.set(`${group.dimensions.scriptName}:cpu_ms`, value);
-        }
-        const lastRequest = requestGroups.at(-1)?.dimensions.scriptName;
-        const lastCpu = cpuGroups.at(-1)?.dimensions.scriptName;
-        if (lastRequest) cursors.requests = lastRequest;
-        if (lastCpu) cursors.cpu = lastCpu;
-        more.requests = requestGroups.length === pageSize;
-        more.cpu = cpuGroups.length === pageSize;
-        pages += 1;
+      this.budget.charge("apiCalls");
+      this.ledgerBudget?.charge("pagesPerDataset");
+      this.ledgerBudget?.charge("graphqlQueries", 2);
+      const response = await fetch(`${API}/graphql`, {
+        method: "POST",
+        headers: authHeaders(await this.token()),
+        body: JSON.stringify({
+          query,
+          variables: {
+            account: this.env.BROLLY_ACCOUNT_ID,
+            since: new Date(since).toISOString(),
+            until: new Date(until).toISOString(),
+          },
+        }),
+        signal: this.budget.signal,
+      });
+      if (!response.ok) throw await cloudflareApiError(response);
+      type Group = { dimensions: { scriptName: string }; sum: { requests?: number; cpuTimeUs?: number } };
+      const payload = await response.json() as { data?: { viewer?: { accounts?: Array<{ byRequests?: Group[]; byCpu?: Group[] }> } }; errors?: Array<{ message: string }> };
+      if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
+      const account = payload.data?.viewer?.accounts?.[0];
+      const requestGroups = account?.byRequests ?? [];
+      const cpuGroups = account?.byCpu ?? [];
+      const samples = new Map<string, MetricSample>();
+      for (const group of requestGroups) {
+        if (group.sum.requests === undefined || !group.dimensions.scriptName) continue;
+        const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "requests", "requests", group.sum.requests, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
+        samples.set(`${group.dimensions.scriptName}:requests`, value);
       }
-      const complete = !more.requests && !more.cpu;
-      const detail = complete ? undefined : `Worker keyset pagination paused after ${pages} pages; the continuation is persisted`;
+      for (const group of cpuGroups) {
+        if (group.sum.cpuTimeUs === undefined || !group.dimensions.scriptName) continue;
+        const value = workerMetric(this.env.BROLLY_ACCOUNT_ID, group.dimensions.scriptName, "cpu_ms", "milliseconds", group.sum.cpuTimeUs / 1000, since, until, false, this.env.BROLLY_SELF_WORKER_NAME);
+        samples.set(`${group.dimensions.scriptName}:cpu_ms`, value);
+      }
+      const requestTruncated = requestGroups.length === pageSize;
+      const cpuTruncated = cpuGroups.length === pageSize;
+      const complete = !requestTruncated && !cpuTruncated;
+      const detail = complete ? undefined : "Workers Analytics reached its bounded 10,000-script ranking; high consumers are included but complete enumeration is unavailable";
       const result = [...samples.values()];
       this.budget.charge("samples", result.length);
       return {
@@ -760,22 +581,18 @@ export class CloudflareClient {
           ...coverageForMetrics("workers", ["requests", "cpu_ms"], complete ? "healthy" : "delayed", detail, "resource"),
           ...coverageForMetrics("workers", ["cache_requests"], "unavailable", "Brolly has the complete per-Worker data Cloudflare provides: requests and CPU time. Cloudflare reports cache charges only at the account level, so Brolly protects those costs with account and product limits instead of assigning them to individual Workers.", "resource"),
         ],
-        continuation: complete ? null : {
-          ...(more.requests ? { requests: cursors.requests } : {}),
-          ...(more.cpu ? { cpu: cursors.cpu } : {}),
-        },
+        continuation: complete ? null : { ...(requestTruncated ? { requests: "" } : {}), ...(cpuTruncated ? { cpu: "" } : {}) },
         complete,
-        pages,
+        pages: 1,
         watermarkAt: until,
       };
     } catch (error) {
       const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
       return {
-        samples: [...samples.values()],
+        samples: [],
         coverage: coverageForMetrics("workers", ["requests", "cpu_ms", "cache_requests"], state, error instanceof Error ? error.message : String(error), "resource"),
-        continuation: { ...(more.requests ? { requests: cursors.requests } : {}), ...(more.cpu ? { cpu: cursors.cpu } : {}) },
-        complete: false,
-        pages,
+        continuation: { requests: "", cpu: "" },
+        complete: false, pages: 0,
         watermarkAt: until,
       };
     }

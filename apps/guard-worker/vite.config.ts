@@ -16,11 +16,27 @@ export default defineConfig(({ command }) => {
   // absolute source paths, or jsxDEV helpers into the published deploy template.
   if (command === "build") process.env.NODE_ENV = "production";
 
+  const accountDevelopment = command === "serve" && process.env.BROLLY_ACCOUNT_DEV === "1";
+  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const allowedHosts = ["macbookserver.tail13bd39.ts.net", ".trycloudflare.com"];
+  const accountDevelopmentPort = Number(process.env.BROLLY_DEV_PORT);
+
   return {
     define: { __BROLLY_RELEASE__: JSON.stringify(release) },
-    plugins: [tailwindcss(), react(), cloudflare({ configPath: "../../wrangler.jsonc" })],
+    plugins: [tailwindcss(), react(), cloudflare({
+      configPath: "../../wrangler.jsonc",
+      persistState: accountDevelopment ? { path: path.join(repositoryRoot, ".wrangler/state/account-dev") } : undefined,
+      remoteBindings: accountDevelopment ? false : undefined,
+      tunnel: accountDevelopment ? { autoStart: true } : undefined,
+    })],
     build: { rollupOptions: { output: { assetFileNames: "assets/[name][extname]" } } },
-    server: { port: 5173, strictPort: true },
+    server: {
+      port: accountDevelopment && Number.isInteger(accountDevelopmentPort) && accountDevelopmentPort > 0 ? accountDevelopmentPort : 5173,
+      strictPort: true,
+      host: accountDevelopment ? process.env.BROLLY_DEV_HOST ?? "0.0.0.0" : undefined,
+      allowedHosts,
+    },
+    preview: { allowedHosts },
     ssr: { noExternal: ["@standardagents/brolly-core", "@standardagents/brolly-notifiers", "@standardagents/brolly-runtime"] },
   };
 });

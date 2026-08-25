@@ -95,7 +95,7 @@ export function AccessActions({ accountId, families, planTier = "unknown", busy,
       {(busy || result) && (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)] xl:items-start">
           <ServiceCoverageGrid families={families} monitored={monitoringDetected} capped={billingDetected} />
-          <UsageAccessResults result={result} checking={busy} revealed={revealed} billingUnavailable={billingUnavailable} onConnectBilling={onOpenBilling} />
+          <UsageAccessResults result={result} checking={busy} revealed={revealed} billingUnavailable={billingUnavailable} planTier={planTier} onConnectBilling={onOpenBilling} />
         </div>
       )}
 
@@ -123,7 +123,7 @@ export function AccessActions({ accountId, families, planTier = "unknown", busy,
 }
 
 export function GrantBillingAccessButton({ disabled = false, variant = "primary", onClick }: { disabled?: boolean; variant?: "primary" | "secondary"; onClick: () => void }) {
-  return <Button variant={variant} className="shrink-0" disabled={disabled} onClick={onClick}><Icon name="wallet" />Grant billing access</Button>;
+  return <Button variant={variant} className="shrink-0" data-billing-access-action disabled={disabled} onClick={onClick}><Icon name="wallet" />Grant billing access</Button>;
 }
 
 function BillingAccessSetup({ accountId, token, busy, error, onClose, onToken, onSubmit }: {
@@ -289,11 +289,12 @@ function useStaggeredReveal(checking: boolean, result: OnboardingBudgetEstimates
  * matter how long a detail line runs. The cards never unmount or re-animate
  * between the checking and resolved states.
  */
-function UsageAccessResults({ result, checking, revealed, billingUnavailable, onConnectBilling }: {
+function UsageAccessResults({ result, checking, revealed, billingUnavailable, planTier, onConnectBilling }: {
   result: OnboardingBudgetEstimates | null;
   checking: boolean;
   revealed: number;
   billingUnavailable: string;
+  planTier: PlanTier;
   onConnectBilling: () => void;
 }) {
   return (
@@ -303,6 +304,7 @@ function UsageAccessResults({ result, checking, revealed, billingUnavailable, on
         return (
           <article
             key={row.key}
+            data-access-capability={row.key}
             className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-panel border border-line bg-panel px-4 py-3">
             <span className="grid size-9 place-items-center rounded-lg bg-panel-soft text-muted"><Icon name={row.icon} className="size-5" /></span>
             <div className="min-w-0">
@@ -310,11 +312,13 @@ function UsageAccessResults({ result, checking, revealed, billingUnavailable, on
                 <strong className="text-sm leading-5">{row.label}</strong>
                 {row.key === "billing" && (
                   <InfoTip label="Why Brolly requests billing access">
-                    <p>Cloudflare keeps billing behind a separate token, and Brolly&apos;s access is <strong className="text-ink">read-only</strong>. Brolly reads your actual billable charges, reconciles spend against your invoice every hour, and triggers alerts and actions in real dollars. It cannot change your billing.</p>
+                    <p>Cloudflare keeps plan and billing information behind a separate token, and Brolly&apos;s access is <strong className="text-ink">read-only</strong>. Brolly identifies whether the account is Free, Paid, or Enterprise, reads actual billable charges, reconciles spend against your invoice every hour, and triggers alerts and actions in real dollars. It cannot change your billing.</p>
                   </InfoTip>
                 )}
               </div>
-              <span className="block text-xs leading-4 text-muted">{row.detail}</span>
+              <span className="block text-xs leading-4 text-muted" data-plan-tier-requirement={row.key === "billing" && planTier === "unknown" ? "true" : undefined}>
+                {row.key === "billing" && planTier === "unknown" ? "Identify this account's plan and monitor billable amounts." : row.detail}
+              </span>
             </div>
             {row.key === "billing" && billingUnavailable
               ? <span className="inline-flex min-h-7 items-center rounded-full border border-line bg-panel-soft px-2.5 text-xs font-semibold leading-none text-muted">{billingUnavailable}</span>

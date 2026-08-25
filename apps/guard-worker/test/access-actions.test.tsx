@@ -61,7 +61,18 @@ describe("step-one access actions", () => {
 
   it("keeps the billing action disabled until the check completes", async () => {
     await render(<ContinueFooter accessCheckComplete={false} billingConnected={false} busy={false} firstStep onContinue={() => {}} onOpenBilling={() => {}} />);
-    expect(button("Grant billing access").disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>("[data-billing-access-action]")?.disabled).toBe(true);
+  });
+
+  it("places the unknown-plan requirement with the billing capability", async () => {
+    vi.useFakeTimers();
+    await render(<AccessActions accountId="account" families={[]} planTier="unknown" busy={false} result={result} notice="" error="" token="test"
+      billingDialogOpen={false} onCloseBilling={() => {}} onOpenBilling={() => {}}
+      onVerify={() => {}} onVerified={() => {}} />);
+    await act(async () => vi.advanceTimersByTime(1_400));
+
+    const requirement = document.querySelector("[data-plan-tier-requirement]");
+    expect(requirement?.closest("[data-access-capability]")?.getAttribute("data-access-capability")).toBe("billing");
   });
 });
 
@@ -70,10 +81,4 @@ async function render(node: React.ReactNode): Promise<void> {
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => root!.render(node));
-}
-
-function button(label: string): HTMLButtonElement {
-  const found = [...document.querySelectorAll("button")].find(item => item.textContent?.includes(label));
-  if (!found) throw new Error(`Missing button ${label}`);
-  return found;
 }

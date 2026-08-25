@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { RuntimeAgentHandoff, RuntimeInstallGuide } from "../components/protection";
-import { ENTERPRISE_QUOTA_NOTICE, FREE_PLAN_NOTICE, UNKNOWN_PLAN_NOTICE, effectivePlanTier } from "../plan-tier";
+import { ENTERPRISE_QUOTA_NOTICE, FREE_PLAN_NOTICE, effectivePlanTier } from "../plan-tier";
 import type { OnboardingBudgetEstimates, OnboardingData } from "../types";
 import { AccessActions } from "./access";
 import { RuntimeIntegrationMap } from "./runtime";
@@ -38,7 +38,6 @@ export function AccessStep({ data, token, busy, result, notice, error, billingDi
     <StepIntro title="Confirm account access" />
     {tier === "free" && <PlanTierNotice>{FREE_PLAN_NOTICE}</PlanTierNotice>}
     {tier === "enterprise" && <PlanTierNotice>{ENTERPRISE_QUOTA_NOTICE}</PlanTierNotice>}
-    {tier === "unknown" && <PlanTierNotice>{UNKNOWN_PLAN_NOTICE}</PlanTierNotice>}
     <AccessActions accountId={data.accountId} families={data.families} planTier={tier} busy={busy} result={result} notice={notice} error={error} token={token} billingDialogOpen={billingDialogOpen} onCheckComplete={onCheckComplete} onCloseBilling={onCloseBilling} onOpenBilling={onOpenBilling} onVerify={onVerify} onVerified={onVerified} />
   </>;
 }

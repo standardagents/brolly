@@ -62,7 +62,11 @@ export async function configureOnboardingBillingAccess(env: Env, token: string):
   if (validationError) throw new Error(validationError);
   if (env.CLOUDFLARE_BILLING_TOKEN) throw new Error("Billing access is managed by the CLOUDFLARE_BILLING_TOKEN Worker secret. Replace that secret in Cloudflare instead of saving a second token in Brolly.");
   if (!env.BROLLY_CREDENTIAL_KEY) throw new Error("Brolly's credential-encryption key is unavailable");
-  const budget = new RunBudget({ apiCalls: 1, databaseRows: 10, samples: 10_000, wallMs: 10_000 });
+  // The production billing reader can use three bounded reads: probe the v2
+  // endpoint, fall back to PayGo, then align to the account's billing-cycle
+  // boundary. Each read permits one rate-limit retry, so six is the actual
+  // hard worst case for credential verification.
+  const budget = new RunBudget({ apiCalls: 6, databaseRows: 10, samples: 10_000, wallMs: 10_000 });
   const client = new CloudflareClient({ ...env, CLOUDFLARE_BILLING_TOKEN: normalized }, budget);
   const records = await client.billingUsage(Date.now() - 2 * DAY_MS, Date.now()).catch(error => {
     const detail = error instanceof Error ? error.message : String(error);

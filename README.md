@@ -108,8 +108,22 @@ five minutes before expiry and the rotated credentials remain encrypted in the
 installation's D1. If a login does not grant renewable access, Brolly rejects
 the connection immediately instead of failing after the first token expires.
 
-For local development, copy `dev.vars.example` to `.dev.vars` and generate the
-local-only credential key described in that file. Automatic provisioning is for
+For the real dashboard and onboarding flow against a Cloudflare account, run
+`pnpm dev`. The command creates a local-only credential key when needed,
+applies migrations to a persistent local D1 database, starts the real Worker,
+opens a temporary HTTPS Quick Tunnel for the production OAuth relay, and invokes
+the production scheduled handler once per minute. It chooses an available local
+port instead of claiming the package-level default. Use the printed
+`trycloudflare.com` URL for sign-in and remain on that origin through onboarding.
+Cloudflare inventory and telemetry are real, while credentials, configuration,
+usage history, incidents, and audit records stay in local D1. Notification
+delivery and approved or automatic controls still have their normal external
+effects. The Quick Tunnel exposes Vite's development server to anyone who has
+its temporary URL, so stop the command when the session is finished.
+
+The package-level `pnpm --filter @standardagents/brolly-guard dev` command
+remains available when no automatic tunnel, migration, or local cron preparation
+is wanted. Local secrets belong in `.dev.vars`; automatic provisioning is for
 remote deployments and never writes production secrets into the repository.
 
 The canonical self-contained template lives in `deploy/`. After every verified

@@ -384,6 +384,7 @@ action instead.
 ## Dashboard development
 
 ```bash
+pnpm dev
 pnpm --filter @standardagents/brolly-guard dev
 pnpm dev:demo
 BROLLY_DEMO_FIRST_RUN=1 pnpm dev:demo
@@ -392,8 +393,21 @@ pnpm --filter @standardagents/brolly-guard preview
 ```
 
 Development and preview both run through the Cloudflare Vite plugin so Worker
-bindings and SPA routing match production. The development server is pinned to
-port `5173` with `strictPort` enabled.
+bindings and SPA routing match production. The package-level development server
+is pinned to port `5173` with `strictPort` enabled; root `pnpm dev` selects an
+available ephemeral port and passes it to that server.
+
+`pnpm dev` runs the production Worker and onboarding paths against real
+Cloudflare APIs with a persistent local D1 binding. It generates the local
+credential-encryption key if necessary, applies local migrations, disables all
+remote bindings, starts a temporary HTTPS Quick Tunnel for the production OAuth
+relay, and invokes the real scheduled handler every minute from the local
+machine. The tunnel URL must remain the browser origin through sign-in and
+onboarding because OAuth state and session cookies are origin-bound. The
+Tailscale URL remains available for requests that do not need that browser
+session. A Quick Tunnel makes Vite source modules and HMR reachable to anyone
+who has its temporary URL. Notifications and Cloudflare control actions are not
+simulated in this mode and can affect external systems.
 
 The dashboard demo is pinned to `[::1]:5199`. Its startup guard checks both
 `127.0.0.1:5199` and `[::1]:5199` before Vite listens. A process on either

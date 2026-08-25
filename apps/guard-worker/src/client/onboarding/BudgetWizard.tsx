@@ -283,7 +283,7 @@ export function ContinueFooter({ accessCheckComplete = true, billingConnected, b
       <StepActions>
         <span className="flex w-full flex-col items-end gap-1.5">
           <GrantBillingAccessButton disabled={busy || !accessCheckComplete} onClick={onOpenBilling} />
-          <small className="text-[12px] text-muted">Read-only billing access is required to continue.</small>
+          <small className="text-[12px] text-muted">{planTier === "unknown" ? "Billing Read is required to identify this account's plan and continue." : "Read-only billing access is required to continue."}</small>
         </span>
       </StepActions>
     );

@@ -65,10 +65,7 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
 
   const definition = productUsageDefinition(options.collector);
   const result = options.collector === "graphql:durable-objects"
-    ? await options.client.durableObjectUsagePaged(options.startsAt, options.endsAt, {
-      cursor: options.cursor as DurableObjectUsageCursor | undefined,
-      maxPages: options.maxPages,
-    })
+    ? await boundedDurableObjectUsage(options.client, options.startsAt, options.endsAt)
     : options.collector === "graphql:workers"
       ? await options.client.workerUsage(options.startsAt, options.endsAt, {
         cursor: options.cursor as WorkerUsageCursor | undefined,
@@ -101,6 +98,18 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
     changes,
     watermarkAt: result.watermarkAt,
     normalizedObservations: observations,
+  };
+}
+
+async function boundedDurableObjectUsage(client: CloudflareClient, startsAt: number, endsAt: number) {
+  const result = await client.durableObjectUsage(startsAt, endsAt, { limit: 10_000 });
+  const complete = result.coverage.every(item => item.state === "healthy");
+  return {
+    ...result,
+    continuation: complete ? null : {} as DurableObjectUsageCursor,
+    complete,
+    pages: 1,
+    watermarkAt: endsAt,
   };
 }
 

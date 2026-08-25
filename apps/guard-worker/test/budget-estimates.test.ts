@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MetricSample } from "@standardagents/brolly-core";
-import { billingAccessConfiguration, billingTokenValidationError, buildOnboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
+import { billingAccessConfiguration, billingTokenValidationError, buildOnboardingBudgetEstimates, configureOnboardingBillingAccess, validBillingToken } from "../src/budget-estimates.js";
+import { openJson } from "../src/credentials.js";
+import type { Env } from "../src/env.js";
+import { createTestD1 } from "./d1.js";
 
 const start = Date.UTC(2026, 7, 11);
 const end = start + 86_400_000;
+const credentialKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+afterEach(() => vi.unstubAllGlobals());
 
 function sample(family: string, id: string, cost: number, options: { parentId?: string; scope?: MetricSample["asset"]["scope"]; sampled?: boolean } = {}): MetricSample {
   return {
@@ -27,6 +33,46 @@ function sample(family: string, id: string, cost: number, options: { parentId?: 
 }
 
 describe("billing access configuration", () => {
+  it("verifies and stores a token when production billing reads fall back, align, and retry", async () => {
+    const testD1 = createTestD1();
+    const token = `cfut_${"a".repeat(40)}`;
+    const cycleStart = new Date(Date.now() - 86_400_000).toISOString();
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      if (calls === 1 || calls === 3 || calls === 5) {
+        return new Response(JSON.stringify({ errors: [{ message: "rate limited" }] }), {
+          status: 429,
+          headers: { "Retry-After": "0" },
+        });
+      }
+      if (calls === 2) {
+        return Response.json({ success: false, errors: [{ message: "restricted" }] }, { status: 403 });
+      }
+      return Response.json({ success: true, result: [{
+        BilledCost: 0.25,
+        ChargePeriodStart: cycleStart,
+        ChargePeriodEnd: new Date().toISOString(),
+        BillingPeriodStart: cycleStart,
+        ConsumedQuantity: 1,
+        ConsumedUnit: "Count",
+        ServiceName: "Workers Standard Requests",
+        ServiceFamilyName: "Workers",
+      }] });
+    }));
+
+    try {
+      const env = { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", BROLLY_CREDENTIAL_KEY: credentialKey } as Env;
+      await expect(configureOnboardingBillingAccess(env, token)).resolves.toEqual({ records: 1 });
+      expect(calls).toBe(6);
+      const stored = await testD1.db.prepare(`SELECT value FROM settings WHERE key='billing_credentials'`).first<{ value: string }>();
+      expect(stored?.value).not.toContain(token);
+      await expect(openJson<{ token: string }>(stored!.value, credentialKey)).resolves.toEqual({ token });
+    } finally {
+      testD1.close();
+    }
+  });
+
   it("reports credential metadata only and never the stored token", async () => {
     const stored = { key: "billing_credentials", value: "cfut_encrypted_secret_material", updated_at: 1_700_000_000_000 };
     const db = { prepare: () => ({ first: async () => stored }) };

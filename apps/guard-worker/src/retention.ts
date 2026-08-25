@@ -1,10 +1,10 @@
 import { capacityDecision, localDayAt, type LedgerRunBudget } from "@standardagents/brolly-core";
 
 export interface RetentionResult {
-  usedBytes: number;
+  usedBytes: number | null;
   capacityBytes: number;
-  pressure: number;
-  backfillPaused: boolean;
+  pressure: number | null;
+  backfillPaused: boolean | null;
   prunedRows: number;
   oldestResourceDay: string | null;
 }
@@ -16,10 +16,9 @@ export async function runRetentionMaintenance(
   now = Date.now(),
   timeZone = "UTC",
 ): Promise<RetentionResult> {
-  const [capacitySetting, pageCountRow, pageSizeRow, rowEstimate] = await Promise.all([
+  const [capacitySetting, pageMetrics, rowEstimate] = await Promise.all([
     db.prepare(`SELECT value FROM settings WHERE key='d1_capacity_bytes' LIMIT 1`).first<{ value: string }>(),
-    db.prepare(`PRAGMA page_count`).first<Record<string, number>>(),
-    db.prepare(`PRAGMA page_size`).first<Record<string, number>>(),
+    d1PageMetrics(db),
     db.prepare(
       `SELECT COUNT(*) AS rows,AVG(length(u.metrics_json)+length(u.sampling_json)+192) AS average_bytes
        FROM usage_daily u JOIN resources r ON r.id=u.resource_id
@@ -28,11 +27,9 @@ export async function runRetentionMaintenance(
     ).bind(accountId).first<{ rows: number; average_bytes: number | null }>(),
   ]);
   budget?.charge("d1RowsRead", 4 + Number(rowEstimate?.rows ?? 0));
-  const pageCount = firstNumber(pageCountRow) ?? 0;
-  const pageSize = firstNumber(pageSizeRow) ?? 4096;
-  const usedBytes = pageCount * pageSize;
+  const usedBytes = pageMetrics ? pageMetrics.pageCount * pageMetrics.pageSize : null;
   const capacityBytes = positiveNumber(capacitySetting?.value) ?? 500_000_000;
-  const decision = capacityDecision(usedBytes, capacityBytes);
+  const decision = usedBytes === null ? null : capacityDecision(usedBytes, capacityBytes);
   const today = localDayAt(now, timeZone);
   const retentionCutoff = localDayAt(now - 730 * 86_400_000, timeZone);
   let prunedRows = 0;
@@ -54,13 +51,13 @@ export async function runRetentionMaintenance(
   ]);
   for (const result of routine) chargeMeta(budget, result.meta);
 
-  if (decision.pauseBackfill) {
+  if (decision?.pauseBackfill) {
     const result = await db.prepare(
       `UPDATE backfill_jobs SET status='paused',paused_reason='d1_capacity',updated_at=?1
        WHERE account_id=?2 AND status IN ('pending','running')`,
     ).bind(now, accountId).run();
     chargeMeta(budget, result.meta);
-  } else {
+  } else if (decision) {
     const result = await db.prepare(
       `UPDATE backfill_jobs SET status='pending',paused_reason=NULL,updated_at=?1
        WHERE account_id=?2 AND status='paused' AND paused_reason='d1_capacity'`,
@@ -68,7 +65,7 @@ export async function runRetentionMaintenance(
     chargeMeta(budget, result.meta);
   }
 
-  if (decision.pruneIndividualHistory) {
+  if (decision?.pruneIndividualHistory && usedBytes !== null) {
     const averageBytes = Math.max(256, Number(rowEstimate?.average_bytes ?? 512));
     const needed = Math.ceil((usedBytes - decision.targetBytes) / averageBytes);
     const limit = Math.min(20_000, Math.max(1, needed));
@@ -101,7 +98,7 @@ export async function runRetentionMaintenance(
   ).bind(accountId, today, usedBytes, capacityBytes, oldestResourceDay, now).run();
   chargeMeta(budget, status.meta);
 
-  if (decision.warn) {
+  if (decision?.warn) {
     const warningKey = `capacity-warning:${today}`;
     const result = await db.prepare(
       `INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
@@ -111,11 +108,34 @@ export async function runRetentionMaintenance(
        )`,
     ).bind(crypto.randomUUID(), warningKey, JSON.stringify({ usedBytes, capacityBytes, pressure: decision.pressure, prunedRows }), now).run();
     chargeMeta(budget, result.meta);
+  } else if (!decision) {
+    const unavailableKey = `capacity-unavailable:${today}`;
+    const result = await db.prepare(
+      `INSERT INTO audit_log(id,actor,action,target,detail_json,created_at)
+       SELECT ?1,'brolly-retention','d1.capacity.unavailable',?2,?3,?4
+       WHERE NOT EXISTS(
+         SELECT 1 FROM audit_log WHERE action='d1.capacity.unavailable' AND target=?2
+       )`,
+    ).bind(crypto.randomUUID(), unavailableKey, JSON.stringify({ reason: "D1 page metrics are unavailable in this runtime" }), now).run();
+    chargeMeta(budget, result.meta);
   }
   return {
-    usedBytes, capacityBytes, pressure: decision.pressure,
-    backfillPaused: decision.pauseBackfill, prunedRows, oldestResourceDay,
+    usedBytes, capacityBytes, pressure: decision?.pressure ?? null,
+    backfillPaused: decision?.pauseBackfill ?? null, prunedRows, oldestResourceDay,
   };
+}
+
+async function d1PageMetrics(db: D1Database): Promise<{ pageCount: number; pageSize: number } | null> {
+  try {
+    const [pageCountRow, pageSizeRow] = await Promise.all([
+      db.prepare(`PRAGMA page_count`).first<Record<string, number>>(),
+      db.prepare(`PRAGMA page_size`).first<Record<string, number>>(),
+    ]);
+    return { pageCount: firstNumber(pageCountRow) ?? 0, pageSize: firstNumber(pageSizeRow) ?? 4096 };
+  } catch (error) {
+    if (/not authorized|SQLITE_AUTH/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
 }
 
 function firstNumber(row: Record<string, number> | null): number | null {

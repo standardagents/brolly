@@ -8,28 +8,19 @@ const env = { BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Cloudflare durable object telemetry", () => {
-  it("collects 20,000 active objects in two stable 10,000-row pages", async () => {
-    let calls = 0;
-    const bodies: string[] = [];
+  it("uses one bounded per-metric ranking without unsupported GraphQL directives", async () => {
+    let requestBody = "";
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      calls += 1;
-      bodies.push(String(init?.body));
-      const offset = (calls - 1) * 10_000;
-      const rowsRead = Array.from({ length: 10_000 }, (_, index) => ({
-        dimensions: { namespaceId: "namespace-1", objectId: String(offset + index).padStart(64, "0") },
-        sum: { rowsRead: 1 },
-      }));
-      return Response.json({ data: { viewer: { accounts: [{ rowsRead }] } } });
+      requestBody = String(init?.body);
+      return Response.json({ data: { viewer: { accounts: [{}] } } });
     }));
 
-    const result = await new CloudflareClient(env, new RunBudget()).durableObjectUsagePaged(0, 300_000, { expectedActiveObjects: 20_000 });
+    await new CloudflareClient(env, new RunBudget()).durableObjectUsage(0, 300_000, { limit: 10_000 });
 
-    expect(calls).toBe(2);
-    expect(result).toMatchObject({ complete: true, pages: 2, continuation: null });
-    expect(result.samples).toHaveLength(20_000);
-    expect(bodies[0]).toContain("limit: 10000");
-    expect(bodies[0]).toContain("dimensions_objectId_ASC");
-    expect(bodies[1]).toContain('"rowsReadCursor":"0000000000000000000000000000000000000000000000000000000000009999"');
+    expect(requestBody).toContain("limit: 10000");
+    expect(requestBody).toContain("sum_rowsRead_DESC");
+    expect(requestBody).not.toContain("@include");
+    expect(requestBody).not.toContain("dimensions_objectId_ASC");
   });
 
   it("unions the top objects for reads, writes, and requests", async () => {
@@ -166,8 +157,9 @@ describe("Cloudflare Worker telemetry", () => {
       detail: expect.stringContaining("complete per-Worker data Cloudflare provides"),
     });
     expect(requestBody).toContain("workersInvocationsAdaptive");
-    expect(requestBody).toContain("dimensions_scriptName_ASC");
-    expect(requestBody).toContain("scriptName_gt");
+    expect(requestBody).toContain("sum_requests_DESC");
+    expect(requestBody).toContain("sum_cpuTimeUs_DESC");
+    expect(requestBody).not.toContain("@include");
   });
 });
 
