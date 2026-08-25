@@ -31,8 +31,8 @@ describe("limits policy updates", () => {
     const current = policy();
     delete current.limits;
     const cost = limits(10);
-    const next = updateScope(current, "day", { key: "account", kind: "account" }, scope => ({ ...scope, cost, costEnabled: false }));
-    expect(next.limits?.day.account).toEqual({ cost, usage: {}, costEnabled: false });
+    const next = updateScope(current, "day", { key: "account", kind: "account" }, scope => ({ ...scope, cost, enabled: false }));
+    expect(next.limits?.day.account).toEqual({ cost, usage: {}, enabled: false });
     expect(next.limits?.cycle).toEqual({});
     expect(next.accountDailySpend).toBe(cost);
   });

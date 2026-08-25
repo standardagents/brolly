@@ -1,17 +1,18 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { money } from "../../format";
-import type { MetricPart } from "./api";
 import { BillableUsageTooltip, FLOAT_CHIP } from "./BillableUsageTooltip";
 import { ProductIcon } from "../ui";
 import { DAY_MS, type AggregationKind, type CycleBounds, type DayPoint, cycleCumulative, dayOf, dayStart, denseSeries, freeRemainingSeries, includedTops, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "./cycles";
 import { type LevelValues, crossedLevel, pushLevels } from "./levels";
-import { completeWithDefaults } from "./defaults";
+import { completeWithDefaults, displayPercent, windowBaseline } from "./defaults";
 import { compactValue, formatLimitValue } from "./format";
 import { LevelValueField, type LimitsChartLevel } from "./LevelValueField";
-import { type Axis, chooseAxisWithIncluded, includedBandGeometry, snapStep, snapToNice } from "./scale";
+import { type Axis, chooseAxisWithIncluded, includedBandGeometry, recommendedAxisMode, snapStep, snapToNice } from "./scale";
 import { CrossingAlarms, CrossingDim } from "./crossing-alarms";
 import { useLimitHistory, type LimitHistory } from "./use-limit-history";
 import { useElementWidth } from "./use-element-width";
+import { ChartScaleToggle, useChartScaleMode } from "./ChartScaleMode";
+import { useAnimatedAxis } from "./use-animated-axis";
 
 export type { LimitsChartLevel } from "./LevelValueField";
 
@@ -38,23 +39,22 @@ export interface LimitsChartProps {
   tolerance?: LevelValues;
   /** Complete tolerance-derived map reapplied by the chart's reset action. */
   resetToTolerance?: LevelValues;
+  /** The tolerance percents behind the defaults; untouched fields read these back instead of a recomputed percent. */
+  tolerancePercent?: LevelValues;
   /** Daily values shown as a non-blocking reference on cycle charts. */
   reference?: LevelValues;
   /** Included family allotment for this usage metric's billing cycle (in this metric's units). */
   includedPerCycle?: number;
   /** Usage of a shared allotment pool in this metric's units, including this metric, when the allotment is shared. */
   poolSeries?: DayPoint[];
-  /** Parts that make up `series` (meter first, then folded sources), each in this metric's units. */
-  composition?: MetricPart[];
   /** Daily list-rate cost attributable to this billed usage meter. */
   billableCostSeries?: DayPoint[];
   /** How daily metric values combine within a billing cycle. Legacy data sums. */
   aggregationKind?: AggregationKind;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
-  /** levelId → active on this chart. Missing ids are active. Inactive levels keep their value but draw no line. */
+  /** levelId → drawn on this chart. Missing ids are drawn. Display-only: the chart tour reveals levels stage by stage. */
   levelEnabled?: Record<string, boolean>;
-  onLevelEnabledChange?(next: Record<string, boolean>): void;
   /** Accessible name for the chart. */
   label?: string;
   /** Optional heading rendered above the chart. */
@@ -84,8 +84,6 @@ export const CHART_PLOT_LEFT = PLOT.left;
 export const CHART_ACCENT = "#2f6fd6";
 /** Included (free-allotment) usage is green: it costs nothing. Blue is billable usage under the first level. */
 export const INCLUDED_COLOR = "#2e9d62";
-/** Included usage and the free-usage-left area share one light dithered green fill. */
-const DITHER_SWATCH = { backgroundColor: `${INCLUDED_COLOR}08`, backgroundImage: `radial-gradient(${INCLUDED_COLOR}7a 0.5px, transparent 0.6px)`, backgroundSize: "3px 3px" } as const;
 /** Level ramp, lowest to highest severity: amber → red → magenta → deep plum. */
 const LEVEL_PALETTE = ["#e79021", "#e0632a", "#c9412c", "#a8232f", "#8c1d45", "#701a58", "#521a5c", "#3a1748"];
 
@@ -98,7 +96,7 @@ export function levelColor(index: number, count: number): string {
 
 export { compactValue, editableValue, formatLimitValue, parseCompact, selectNumber, unitLabel } from "./format";
 
-export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, reference, includedPerCycle, poolSeries, composition, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, onLevelEnabledChange, history: historyProp, fields = "cards", crossingAlarms = false, pointerInteractions = true }: LimitsChartProps) {
+export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: cyclesProp, today: todayProp, levels, value, floor, seed, tolerance, resetToTolerance, tolerancePercent, reference, includedPerCycle, poolSeries, billableCostSeries, aggregationKind = "sum", onChange, readOnly = false, label, title, titleIndent = false, family, headerContent, levelEnabled, history: historyProp, fields = "cards", crossingAlarms = false, pointerInteractions = true }: LimitsChartProps) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const patternId = useId();
   // Every level, on or off, takes part in ordering, pushing, and defaults, so
@@ -114,9 +112,11 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     [cyclesProp, series, today],
   );
   const window = useMemo(() => visibleWindow(series, cycles, today), [series, cycles, today]);
+  // Percent-of-typical readouts divide by the same baseline the tolerance
+  // percents scale during seeding, so an untouched chart reads back the
+  // tolerance percentages themselves.
+  const percentBaseline = useMemo(() => windowBaseline(series, cycles, today, limitWindow, includedPerCycle, aggregationKind), [series, cycles, today, limitWindow, includedPerCycle, aggregationKind]);
   const dense = useMemo(() => denseSeries(series, window.fromDay, window.toDay), [series, window]);
-  // Composition parts aligned to `dense`, for the seams inside day bars and the tooltip breakdown.
-  const partsDense = useMemo(() => (composition && composition.length > 1 ? composition.map(part => denseSeries(part.series, window.fromDay, window.toDay)) : []), [composition, window]);
   const cumulative = useMemo(() => cycleCumulative(dense, cycles, aggregationKind), [dense, cycles, aggregationKind]);
   const billableCostDense = useMemo(() => (billableCostSeries ? denseSeries(billableCostSeries, window.fromDay, window.toDay) : undefined), [billableCostSeries, window]);
   const billableCostCumulative = useMemo(() => (billableCostDense ? cycleCumulative(billableCostDense, cycles, "sum") : undefined), [billableCostDense, cycles]);
@@ -184,14 +184,17 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const heightValues = useMemo(() => (limitWindow === "cycle"
     ? [...seriesValues, ...cumulative.map(point => point.cumulative), projection?.projected ?? 0]
     : seriesValues), [seriesValues, cumulative, projection, limitWindow]);
+  const preferredScale = useMemo(() => recommendedAxisMode(heightValues), [heightValues]);
+  const { mode: scaleMode, setMode: setScaleMode } = useChartScaleMode(preferredScale);
 
   // The axis extends to keep every level visible, but stays frozen while a
   // handle is dragged so the chart does not rescale under the pointer.
   const [frozenAxis, setFrozenAxis] = useState<Axis | null>(null);
   // The day axis fits bars and levels only; the free-left area is clipped to
   // the plot and reads as a full-height wash until it descends into range.
-  const liveAxis = useMemo(() => chooseAxisWithIncluded(heightValues, order.map(id => value[id] ?? 0), cycleIncluded), [heightValues, order, value, cycleIncluded]);
-  const axis = frozenAxis ?? liveAxis;
+  const liveAxis = useMemo(() => chooseAxisWithIncluded(heightValues, order.map(id => value[id] ?? 0), cycleIncluded, scaleMode), [heightValues, order, value, cycleIncluded, scaleMode]);
+  const { axis: animatedAxis, animating: axisAnimating } = useAnimatedAxis(liveAxis, scaleMode);
+  const axis = frozenAxis ?? animatedAxis;
 
   // Fill in defaults for levels that have no value yet. The defaults are
   // pushed on an axis that already contains the default ladder, so a ladder
@@ -238,6 +241,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  const motionDisabled = Boolean(dragging) || axisAnimating;
   // Pointer hover: a day column under the cursor, and a level line under the
   // cursor. The day tooltip hides while a line is hovered or dragged; the
   // hovered or dragged line highlights its legend field instead.
@@ -453,9 +457,6 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       return rows;
     }
     rows.push([hovered.projected ? "Projected usage" : "Usage", formatLimitValue(hovered.value, unit)]);
-    if (!hovered.projected && partsDense.length > 1 && composition) {
-      partsDense.forEach((part, which) => rows.push([composition[which]!.label, compactValue(part[hovered.index]?.value ?? 0, unit)]));
-    }
     const free = hovered.projected
       ? Math.max(0, (freeLeft.at(-1)?.after ?? 0) - projection!.rate * hovered.ahead!)
       : freeLeft[hovered.index]?.after;
@@ -530,46 +531,30 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           return <rect key={part} data-day-bar={part === 0 ? "" : undefined} x={left} y={Math.min(segmentTop, bottom - 0.5)} width={barPixels} height={Math.max(0.5, bottom - segmentTop)} fill={segment.color} shapeRendering="crispEdges" />;
         })}
         {index > 0 && <line x1={left + 0.5} x2={left + 0.5} y1={Math.min(top, base - 0.5)} y2={base} stroke="var(--panel)" strokeWidth="1" opacity=".22" shapeRendering="crispEdges" />}
-        {/* Composition: folded parts stack above the meter's own usage, each
-            behind a seam and a panel-dot texture so the split reads at a glance. */}
-        {partsDense.length > 1 && (() => {
-          let stacked = 0;
-          return partsDense.map((part, which) => {
-            const value = part[index]?.value ?? 0;
-            const bottom = stacked;
-            stacked += value;
-            if (which === 0 || value <= 0) return null;
-            const y0 = yFor(stacked);
-            const y1 = yFor(bottom);
-            return <g key={which}>
-              <rect x={left} y={y0} width={barPixels} height={Math.max(0, y1 - y0)} fill={`url(#${patternId}-part)`} shapeRendering="crispEdges" />
-              <line x1={left} x2={left + barPixels} y1={y1 + 0.5} y2={y1 + 0.5} stroke="var(--panel)" strokeWidth="1" opacity=".7" shapeRendering="crispEdges" />
-            </g>;
-          });
-        })()}
       </g>
     );
-  }), [dense, partsDense, activeOrder, shown, colorById, accent, cycleMode, dragging, axis, plotWidth, plotHeight, barSlot]);
+  }), [dense, activeOrder, shown, colorById, accent, cycleMode, dragging, axis, plotWidth, plotHeight, barSlot]);
 
   const belowReference = limitWindow === "cycle" && reference
     ? activeLevels.find(level => (shown[level.id] ?? Number.POSITIVE_INFINITY) < (reference[level.id] ?? Number.NEGATIVE_INFINITY))
     : undefined;
 
   return (
-    <div ref={containerRef} className="@container min-w-0 select-none" data-limits-chart={kind} onKeyDown={historyKeyDown}>
-      {(title || headerContent || !readOnly) && (
-        <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
-          {title ? <h4 className="inline-flex items-center gap-2 text-[13px] font-bold" style={titleIndent ? { paddingLeft: PLOT.left } : undefined}>{family && <ProductIcon family={family} size="sm" />}{title}</h4> : <span />}
+    <div ref={containerRef} className="@container min-w-0 select-none" data-limits-chart={kind} data-axis-kind={liveAxis.kind} data-scale-mode={scaleMode} data-axis-animating={axisAnimating || undefined} onKeyDown={historyKeyDown}>
+      <div className="mb-2 flex min-h-[30px] flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2" style={!title && limitWindow === "day" ? { marginLeft: PLOT.left } : undefined}>
+            {title && <h4 className="inline-flex items-center gap-2 text-[13px] font-bold" style={titleIndent ? { paddingLeft: PLOT.left } : undefined}>{family && <ProductIcon family={family} size="sm" />}{title}</h4>}
+            {limitWindow === "day" && <ChartScaleToggle mode={scaleMode} onChange={setScaleMode} />}
+          </div>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {!readOnly && <HistoryButtons history={history} canReset={Boolean(resetToTolerance) && order.some(id => resetToTolerance![id] !== complete[id])} onReset={reset} onUndo={() => historyStep("undo")} onRedo={() => historyStep("redo")} />}
             {headerContent}
           </div>
-        </div>
-      )}
+      </div>
       <div className="relative">
       <svg
         ref={svgRef}
-        className="block w-full touch-none overflow-visible text-ink"
+        className="relative z-[1] block w-full touch-none overflow-visible text-ink"
         style={{ height: PLOT.height }}
         viewBox={`0 0 ${width} ${PLOT.height}`}
         role="group"
@@ -582,10 +567,6 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             <circle cx=".75" cy=".75" r=".5" fill={INCLUDED_COLOR} opacity=".48" />
             <circle cx="2.25" cy="2.25" r=".5" fill={INCLUDED_COLOR} opacity=".48" />
           </pattern>
-          <pattern id={`${patternId}-part`} width="3" height="3" patternUnits="userSpaceOnUse">
-            <circle cx=".75" cy=".75" r=".55" fill="var(--panel)" opacity=".55" />
-            <circle cx="2.25" cy="2.25" r=".55" fill="var(--panel)" opacity=".55" />
-          </pattern>
           {/* Projections use a lighter dither in the color of the band they land in. */}
           {[{ id: "included", color: INCLUDED_COLOR }, ...bands.map(band => ({ id: band.id, color: band.color }))].map(item => (
             <pattern key={item.id} id={`${patternId}-projection-${item.id}`} width="3" height="3" patternUnits="userSpaceOnUse">
@@ -597,18 +578,20 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {/* Y ticks */}
         {axis.ticks.map(tick => (
           <g key={tick}>
-            {(freeMarkY === null || Math.abs(yFor(tick) - freeMarkY) > 9) && (
-              <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums" style={{ transition: dragging ? "none" : `y 260ms ${EASE}` }}>{formatTick(tick, unit)}</text>
+            {(freeMarkY === null || Math.abs(yFor(tick) - freeMarkY) > 9)
+              && (!pointerInteractions || activeLevels.every(level => Math.abs(yFor(tick) - yFor(shown[level.id] ?? 0)) > 9)) && (
+              <text x={PLOT.left - 10} y={yFor(tick) + 3.5} textAnchor="end" className="fill-faint text-[10.5px] tabular-nums" style={{ transition: motionDisabled ? "none" : `y 260ms ${EASE}` }}>{formatTick(tick, unit)}</text>
             )}
           </g>
         ))}
         {freeMark && freeMarkY !== null && (() => {
           const textWidth = freeMark.label.length * 6.4;
-          const width = textWidth + 18;
+          const width = textWidth + 9;
           return (
             <g data-included-pill pointerEvents="none">
-              <rect x={PLOT.left - 8 - width} y={freeMarkY - 8} width={width} height={16} rx={4} fill={INCLUDED_COLOR} opacity=".14" />
-              <text x={PLOT.left - 13} y={freeMarkY + 3.5} textAnchor="end" fill={INCLUDED_COLOR} className="text-[10.5px] font-[700] tabular-nums">{freeMark.label}</text>
+              <rect x={PLOT.left - 7 - width} y={freeMarkY - 8} width={width} height={16} rx={4} fill="var(--panel)" />
+              <rect x={PLOT.left - 7 - width} y={freeMarkY - 8} width={width} height={16} rx={4} fill={INCLUDED_COLOR} opacity=".14" />
+              <text x={PLOT.left - 10} y={freeMarkY + 3.5} textAnchor="end" fill={INCLUDED_COLOR} className="text-[10.5px] font-[700] tabular-nums">{freeMark.label}</text>
             </g>
           );
         })()}
@@ -622,7 +605,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             <defs>
               {bands.map(band => (
                 <clipPath key={band.id} id={`${patternId}-band-${band.id}`}>
-                  <rect x={PLOT.left} width={plotWidth} y={Number.isFinite(band.top) ? yFor(band.top) : PLOT.top} height={Math.max(0, yFor(band.bottom) - (Number.isFinite(band.top) ? yFor(band.top) : PLOT.top))} style={{ transition: dragging ? "none" : `y 260ms ${EASE}, height 260ms ${EASE}` }} />
+                  <rect x={PLOT.left} width={plotWidth} y={Number.isFinite(band.top) ? yFor(band.top) : PLOT.top} height={Math.max(0, yFor(band.bottom) - (Number.isFinite(band.top) ? yFor(band.top) : PLOT.top))} style={{ transition: motionDisabled ? "none" : `y 260ms ${EASE}, height 260ms ${EASE}` }} />
                 </clipPath>
               ))}
             </defs>
@@ -741,7 +724,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
               className={interactive ? "cursor-ns-resize outline-none focus-visible:[&>polygon]:stroke-ink focus-visible:[&>polygon]:stroke-[2.5]" : undefined}
               // Lines and handles ease to a new position when a value changes
               // without a drag (tolerance change, preset, undo, chip edit).
-              style={{ transform: `translateY(${y}px)`, transition: dragging ? "none" : `transform 260ms ${EASE}` }}
+              style={{ transform: `translateY(${y}px)`, transition: motionDisabled ? "none" : `transform 260ms ${EASE}` }}
               onPointerDown={startDrag(level.id)}
               onPointerMove={moveDrag(level.id)}
               onPointerUp={endDrag(level.id)}
@@ -836,13 +819,16 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           </div>
         );
       })()}
-      {highlightLevel && (
-        // Anchored inside the chart's left edge (not hanging off it) so no ancestor can clip it.
-        <div data-line-value className={`${FLOAT_CHIP} font-[740] tabular-nums`}
-          style={{ left: 2, top: yFor(shown[highlightLevel] ?? 0), transform: "translateY(-50%)", color: colorById.get(highlightLevel) }}>
-          {unit === "USD" ? formatLimitValue(shown[highlightLevel] ?? 0, unit) : compactValue(shown[highlightLevel] ?? 0, unit)}
+      {pointerInteractions && activeLevels.map(level => (
+        // Every line wears its value beside its handle. The text's right edge
+        // sits exactly where the axis tick labels end (PLOT.left - 10), so the
+        // values read as part of the axis; the quiet panel background masks
+        // whichever tick sits underneath.
+        <div key={level.id} data-line-value className={`pointer-events-none absolute z-10 whitespace-nowrap rounded-[4px] border border-line bg-panel py-px pl-1 pr-[3px] text-[10.5px] leading-[1.4] tabular-nums ${highlightLevel === level.id ? "font-[800]" : "font-[700]"}`}
+          style={{ left: PLOT.left - 6, top: yFor(shown[level.id] ?? 0), transform: "translate(-100%, -50%)", color: colorById.get(level.id) }}>
+          {unit === "USD" ? formatLimitValue(shown[level.id] ?? 0, unit) : compactValue(shown[level.id] ?? 0, unit)}
         </div>
-      )}
+      ))}
       {hovered && (
         // Near either edge the tooltip hangs inward from the pointer instead of centering, so it never clips.
         <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${hoverDay!.x > width * 0.7 ? "-translate-x-full" : hoverDay!.x < width * 0.3 ? "" : "-translate-x-1/2"}`}
@@ -860,23 +846,6 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       </div>
 
 
-      {chartIncluded && (
-        <div data-included-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
-          {cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2.5 rounded-[1px] border" style={{ ...DITHER_SWATCH, borderColor: INCLUDED_COLOR }} aria-hidden="true" />Included usage</span>}
-          {cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: CHART_ACCENT }} aria-hidden="true" />Billable usage</span>}
-          {!cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2 rounded-[1px]" style={{ background: CHART_ACCENT }} aria-hidden="true" />Daily usage</span>}
-          {!cycleMode && <span className="inline-flex items-center gap-1.5"><i className="size-2.5 rounded-[1px] border" style={{ ...DITHER_SWATCH, borderColor: INCLUDED_COLOR }} aria-hidden="true" />Free usage left</span>}
-        </div>
-      )}
-      {!cycleMode && composition && composition.length > 1 && (
-        <div data-composition-legend className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 pl-[62px] text-[10.5px] text-muted">
-          {composition.map((part, which) => (
-            <span key={part.id} className="inline-flex items-center gap-1.5">
-              <i className="size-2.5 rounded-[1px]" style={{ background: CHART_ACCENT, backgroundImage: which === 0 ? undefined : "radial-gradient(#ffffffa6 0.6px, transparent 0.7px)", backgroundSize: "3px 3px" }} aria-hidden="true" />{part.label}
-            </span>
-          ))}
-        </div>
-      )}
       {!fields ? null : readOnly ? (
         <ul className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[11.5px] font-bold text-muted">
           {activeLevels.map(level => (
@@ -888,12 +857,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         </ul>
       ) : fields === "inline" ? (
         // Aligned with the plot area, not the axis gutter, so values sit under the lines they set.
-        <div className="mt-2 grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
+        <div className="mt-2 flex flex-wrap gap-x-12 gap-y-2 border-t border-line-soft pt-2.5" style={{ marginLeft: PLOT.left, marginRight: PLOT.right }}>
           {levels.map(level => (
             <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               highlight={highlightLevel === level.id}
-              enabled={levelEnabled?.[level.id] ?? true}
-              onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
+              percent={displayPercent(shown[level.id] ?? 0, percentBaseline, tolerancePercent?.[level.id], resetToTolerance?.[level.id])}
+              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]} />
           ))}
         </div>
       ) : (
@@ -902,8 +871,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
           {levels.map(level => (
             <LevelValueField key={level.id} variant="boxed" level={level} unit={unit} value={shown[level.id] ?? 0} onCommit={next => commit(level.id, next)}
               highlight={highlightLevel === level.id}
-              enabled={levelEnabled?.[level.id] ?? true}
-              onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
+              percent={displayPercent(shown[level.id] ?? 0, percentBaseline, tolerancePercent?.[level.id], resetToTolerance?.[level.id])}
+              percentAccent={resetToTolerance?.[level.id] !== undefined && (shown[level.id] ?? 0) !== resetToTolerance[level.id]} />
           ))}
         </div>
       )}

@@ -10,11 +10,22 @@ directory.
   settings pages.
 - Daily points use UTC calendar days from Brolly's stored ledger. The component
   performs no Cloudflare requests.
+- Outlier axes use a softened symlog curve with a knee at twice the median
+  nonzero value. Rendering and pointer inversion share that axis object.
+- Each `LimitsChartDual` metric row owns one linear or logarithmic scale
+  preference for its daily/cycle pair. The daily chart renders the selector.
+  Both charts read the row preference. Initial mode comes from the row's daily
+  and cumulative outlier profile. Scale changes tween the shared axis mapping
+  so ticks, levels, fills, markers, and bars move on the same animation clock.
+  The logarithmic option uses the chart's zero-safe symlog axis.
 - Pointer previews derive from the complete level map captured at pointer-down.
   Undo and Redo record committed releases, field changes, and keyboard steps.
   History is per chart, remains in memory, and holds at most 50 snapshots.
 - Usage dimensions require separate chart histories. Preserve the metric key on
   the `LimitsChart` instance when tabs switch.
+- Billed-via metrics remain folded into `rowSeries` in the target meter's
+  units. Charts present that normalized total without composition seams,
+  legends, or tooltip rows.
 - `components/limits-chart/defaults.ts` `windowDefaults` is the one definition
   of an unedited map: daily maps come from risk tolerance times the median
   nonzero history; billing-cycle maps are the tolerance-derived daily default

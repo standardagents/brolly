@@ -79,7 +79,6 @@ describe("LimitsChart", () => {
     // The included edge line (with its markers) replaces a full-width boundary line.
     expect((cycle.match(/data-free-left-edge/g) ?? []).length).toBe(1);
     expect((cycle.match(/data-included-pill/g) ?? []).length).toBe(1);
-    expect((cycle.match(/data-included-legend/g) ?? []).length).toBe(1);
     expect(cycle).not.toMatch(/data-free-left(?!-edge)/);
     const day = render({ kind: "usage", unit: "requests", window: "day", includedPerCycle: 50 });
     expect(day).not.toContain("data-included-boundary");
@@ -89,7 +88,6 @@ describe("LimitsChart", () => {
     const distant = render({ kind: "usage", unit: "requests", window: "cycle", includedPerCycle: 10_000 });
     expect(distant).not.toContain("data-included-boundary");
     expect(distant).not.toContain("data-included-pill");
-    expect(distant).toContain("data-included-legend");
     const cost = render({ window: "day", includedPerCycle: 50 });
     expect(cost).not.toContain("data-free-left");
     // The fixture's July spend passes 50 within the cycle, so that cycle gets an exhaustion marker on both charts.
@@ -103,17 +101,17 @@ describe("LimitsChart", () => {
     expect(html).toContain("Warn is below its daily limit ($20.00). A single day can trip this limit.");
   });
 
-  it("drops switched-off levels from the chart but keeps their field, dimmed", () => {
-    const html = render({ levelEnabled: { critical: false }, onLevelEnabledChange: () => {} });
+  it("drops display-hidden levels from the chart but keeps their field", () => {
+    const html = render({ levelEnabled: { critical: false } });
     expect((html.match(/role="slider"/g) ?? []).length).toBe(2);
     expect(html).not.toContain('aria-label="Critical limit"');
     expect(html).toContain('aria-label="Critical limit in dollars"');
-    expect((html.match(/role="switch"/g) ?? []).length).toBe(3);
+    expect((html.match(/role="switch"/g) ?? []).length).toBe(0);
   });
 
-  it("keeps switched-off levels in the push order so their fields hold real values", () => {
-    // Warn sits above the switched-off Critical; Critical still gets pushed up past Warn.
-    const html = render({ levelEnabled: { critical: false }, onLevelEnabledChange: () => {}, value: { warn: 30, critical: 20, emergency: 50 } });
+  it("keeps display-hidden levels in the push order so their fields hold real values", () => {
+    // Warn sits above the hidden Critical; Critical still gets pushed up past Warn.
+    const html = render({ levelEnabled: { critical: false }, value: { warn: 30, critical: 20, emergency: 50 } });
     const critical = html.match(/aria-label="Critical limit in dollars"[^>]*value="([^"]+)"/)?.[1] ?? html.match(/value="([^"]+)"[^>]*aria-label="Critical limit in dollars"/)?.[1];
     expect(critical).toBeDefined();
     expect(Number(critical!.replace(/[^0-9.]/g, ""))).toBeGreaterThan(30);

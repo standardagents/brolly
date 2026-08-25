@@ -3,6 +3,7 @@ import { cycleCumulative, freeRemainingSeries, monthlyCycles, type CycleBounds, 
 import { windowDefaults } from "../components/limits-chart/defaults";
 import type { LevelValues } from "../components/limits-chart/levels";
 import { LimitsChart, PLOT, levelColor } from "../components/limits-chart/LimitsChart";
+import { ChartScaleProvider } from "../components/limits-chart/ChartScaleMode";
 import { Button, Eyebrow, StepMarker } from "../components/ui";
 import type { AlertLevel, Policy } from "../types";
 import { normalizeRiskTolerance } from "./risk-tolerance";
@@ -635,6 +636,7 @@ export function ChartTour({ levels, policy, done, onDone }: {
       <Eyebrow tone="orange">Chart guide</Eyebrow>
       <h2 className="text-[27px] tracking-[-.025em]">How to read the limit charts</h2>
       <p className="mb-6 mt-1 text-[12.5px] text-faint">This guide uses sample data. The steps after it use your account's real usage.</p>
+      <ChartScaleProvider initialMode="logarithmic">
       <div ref={tourHostRef} data-tour-stage={stage.key} data-tour-page={page} data-tour-exit={exiting.join(" ") || undefined} className="relative grid grid-cols-2 gap-5 max-xl:grid-cols-1">
         {/* Fixed cell height keeps the footer controls stationary. */}
         <div ref={dayHostRef} className="relative min-h-[300px] min-w-0">
@@ -660,6 +662,7 @@ export function ChartTour({ levels, policy, done, onDone }: {
         </div>
         {activeCallout && <Callout host={tourHostRef} dayHost={dayHostRef} cycleHost={cycleHostRef} spec={activeCallout} number={page + 1} group={stage.key} delay={settle} />}
       </div>
+      </ChartScaleProvider>
       <footer className="mt-7 grid grid-cols-[1fr_auto_1fr] items-start gap-3 max-md:flex max-md:flex-wrap max-md:justify-between">
         <span aria-hidden="true" className="max-md:hidden" />
         <ol className="flex list-none items-center justify-self-center gap-1" aria-label="Tour progress">

@@ -65,10 +65,6 @@ export interface ScopeLimits {
   usage: Record<string, SpendLimits>;
   /** Whole scope monitored. Missing means enabled. */
   enabled?: boolean;
-  costEnabled?: boolean;
-  usageEnabled?: Record<string, boolean>;
-  costLevelEnabled?: Record<string, boolean>;
-  usageLevelEnabled?: Record<string, Record<string, boolean>>;
 }
 
 export interface PolicyLimits {

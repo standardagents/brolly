@@ -122,6 +122,30 @@ export function cycleBaseline(series: DayPoint[], cycles: CycleBounds[] | undefi
   return Math.max(typicalCycleUsage(series, cycles, today, aggregationKind), included);
 }
 
+/**
+ * The baseline a level value is compared against for a percent readout: the
+ * same quantity the tolerance percents scale during seeding, so an untouched
+ * chart reads back the tolerance percentages themselves. Zero when the scope
+ * has no usable history.
+ */
+export function windowBaseline(series: DayPoint[], cycles: CycleBounds[] | undefined, today: string, window: "day" | "cycle", includedPerCycle?: number, aggregationKind: AggregationKind = "sum"): number {
+  const cycle = cycleBaseline(series, cycles, today, includedPerCycle, aggregationKind);
+  if (window === "cycle" || aggregationKind !== "sum") return cycle;
+  return cycle / cycleDaysFor(cycles, today);
+}
+
+/**
+ * The percent a level field displays. A value still sitting on its untouched
+ * tolerance default reads back the tolerance percent itself, so value
+ * snapping (200% → $8 → 201%) never shows through; an edited value reads its
+ * recomputed share of the baseline.
+ */
+export function displayPercent(value: number | undefined, baseline: number, tolerancePercent?: number, defaultValue?: number): number | undefined {
+  if (value === undefined || !(baseline > 0)) return undefined;
+  if (tolerancePercent !== undefined && defaultValue !== undefined && value === defaultValue) return tolerancePercent;
+  return (value / baseline) * 100;
+}
+
 /** Level values at `percent` of `baseline`, snapped and pushed into order on the series axis. */
 function levelsFromBaseline(series: DayPoint[], order: readonly string[], percent: LevelValues, baseline: number): LevelValues {
   if (!(baseline > 0)) return Object.fromEntries(order.map((id, index) => [id, niceLadder(0, order.length)[index]!])) as LevelValues;

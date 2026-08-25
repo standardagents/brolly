@@ -84,6 +84,8 @@ describe("ChartTour", () => {
     await renderTour(onDone);
     await waitFor(() => expect(stageKey()).toBe("charts"));
     expect(container.querySelectorAll("[data-limits-chart]").length).toBe(2);
+    expect(container.querySelectorAll("[data-scale-mode='logarithmic']")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-chart-scale-toggle]")).toHaveLength(1);
     expect(container.querySelector("[data-tour-legend]")).toBeNull();
     expect(container.querySelectorAll("[data-level-line]").length).toBe(0);
     await waitFor(() => expect(container.querySelectorAll("[data-tour-callout]")).toHaveLength(1));

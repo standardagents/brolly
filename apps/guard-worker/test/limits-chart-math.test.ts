@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, snapToNice, snapUpToNice } from "../src/client/components/limits-chart/scale";
+import { chooseAxis, chooseAxisWithIncluded, includedBandGeometry, niceCeil, niceFloor, niceLadder, recommendedAxisMode, snapToNice, snapUpToNice, SYMLOG_KNEE_MULTIPLIER } from "../src/client/components/limits-chart/scale";
+import { interpolateAxis } from "../src/client/components/limits-chart/use-animated-axis";
 import { GAP_FRACTION, GAP_RATIO, completeLevels, crossedLevel, defaultLevels, minGapAbove, pushLevels } from "../src/client/components/limits-chart/levels";
 import { billableMetricIds, metricComposition, metricIncluded, metricPool, rowSeries } from "../src/client/components/limits-chart/api";
 import { freeRemainingSeries, includedTops, cycleCumulative, denseSeries, monthlyCycles, projectCycle, projectedCrossingDate, visibleWindow } from "../src/client/components/limits-chart/cycles";
@@ -16,18 +17,42 @@ describe("axis selection", () => {
     expect(axis.invert(axis.position(3))).toBeCloseTo(3, 6);
   });
 
-  it("switches to symlog when one day exceeds ten times the median and keeps the median region readable", () => {
+  it("switches to a softened symlog when one day exceeds ten times the median", () => {
     const series = [5, 4, 6, 5, 5, 6, 4, 5, 900];
     const axis = chooseAxis(series);
     expect(axis.kind).toBe("symlog");
+    expect(axis.knee).toBe(5 * SYMLOG_KNEE_MULTIPLIER);
     expect(axis.position(0)).toBe(0);
-    expect(axis.position(5)).toBeGreaterThan(0.1);
-    expect(axis.position(900) - axis.position(5)).toBeGreaterThan(0.75);
+    expect(axis.position(5)).toBeLessThan(0.1);
+    expect(axis.position(900) - axis.position(5)).toBeGreaterThan(0.85);
     expect(axis.position(900)).toBeLessThanOrEqual(1);
     expect(axis.invert(axis.position(42))).toBeCloseTo(42, 6);
     expect(axis.ticks[0]).toBe(0);
     expect(axis.ticks.at(-1)).toBe(axis.max);
     expect(axis.ticks.every((tick, index) => index === 0 || tick > axis.ticks[index - 1]!)).toBe(true);
+  });
+
+  it("honors an explicit linear or logarithmic scale", () => {
+    const flat = [4, 5, 6, 5, 4];
+    const spiked = [...flat, 900];
+    expect(chooseAxis(spiked, [], "linear").kind).toBe("linear");
+    expect(chooseAxis(flat, [], "logarithmic").kind).toBe("symlog");
+    expect(chooseAxisWithIncluded(flat, [], 20, "logarithmic").kind).toBe("symlog");
+  });
+
+  it("recommends logarithmic only for an outlier-heavy series", () => {
+    expect(recommendedAxisMode([4, 5, 6, 5, 4])).toBe("linear");
+    expect(recommendedAxisMode([4, 5, 6, 5, 4, 900])).toBe("logarithmic");
+  });
+
+  it("interpolates the axis mapping and its inverse", () => {
+    const series = [4, 5, 6, 5, 4, 900];
+    const linear = chooseAxis(series, [], "linear");
+    const logarithmic = chooseAxis(series, [], "logarithmic");
+    const middle = interpolateAxis(linear, logarithmic, 0.5);
+    expect(middle.position(5)).toBeGreaterThan(linear.position(5));
+    expect(middle.position(5)).toBeLessThan(logarithmic.position(5));
+    expect(middle.invert(middle.position(42))).toBeCloseTo(42, 4);
   });
 
   it("extends the domain to include threshold values", () => {
@@ -246,7 +271,7 @@ describe("billing cycles", () => {
     expect(metricIncluded(data, "durable_objects:rows_read")).toBe(25_000_000_000);
   });
 
-  it("folds a billed-via metric into its meter's row as a composition", () => {
+  it("folds a billed-via metric into its meter total while retaining the internal composition", () => {
     const data = {
       scope: "family:durable_objects", resourceId: "x", found: true, today: "2026-08-02", cycles: [],
       metrics: {

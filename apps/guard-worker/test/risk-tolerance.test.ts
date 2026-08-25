@@ -75,13 +75,10 @@ describe("risk tolerance presets", () => {
               "workers:requests": { warning: 100 },
               "durable_objects:requests": { warning: 200 },
             },
-            usageEnabled: { "workers:requests": false, "durable_objects:requests": true },
-            usageLevelEnabled: { "workers:requests": { warning: false } },
           },
           "family:workers": {
             cost: {},
             usage: { "workers:requests": { warning: 900 } },
-            usageEnabled: { "workers:requests": true },
           },
         },
         cycle: {
@@ -95,12 +92,8 @@ describe("risk tolerance presets", () => {
     }, ["workers", "durable_objects"], [], undefined, false);
 
     expect(prepared.limits?.day.account?.usage).toEqual({});
-    expect(prepared.limits?.day.account?.usageEnabled).toEqual({});
     expect(prepared.limits?.day["family:workers"]?.usage["workers:requests"]).toEqual({ warning: 900 });
-    expect(prepared.limits?.day["family:workers"]?.usageEnabled?.["workers:requests"]).toBe(true);
-    expect(prepared.limits?.day["family:workers"]?.usageLevelEnabled?.["workers:requests"]).toEqual({ warning: false });
     expect(prepared.limits?.day["family:durable_objects"]?.usage["durable_objects:requests"]).toEqual({ warning: 200 });
-    expect(prepared.limits?.day["family:durable_objects"]?.usageEnabled?.["durable_objects:requests"]).toBe(true);
     expect(prepared.limits?.cycle.account?.usage).toEqual({});
     expect(prepared.limits?.cycle["family:durable_objects"]?.usage["durable_objects:requests"]).toEqual({ warning: 2_000 });
   });

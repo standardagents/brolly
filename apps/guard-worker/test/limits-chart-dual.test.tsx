@@ -77,6 +77,7 @@ function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, emptyUsage = 
 describe("LimitsChartDual tolerance behavior", () => {
   it("renders family usage rows, the included band, and allotment-anchored cycle seeds", async () => {
     const container = await render(<Harness data={familyQuotaResponse} />);
+    expect(container.textContent).toContain("20K reqs included");
     await waitFor(() => expect(readWindow(container, "cycle").usage.requests).toEqual({ warn: 30_000, critical: 160_000 }));
     expect(container.querySelector("[aria-label='Expand Requests']")).not.toBeNull();
     await act(async () => (container.querySelector("[aria-label='Expand Requests']") as HTMLButtonElement).click());
@@ -301,28 +302,14 @@ describe("LimitsChartDual tolerance behavior", () => {
     await waitFor(() => expect(container.querySelectorAll("[data-deviated]")).toHaveLength(1));
   });
 
-  it("toggles a level on and off from the row diamond, per window", async () => {
-    const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} cycleCost={{ warn: 400, critical: 800 }} costOnly />);
-    const diamonds = [...container.querySelectorAll("[data-level-field][data-variant='chip'] button[role='switch']")];
-    expect(diamonds.length).toBe(levels.length * 2);
-    await act(async () => (diamonds[0] as HTMLButtonElement).click());
-    await waitFor(() => expect(readWindow(container, "day").costLevelEnabled).toEqual({ warn: false }));
-    expect(readWindow(container, "cycle").costLevelEnabled).toBeUndefined();
-    await act(async () => (diamonds[0] as HTMLButtonElement).click());
-    await waitFor(() => expect(readWindow(container, "day").costLevelEnabled).toEqual({ warn: true }));
-    // Cycle window diamonds write the cycle map.
-    await act(async () => (diamonds[levels.length] as HTMLButtonElement).click());
-    await waitFor(() => expect(readWindow(container, "cycle").costLevelEnabled).toEqual({ warn: false }));
-  });
-
   it("opens the day and cycle charts together and supports a cost-only scope", async () => {
     const container = await render(<Harness dayCost={{ warn: 40, critical: 80 }} cycleCost={{ warn: 400, critical: 800 }} costOnly />);
     expect(container.querySelectorAll("[data-limits-chart='cost']")).toHaveLength(2);
     expect(container.textContent).not.toContain("Requests");
     const chips = [...container.querySelectorAll("[data-level-field][data-variant='chip']")];
     expect(chips).toHaveLength(levels.length * 2);
-    expect(chips.every(chip => !chip.querySelector("[data-level-label]"))).toBe(true);
-    expect(container.querySelectorAll("[data-level-field][data-variant='bare'] [role='switch']")).toHaveLength(levels.length * 2);
+    expect(chips.every(chip => chip.querySelector("[data-level-label]"))).toBe(true);
+    expect(container.querySelectorAll("[data-level-field] [role='switch']")).toHaveLength(0);
   });
 });
 

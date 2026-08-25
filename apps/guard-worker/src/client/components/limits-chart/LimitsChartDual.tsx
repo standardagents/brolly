@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useRef } from "react";
 import { billableMetricIds, costSeries, metricAggregationKind, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
-import type { AggregationKind, DayPoint } from "./cycles";
-import { windowDefaults } from "./defaults";
-import { formatLimitValue, unitLabel } from "./format";
+import { cycleCumulative, denseSeries, visibleWindow, type AggregationKind, type DayPoint } from "./cycles";
+import { displayPercent, windowBaseline, windowDefaults } from "./defaults";
+import { compactValue, unitLabel } from "./format";
 import { LevelValueField } from "./LevelValueField";
 import type { LevelValues } from "./levels";
 import { CHART_ACCENT, type LimitsChartLevel } from "./LimitsChart";
-import { Expander, Spinner, Switch } from "../ui";
+import { Expander, Spinner } from "../ui";
 import { MiniChart } from "./UsageDimensions";
 import { sameMap, useScopeWindow, type ScopeWindow, type UsageLimitValues } from "./use-scope-window";
+import { ChartScaleProvider, type ChartScaleMode } from "./ChartScaleMode";
+import { recommendedAxisMode } from "./scale";
 
 export interface WindowLimits {
   cost: LevelValues;
   usage: UsageLimitValues;
   enabled?: boolean;
-  costEnabled?: boolean;
-  usageEnabled?: Record<string, boolean>;
-  costLevelEnabled?: Record<string, boolean>;
-  usageLevelEnabled?: Record<string, Record<string, boolean>>;
 }
 
 export interface LimitsChartDualProps {
@@ -56,6 +54,17 @@ export interface LimitsChartDualProps {
   headerless?: boolean;
 }
 
+interface ChartRow {
+  id: string;
+  label: string;
+  unit: string;
+  series: DayPoint[];
+  includedPerCycle?: number;
+  poolSeries?: DayPoint[];
+  aggregationKind?: AggregationKind;
+  initialScale: ChartScaleMode;
+}
+
 /**
  * One table per scope: a row per dimension (cost first) with the per-day and
  * per-billing-cycle mini charts, level chips in fixed per-level columns, and
@@ -80,16 +89,12 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     quotaScope, usageEnabled: !costOnly,
     onCostChange: cost => onChange("day", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("day", current => ({ ...current, usage })),
-    costLevelEnabled: day.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("day", current => ({ ...current, costLevelEnabled })),
-    usageLevelEnabled: day.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("day", current => ({ ...current, usageLevelEnabled })),
   });
   const cycleWindow = useScopeWindow({
     data, window: "cycle", levels, cost: cycle.cost, usage: cycle.usage, tolerance, readOnly, costFloor: day.cost, usageFloor: day.usage,
     quotaScope, usageEnabled: !costOnly,
     onCostChange: cost => onChange("cycle", current => ({ ...current, cost })),
     onUsageChange: usage => onChange("cycle", current => ({ ...current, usage })),
-    costLevelEnabled: cycle.costLevelEnabled, onCostLevelEnabledChange: costLevelEnabled => onChange("cycle", current => ({ ...current, costLevelEnabled })),
-    usageLevelEnabled: cycle.usageLevelEnabled, onUsageLevelEnabledChange: usageLevelEnabled => onChange("cycle", current => ({ ...current, usageLevelEnabled })),
   });
   const metricIds = dayWindow.metricIds;
   const order = dayWindow.order;
@@ -98,10 +103,6 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
   const trackOnly = !!data && !data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
   const bare = headerless || trackOnly;
   const costUnsupported = data?.planTier === "enterprise";
-  // Capped chip columns keep each level's diamond and value a tight pair with
-  // even spacing between levels, instead of stretching across the cell; the
-  // fixed cap keeps values aligned across rows.
-  const chipColumns = { gridTemplateColumns: `96px repeat(${levels.length}, minmax(0, 76px))`, justifyContent: "start" } as const;
   const previousTolerance = useRef(tolerance);
   useEffect(() => {
     const previous = previousTolerance.current;
@@ -128,21 +129,15 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to tolerance changes only
   }, [tolerance]);
 
-  const rows = useMemo(() => data ? [
-    { id: "cost", label: "Cost", unit: "USD", series: costSeries(data) },
+  const rows = useMemo<ChartRow[]>(() => data ? [
+    { id: "cost", label: "Cost", unit: "USD", series: costSeries(data), initialScale: recommendedPairScale(costSeries(data), data) },
     ...(costOnly ? [] : metricIds.map(id => {
       const quota = quotaScope && data.planTier !== "free";
-      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series: rowSeries(data, id), includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, aggregationKind: metricAggregationKind(data, id) };
+      const series = rowSeries(data, id);
+      const aggregationKind = metricAggregationKind(data, id);
+      return { id, label: data.metrics[id]?.label ?? id, unit: data.metrics[id]?.unit ?? "", series, includedPerCycle: quota ? metricIncluded(data, id) : undefined, poolSeries: quota ? metricPool(data, id)?.series : undefined, aggregationKind, initialScale: recommendedPairScale(series, data, aggregationKind) };
     })),
   ] : [], [data, metricIds, costOnly, quotaScope]);
-  // One switch per dimension, written to both windows; the day map is authoritative.
-  const enabledFor = (id: string) => (id === "cost" ? day.costEnabled ?? true : day.usageEnabled?.[id] ?? true);
-  const setEnabled = (id: string, next: boolean) => {
-    for (const window of ["day", "cycle"] as const) {
-      onChange(window, current => (id === "cost" ? { ...current, costEnabled: next } : { ...current, usageEnabled: { ...current.usageEnabled, [id]: next } }));
-    }
-  };
-
   if (!dataProp && scope && fetched.loading) {
     return <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>;
   }
@@ -155,44 +150,46 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
     <div className="@container">
       <div className={separators ? "grid" : "grid gap-1.5"}>
         {!chartHeadings && (
-          <div className="grid grid-cols-[minmax(120px,164px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-end gap-x-4 px-3 pb-1 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint max-lg:hidden">
-            <span />
+          // The cycle heading is as wide as the right-anchored cycle group
+          // (chart + gap + level columns), so it starts over the cycle chart.
+          <div className="flex items-end gap-x-10 px-3 pb-1 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-faint max-lg:hidden">
+            <span className="w-[140px] flex-none" />
             <span>Per day</span>
-            <span>Per billing cycle</span>
-            <span />
+            <span className="ml-auto" style={{ width: 108 + levels.length * 94 - 10 }}>Per billing cycle</span>
           </div>
         )}
         {rows.map(row => {
-          const on = enabledFor(row.id);
           const unsupported = row.id === "cost" && costUnsupported;
-          const isOpen = on && !unsupported && open === row.id;
+          const isOpen = !unsupported && open === row.id;
           if (bare) {
             return (
-              <div key={row.id} className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
-                <div className="min-w-0">{row.id === "cost" ? dayWindow.costChart(chartHeadings?.day) : dayWindow.usageChart(row.id)}</div>
-                <div className="min-w-0">{row.id === "cost" ? cycleWindow.costChart(chartHeadings?.cycle) : cycleWindow.usageChart(row.id)}</div>
-                {unsupported && <p className="col-span-full m-0 text-[11.5px] text-muted">Cost tracking is not supported on Enterprise plans currently.</p>}
-              </div>
+              <ChartScaleProvider key={row.id} initialMode={row.initialScale}>
+                <div className="grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+                  <div className="min-w-0">{row.id === "cost" ? dayWindow.costChart(chartHeadings?.day) : dayWindow.usageChart(row.id)}</div>
+                  <div className="min-w-0">{row.id === "cost" ? cycleWindow.costChart(chartHeadings?.cycle) : cycleWindow.usageChart(row.id)}</div>
+                  {unsupported && <p className="col-span-full m-0 text-[11.5px] text-muted">Cost tracking is not supported on Enterprise plans currently.</p>}
+                </div>
+              </ChartScaleProvider>
             );
           }
           return (
-            <DualRow
-              key={row.id}
-              row={row}
-              on={on}
-              open={isOpen}
-              onToggleOpen={() => onOpenChange(isOpen ? null : row.id)}
-              onToggle={readOnly || unsupported ? undefined : next => setEnabled(row.id, next)}
-              deviated={deviated?.has(row.id) ?? false}
-              chipColumns={chipColumns}
-              levels={levels}
-              day={{ window: dayWindow, values: row.id === "cost" ? day.cost : day.usage[row.id] ?? {}, levelEnabled: row.id === "cost" ? day.costLevelEnabled : day.usageLevelEnabled?.[row.id], data }}
-              cycle={{ window: cycleWindow, values: row.id === "cost" ? cycle.cost : cycle.usage[row.id] ?? {}, levelEnabled: row.id === "cost" ? cycle.costLevelEnabled : cycle.usageLevelEnabled?.[row.id], data }}
-              readOnly={readOnly}
-              unsupported={unsupported}
-              chartHeadings={chartHeadings}
-              separators={separators}
-            />
+            <ChartScaleProvider key={row.id} initialMode={row.initialScale}>
+              <DualRow
+                row={row}
+                open={isOpen}
+                onToggleOpen={() => onOpenChange(isOpen ? null : row.id)}
+                deviated={deviated?.has(row.id) ?? false}
+                levels={levels}
+                day={{ window: dayWindow, values: row.id === "cost" ? day.cost : day.usage[row.id] ?? {}, data }}
+                cycle={{ window: cycleWindow, values: row.id === "cost" ? cycle.cost : cycle.usage[row.id] ?? {}, data }}
+                tolerance={tolerance}
+                quotaIncluded={quotaScope && data.planTier !== "free" ? row.includedPerCycle : undefined}
+                readOnly={readOnly}
+                unsupported={unsupported}
+                chartHeadings={chartHeadings}
+                separators={separators}
+              />
+            </ChartScaleProvider>
           );
         })}
       </div>
@@ -200,53 +197,58 @@ export function LimitsChartDual({ data: dataProp, token, scope, levels, day, cyc
   );
 }
 
-interface WindowCell { window: ScopeWindow; values: LevelValues; levelEnabled?: Record<string, boolean>; data: UsageSeriesResponse }
+interface WindowCell { window: ScopeWindow; values: LevelValues; data: UsageSeriesResponse }
 
-function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns, levels, day, cycle, readOnly, unsupported, chartHeadings, separators }: {
-  row: { id: string; label: string; unit: string; series: DayPoint[]; includedPerCycle?: number; poolSeries?: DayPoint[]; aggregationKind?: AggregationKind };
-  on: boolean;
+function DualRow({ row, open, onToggleOpen, deviated, levels, day, cycle, tolerance, quotaIncluded, readOnly, unsupported, chartHeadings, separators }: {
+  row: ChartRow;
   open: boolean;
   onToggleOpen(): void;
-  onToggle?(next: boolean): void;
   deviated: boolean;
-  chipColumns: { gridTemplateColumns: string };
   levels: LimitsChartLevel[];
   day: WindowCell;
   cycle: WindowCell;
+  /** Global tolerance percents; untouched chips read these back instead of a recomputed percent. */
+  tolerance?: LevelValues;
+  /** Included allotment used for default seeding on quota scopes. */
+  quotaIncluded?: number;
   readOnly: boolean;
   unsupported: boolean;
   chartHeadings?: { day: string; cycle: string };
   separators?: boolean;
 }) {
   const accent = CHART_ACCENT;
-  // A disabled row desaturates its content; the switch keeps full strength so
-  // the way back on stays obvious.
-  const dim = on && !unsupported ? "" : "opacity-55 saturate-0";
+  // An unsupported row desaturates its content.
+  const dim = unsupported ? "opacity-55 saturate-0" : "";
+  // Both states keep the same box: a full 1px border on every row, with the
+  // closed row's sides and top transparent. Opening only recolors, so no
+  // layout shift.
   const shell = separators
     ? open
-      ? "my-2 rounded-panel border border-line-strong bg-panel first:mt-0 last:mb-0"
-      : "border-b border-line-soft last:border-b-0"
+      ? "rounded-panel border border-line-strong bg-panel"
+      : "rounded-panel border border-transparent border-b-line-soft last:border-b-transparent"
     : `rounded-panel border bg-panel ${open ? "border-line-strong" : "border-line"}`;
-  // Stable per-side active-level arrays so the memoized MiniChart can skip
-  // re-rendering when a sibling row changes.
-  const dayActiveLevels = useMemo(() => levels.filter(level => day.levelEnabled?.[level.id] ?? true), [levels, day.levelEnabled]);
-  const cycleActiveLevels = useMemo(() => levels.filter(level => cycle.levelEnabled?.[level.id] ?? true), [levels, cycle.levelEnabled]);
+  const order = levels.map(level => level.id);
   const cell = (window: "day" | "cycle", side: WindowCell) => {
-    const activeLevels = window === "day" ? dayActiveLevels : cycleActiveLevels;
+    const baseline = windowBaseline(row.series, side.data.cycles, side.data.today, window, row.includedPerCycle, row.aggregationKind);
+    // The untouched map this window seeds from; a value still on it shows the tolerance percent itself.
+    const seeded = tolerance ? windowDefaults(row.series, side.data.cycles, side.data.today, order, window, tolerance, window === "cycle" ? day.values : undefined, quotaIncluded, row.aggregationKind ?? "sum") : undefined;
     return (
-      <span className="pointer-events-none relative grid min-w-0 items-center gap-x-2.5" style={chipColumns}>
-        <span className="grid min-w-0">
-          <MiniChart series={row.series} cycles={side.data.cycles} today={side.data.today} window={window} accent={accent} levels={activeLevels} values={side.values} includedPerCycle={row.includedPerCycle} poolSeries={row.poolSeries} aggregationKind={row.aggregationKind} className="h-6 w-[72px]" />
-        </span>
+      // Fixed-width level columns keep the trio aligned across rows; the
+      // chart sits a larger step away so the levels read as one group rather
+      // than hanging off the chart.
+      <span className="pointer-events-none relative flex min-w-0 items-center gap-x-9">
+        <MiniChart series={row.series} cycles={side.data.cycles} today={side.data.today} window={window} accent={accent} levels={levels} values={side.values} includedPerCycle={row.includedPerCycle} poolSeries={row.poolSeries} aggregationKind={row.aggregationKind} className="h-6 w-[72px] flex-none" />
+        <span className="grid min-w-0 auto-cols-[84px] grid-flow-col items-center gap-x-2.5">
         {levels.map(level => {
-          const levelOn = side.levelEnabled?.[level.id] ?? true;
           const value = side.values[level.id];
           const commit = row.id === "cost" ? (next: number) => side.window.commitCost(level.id, next) : (next: number) => side.window.commitUsage(row.id, level.id, next);
-          const toggle = row.id === "cost" ? side.window.toggleCostLevel : side.window.toggleUsageLevel && ((levelId: string, next: boolean) => side.window.toggleUsageLevel!(row.id, levelId, next));
-          return <LevelValueField key={level.id} variant="chip" level={level} value={value} enabled={levelOn} unit={row.unit}
-            onCommit={on && !unsupported && levelOn && value !== undefined && !readOnly ? commit : undefined}
-            onToggle={on && !unsupported && !readOnly && toggle ? next => toggle(level.id, next) : undefined} />;
+          const deviates = value !== undefined && seeded?.[level.id] !== undefined && value !== seeded[level.id];
+          return <LevelValueField key={level.id} variant="chip" level={level} value={value} unit={row.unit}
+            percent={deviates ? displayPercent(value, baseline) : undefined}
+            percentAccent={deviates}
+            onCommit={!unsupported && value !== undefined && !readOnly ? commit : undefined} />;
         })}
+        </span>
       </span>
     );
   };
@@ -254,15 +256,14 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
     <div data-deviated={deviated || undefined} className={`isolate relative transition-colors duration-200 ${shell}`}>
       {/* Deviation glow: painted behind the row content so it can fade. */}
       <div aria-hidden="true" className={`pointer-events-none absolute inset-0 -z-10 rounded-panel bg-gradient-to-r from-orange-soft/40 via-transparent via-[96px] transition-opacity duration-300 ${deviated ? "opacity-100" : "opacity-0"}`} />
-      <div className="relative grid grid-cols-[minmax(120px,164px)_minmax(0,1fr)_minmax(0,1fr)_36px] items-center gap-x-4 px-3 py-2 max-lg:grid-cols-[minmax(0,1fr)_36px] max-lg:gap-y-2">
-        <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${row.label}`} disabled={!on || unsupported} onClick={onToggleOpen} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
-        <span className={`pointer-events-none relative min-w-0 ${dim}`}>
+      <div className="relative flex items-center gap-x-10 px-3 py-3 max-lg:flex-wrap max-lg:gap-y-2">
+        <button type="button" aria-expanded={open} aria-label={`${open ? "Collapse" : "Expand"} ${row.label}`} disabled={unsupported} onClick={onToggleOpen} className="absolute inset-0 cursor-pointer rounded-panel disabled:cursor-default" />
+        <span className={`pointer-events-none relative w-[140px] flex-none min-w-0 ${dim}`}>
           <strong className="block truncate text-[12.5px]">{row.label}{deviated && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</strong>
-          <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${formatLimitValue(row.includedPerCycle, row.unit)} included` : unitLabel(row.unit)}</small>
+          <small className="block text-[10.5px] text-faint">{row.includedPerCycle ? `${compactValue(row.includedPerCycle, row.unit)} ${unitLabel(row.unit)} included` : unitLabel(row.unit)}</small>
         </span>
-        <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("day", day)}</span>
-        <span className={`pointer-events-none relative max-lg:order-last max-lg:col-span-2 ${dim}`}>{cell("cycle", cycle)}</span>
-        <span className="pointer-events-none relative flex justify-end">{onToggle ? <span className="pointer-events-auto"><Switch label={`Monitor ${row.label}`} on={on} onChange={onToggle} title={on ? "Monitored. Switch off to ignore this dimension." : "Not monitored."} /></span> : null}</span>
+        <span className={`pointer-events-none relative max-lg:order-last ${dim}`}>{cell("day", day)}</span>
+        <span className={`pointer-events-none relative ml-auto max-lg:order-last max-lg:ml-0 ${dim}`}>{cell("cycle", cycle)}</span>
       </div>
       {unsupported && <p className="relative m-0 px-3 pb-2 text-[11.5px] text-muted">Cost tracking is not supported on Enterprise plans currently.</p>}
       <Expander open={open} innerClassName={separators ? "px-3 pb-4 pt-1" : "px-3 pb-3 pt-1"}>
@@ -281,3 +282,11 @@ function DualRow({ row, on, open, onToggleOpen, onToggle, deviated, chipColumns,
   );
 }
 
+function recommendedPairScale(series: DayPoint[], data: UsageSeriesResponse, aggregationKind: AggregationKind = "sum"): ChartScaleMode {
+  const window = visibleWindow(series, data.cycles, data.today);
+  const dense = denseSeries(series, window.fromDay, window.toDay);
+  const cycle = cycleCumulative(dense, data.cycles, aggregationKind).map(point => point.cumulative);
+  return recommendedAxisMode(series.map(point => point.value)) === "logarithmic" || recommendedAxisMode(cycle) === "logarithmic"
+    ? "logarithmic"
+    : "linear";
+}

@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 describe("account and product limit fields", () => {
-  it("uses value-only chips in rows and labeled bare fields in both open charts", async () => {
+  it("uses labeled chips in rows and labeled bare fields in both open charts", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -45,14 +45,40 @@ describe("account and product limit fields", () => {
     expect(fieldVariants(account, "bare")).toEqual(fieldVariants(product, "bare"));
 
     for (const chip of container.querySelectorAll("[data-level-field][data-variant='chip']")) {
-      expect(chip.querySelector("[data-level-label]")).toBeNull();
-      // The diamond is the row-level toggle.
-      expect(chip.querySelector("button[role='switch']")).not.toBeNull();
+      expect(chip.querySelector("[data-level-label]")).not.toBeNull();
+      expect(chip.querySelector("[role='switch']")).toBeNull();
     }
     for (const field of container.querySelectorAll("[data-level-field][data-variant='bare']")) {
       expect(field.querySelector("[data-level-label]")).not.toBeNull();
-      expect(field.querySelector("[role='switch']")).not.toBeNull();
+      expect(field.querySelector("[role='switch']")).toBeNull();
     }
+  });
+
+  it("presents billed-via usage as one normalized meter total", async () => {
+    const requestId = "durable_objects:requests";
+    const websocketId = "durable_objects:incoming_websocket_messages";
+    const durableData = {
+      scope: "family:durable_objects",
+      resourceId: "durable_objects",
+      found: true,
+      today: "2026-08-18",
+      metrics: {
+        [requestId]: { key: "requests", label: "Requests", unit: "requests", billable: true, includedPerCycle: 1_000_000 },
+        [websocketId]: { key: "websockets", label: "WebSocket messages", unit: "messages", billable: true, billedVia: { metricId: requestId, ratio: 20, label: "Durable Objects request" } },
+      },
+      series: [{ day: "2026-08-18", costUsd: 0, metrics: { [requestId]: 100, [websocketId]: 400 }, sealed: true }],
+      cycles: [{ startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1), approximate: false }],
+    };
+    const durableDay: WindowLimits = { cost: { warning: 1, critical: 2 }, usage: { [requestId]: { warning: 100, critical: 200 } } };
+    const durableCycle: WindowLimits = { cost: { warning: 10, critical: 20 }, usage: { [requestId]: { warning: 1_000, critical: 2_000 } } };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root!.render(<LimitsChartDual data={durableData} levels={levels} day={durableDay} cycle={durableCycle} onChange={() => {}} open={requestId} onOpenChange={() => {}} />));
+
+    expect(container.textContent).toContain("Requests");
+    expect(container.textContent).not.toContain("WebSocket");
+    expect(container.textContent).not.toContain("÷ 20");
   });
 });
 

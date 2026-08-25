@@ -401,7 +401,7 @@ export function ToleranceTrack({ levels, value, typical, cycleDays, onChange }: 
             <div className="flex items-baseline justify-between gap-1">
               <span className="truncate text-[11.5px] font-bold" style={{ color: level.color }}>{level.label}</span>
               <span className="[&_[data-level-field]]:w-auto [&_[data-level-label]]:hidden">
-                <LevelValueField level={level} unit="%" value={percent} enabled variant="bare" step={value => snapStep(value, 1)} onCommit={next => change(level.id, next)} />
+                <LevelValueField level={level} unit="%" value={percent} variant="bare" step={value => snapStep(value, 1)} onCommit={next => change(level.id, next)} />
               </span>
             </div>
             {typical > 0 && (

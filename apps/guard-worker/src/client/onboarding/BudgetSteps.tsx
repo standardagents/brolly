@@ -10,7 +10,7 @@ import type { RuntimeIntegration } from "./model";
 export function StepIntro({ title, children }: { title: string; children?: ReactNode }) {
   return <>
     <h2 className={`text-[27px] tracking-[-.025em] ${children ? "mb-2.5" : "mb-7"}`}>{title}</h2>
-    {children && <p className="mb-7 text-[14px] leading-[1.6] text-muted">{children}</p>}
+    {children && <p className="mb-7 max-w-[50ch] text-[14px] leading-[1.6] text-muted">{children}</p>}
   </>;
 }
 

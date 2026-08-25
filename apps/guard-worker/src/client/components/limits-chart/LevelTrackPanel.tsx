@@ -9,7 +9,7 @@ import type { LimitHistory } from "./use-limit-history";
  * for scopes that have no usage history to plot. Always open: there is no
  * chart to reveal, so the track is the whole row.
  */
-export function LevelTrackPanel({ title, levels, unit, value, onChange, history, resetTo, readOnly = false, levelEnabled, onLevelEnabledChange, headerContent }: {
+export function LevelTrackPanel({ title, levels, unit, value, onChange, history, resetTo, readOnly = false, headerContent }: {
   title?: string;
   levels: LimitsChartLevel[];
   unit: string;
@@ -19,8 +19,6 @@ export function LevelTrackPanel({ title, levels, unit, value, onChange, history,
   /** The baseline map the reset action restores; no reset control without it. */
   resetTo?: LevelValues;
   readOnly?: boolean;
-  levelEnabled?: Record<string, boolean>;
-  onLevelEnabledChange?(next: Record<string, boolean>): void;
   headerContent?: ReactNode;
 }) {
   const order = levels.map(level => level.id);
@@ -51,7 +49,7 @@ export function LevelTrackPanel({ title, levels, unit, value, onChange, history,
           </div>
         </div>
       )}
-      <LevelTrack levels={levels} unit={unit} value={value} onChange={commit} readOnly={readOnly} levelEnabled={levelEnabled} onLevelEnabledChange={onLevelEnabledChange} />
+      <LevelTrack levels={levels} unit={unit} value={value} onChange={commit} readOnly={readOnly} />
     </div>
   );
 }

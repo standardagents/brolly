@@ -2,12 +2,16 @@
  * Y-axis math for the limits chart. Pure functions, no DOM.
  *
  * The axis is linear until outliers appear (max > OUTLIER_RATIO × median of
- * the nonzero values); then it becomes symlog: linear from 0 to the knee and
- * logarithmic above it, so zero days sit on the baseline and a single spike
- * does not flatten the rest of the history.
+ * the nonzero values); then it becomes symlog: near-linear from 0 to a
+ * softened knee above the median and logarithmic beyond it. Zero days stay on
+ * the baseline while a single spike leaves the rest of the history readable.
  */
 
 export const OUTLIER_RATIO = 10;
+/** A higher knee weakens logarithmic compression and keeps the curve closer to linear. */
+export const SYMLOG_KNEE_MULTIPLIER = 2;
+export type AxisMode = "auto" | "linear" | "logarithmic";
+export type ResolvedAxisMode = Exclude<AxisMode, "auto">;
 
 /**
  * A quota above this multiple of the data and configured levels is kept out
@@ -109,20 +113,28 @@ export function niceLadder(max: number, count: number): number[] {
 
 /**
  * Choose the axis for a series plus any values that must stay visible
- * (threshold levels). Linear when the data is tame; symlog when the max is
- * more than OUTLIER_RATIO × the median nonzero value.
+ * (threshold levels). Auto mode stays linear for tame data and uses symlog
+ * when the max is more than OUTLIER_RATIO × the median nonzero value.
  */
-export function chooseAxis(series: number[], extra: number[] = []): Axis {
+export function chooseAxis(series: number[], extra: number[] = [], mode: AxisMode = "auto"): Axis {
   const data = series.filter(value => Number.isFinite(value) && value >= 0);
   const nonzero = data.filter(value => value > 0);
   const dataMax = Math.max(0, ...data);
   const top = Math.max(dataMax, ...extra.filter(value => Number.isFinite(value) && value > 0));
   const middle = median(nonzero);
-  const outlier = nonzero.length >= 3 && middle > 0 && dataMax > OUTLIER_RATIO * middle;
-  if (!outlier) return linearAxis(top);
-  // Knee at the median: typical days sit low and an outlier towers over
-  // them, while the linear stretch under the knee keeps zeros readable.
-  return symlogAxis(top, middle);
+  const resolved = mode === "auto" ? recommendedAxisMode(data) : mode;
+  if (resolved === "linear") return linearAxis(top);
+  // A knee above the median softens the logarithmic compression. Typical days
+  // sit lower while the outlier remains visible within the same domain.
+  return symlogAxis(top, middle * SYMLOG_KNEE_MULTIPLIER);
+}
+
+/** Choose the readable initial mode from a chart's observed values. */
+export function recommendedAxisMode(series: number[]): ResolvedAxisMode {
+  const nonzero = series.filter(value => Number.isFinite(value) && value > 0);
+  const middle = median(nonzero);
+  const dataMax = Math.max(0, ...nonzero);
+  return nonzero.length >= 3 && middle > 0 && dataMax > OUTLIER_RATIO * middle ? "logarithmic" : "linear";
 }
 
 /**
@@ -131,12 +143,12 @@ export function chooseAxis(series: number[], extra: number[] = []): Axis {
  * be useful. A distant allotment remains available to the caller as an
  * off-scale boundary instead of flattening the history.
  */
-export function chooseAxisWithIncluded(series: number[], extra: number[] = [], includedPerCycle?: number): Axis {
+export function chooseAxisWithIncluded(series: number[], extra: number[] = [], includedPerCycle?: number, mode: AxisMode = "auto"): Axis {
   const included = includedPerCycle;
-  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return chooseAxis(series, extra);
+  if (!(typeof included === "number" && Number.isFinite(included) && included > 0)) return chooseAxis(series, extra, mode);
   const referenceMax = Math.max(0, ...series.filter(value => Number.isFinite(value) && value >= 0), ...extra.filter(value => Number.isFinite(value) && value >= 0));
   const includeBoundary = referenceMax === 0 || included <= referenceMax * INCLUDED_QUOTA_CLAMP_RATIO;
-  return chooseAxis(series, includeBoundary ? [...extra, included] : extra);
+  return chooseAxis(series, includeBoundary ? [...extra, included] : extra, mode);
 }
 
 export interface IncludedBandGeometry {
@@ -168,7 +180,7 @@ export const quotaBandGeometry = includedBandGeometry;
 
 export function linearAxis(top: number): Axis {
   const max = niceCeil(top > 0 ? top * 1.05 : 1) || 1;
-  const step = niceFloor(max / 4) || max / 4;
+  const step = niceFloor(max / 6) || max / 6;
   const ticks: number[] = [];
   for (let tick = 0; tick < max - step / 2; tick += step) ticks.push(roundFloat(tick));
   ticks.push(max);
@@ -190,7 +202,7 @@ export function symlogAxis(top: number, knee: number): Axis {
   while (decade < max) {
     for (const mantissa of [1, 2, 5]) {
       const tick = roundFloat(mantissa * decade);
-      if (tick >= safeKnee / 2 && tick < max && position(tick) - position(ticks.at(-1)!) >= 0.09) ticks.push(tick);
+      if (tick >= safeKnee / 2 && tick < max && position(tick) - position(ticks.at(-1)!) >= 0.07) ticks.push(tick);
     }
     decade *= 10;
   }

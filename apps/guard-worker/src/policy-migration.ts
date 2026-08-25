@@ -53,8 +53,7 @@ export async function migrateLegacyPolicyRules(
     targetResourceId: rootId,
     metricDefinitionId: "account:estimated_cost_usd",
     limits: chartCost(policy.limits?.day?.account, policy.accountDailySpend),
-    levelEnabled: policy.limits?.day?.account?.costLevelEnabled,
-    enabled: policy.limits?.day?.account?.costEnabled,
+    enabled: policy.limits?.day?.account?.enabled,
     levels,
     now,
   });
@@ -80,8 +79,7 @@ export async function migrateLegacyPolicyRules(
       targetResourceId: productId,
       metricDefinitionId: `${family}:estimated_cost_usd`,
       limits: chartCost(scope, limits),
-      levelEnabled: scope?.costLevelEnabled,
-      enabled: scope?.costEnabled,
+      enabled: scope?.enabled,
       levels,
       now,
     });
@@ -105,8 +103,7 @@ export async function migrateLegacyPolicyRules(
       targetResourceId: row.id,
       metricDefinitionId: `${parsed.family}:estimated_cost_usd`,
       limits: chartCost(scope, limits),
-      levelEnabled: scope?.costLevelEnabled,
-      enabled: scope?.costEnabled,
+      enabled: scope?.enabled,
       levels,
       now,
     });
@@ -149,8 +146,8 @@ export async function migrateLegacyPolicyRules(
           metricDefinitionId: `${target.family}:estimated_cost_usd`,
           measurement: "estimated_cost",
           period,
-          enabled: scope.costEnabled,
-          lines: materializedSpendLines(scope.cost, levels, scope.costLevelEnabled),
+          enabled: scope.enabled,
+          lines: materializedSpendLines(scope.cost, levels),
           now,
         });
         ruleCount += 1;
@@ -174,8 +171,8 @@ export async function migrateLegacyPolicyRules(
           metricDefinitionId,
           measurement: "usage",
           period,
-          enabled: scope.usageEnabled?.[metricDefinitionId],
-          lines: materializedSpendLines(limits, levels, scope.usageLevelEnabled?.[metricDefinitionId]),
+          enabled: scope.enabled,
+          lines: materializedSpendLines(limits, levels),
           now,
         });
         ruleCount += 1;
@@ -236,7 +233,6 @@ function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: 
   targetResourceId: string;
   metricDefinitionId: string;
   limits: SpendLimits;
-  levelEnabled?: Record<string, boolean>;
   enabled?: boolean;
   levels: AlertLevel[];
   now: number;
@@ -246,7 +242,7 @@ function addSpendRule(db: D1Database, statements: D1PreparedStatement[], input: 
     measurement: "estimated_cost",
     period: "day",
     enabled: input.enabled,
-    lines: materializedSpendLines(input.limits, input.levels, input.levelEnabled),
+    lines: materializedSpendLines(input.limits, input.levels),
   });
 }
 
@@ -357,7 +353,7 @@ function retireRuleByKey(
   );
 }
 
-export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[], levelEnabled?: Record<string, boolean>): Array<{
+export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[]): Array<{
   levelId: string;
   label: string;
   color: string;
@@ -366,7 +362,7 @@ export function materializedSpendLines(limits: SpendLimits, levels: AlertLevel[]
   enabled: boolean;
 }> {
   return levels.flatMap((level, index) => finiteLimit(limits[level.id])
-    ? [{ levelId: level.id, label: level.label, color: levelColor(index, levels.length), priority: level.position * 10, value: limits[level.id]!, enabled: levelEnabled?.[level.id] !== false }]
+    ? [{ levelId: level.id, label: level.label, color: levelColor(index, levels.length), priority: level.position * 10, value: limits[level.id]!, enabled: true }]
     : []);
 }
 

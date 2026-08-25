@@ -12,18 +12,16 @@ import { useElementWidth } from "./use-element-width";
  * in absolute units). Diamonds push each other and never cross; each
  * level's name and editable value sit under its diamond.
  */
-export function LevelTrack({ levels, value, unit, onChange, readOnly = false, levelEnabled, onLevelEnabledChange }: {
+export function LevelTrack({ levels, value, unit, onChange, readOnly = false }: {
   levels: LimitsChartLevel[];
   value: LevelValues;
   unit: string;
   onChange(next: LevelValues): void;
   readOnly?: boolean;
-  levelEnabled?: Record<string, boolean>;
-  onLevelEnabledChange?(next: Record<string, boolean>): void;
 }) {
   const [containerRef, width] = useElementWidth<HTMLDivElement>();
   const order = useMemo(() => levels.map(level => level.id), [levels]);
-  const active = levels.filter(level => levelEnabled?.[level.id] ?? true);
+  const active = levels;
   const highest = Math.max(1, ...order.map(id => value[id] ?? 0));
   const [dragValues, setDragValues] = useState<LevelValues | null>(null);
   const shown = dragValues ?? value;
@@ -144,11 +142,10 @@ export function LevelTrack({ levels, value, unit, onChange, readOnly = false, le
         </svg>
       </div>
       {!readOnly && (
-        <div className="grid grid-cols-3 gap-x-8 gap-y-2 border-t border-line-soft pt-2.5 max-sm:grid-cols-2">
+        <div className="flex flex-wrap justify-center gap-x-12 gap-y-2 border-t border-line-soft pt-2.5">
           {levels.map(level => (
-            <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0} enabled={levelEnabled?.[level.id] ?? true}
-              onCommit={next => onChange(push(value, level.id, next))}
-              onToggle={onLevelEnabledChange ? next => onLevelEnabledChange({ ...levelEnabled, [level.id]: next }) : undefined} />
+            <LevelValueField key={level.id} variant="bare" level={level} unit={unit} value={shown[level.id] ?? 0}
+              onCommit={next => onChange(push(value, level.id, next))} />
           ))}
         </div>
       )}

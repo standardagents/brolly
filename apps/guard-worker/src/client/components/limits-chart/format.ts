@@ -19,6 +19,12 @@ export function compactValue(value: number, _unit: string): string {
     : new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(roundForField(value));
 }
 
+/** Level-field display form: dollar values under $100 always show two decimals; from $100 up they show none. Other units follow `compactValue`. */
+export function fieldValue(value: number, unit: string): string {
+  if (unit === "USD" && value < 1_000) return value >= 100 ? String(Math.round(value)) : value.toFixed(2);
+  return compactValue(value, unit);
+}
+
 /** Select the digits of an edit value while leaving a K/M/B/T suffix unselected. */
 export function selectNumber(input: HTMLInputElement, text: string): void {
   const digits = text.match(/^[0-9.]*/)?.[0].length ?? text.length;
@@ -26,8 +32,8 @@ export function selectNumber(input: HTMLInputElement, text: string): void {
 }
 
 /** Editable form with extra precision and a retained K/M/B/T suffix for large values. */
-export function editableValue(value: number, _unit: string): string {
-  if (!(value >= 1_000)) return String(roundForField(value));
+export function editableValue(value: number, unit: string): string {
+  if (!(value >= 1_000)) return unit === "USD" && value < 100 ? value.toFixed(2) : String(roundForField(value));
   const units: Array<[number, string]> = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
   const [scale, suffix] = units.find(([limit]) => value >= limit)!;
   return `${roundFloatText(value / scale)}${suffix}`;

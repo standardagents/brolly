@@ -92,13 +92,7 @@ function moveAccountUsageToFamilies(day: Record<string, ScopeLimits>, cycle: Rec
     const account = scopes.account;
     if (!account) continue;
     const accountUsage = account.usage ?? {};
-    const accountEnabled = account.usageEnabled;
-    const accountLevelEnabled = account.usageLevelEnabled;
-    const metricIds = new Set([
-      ...Object.keys(accountUsage),
-      ...Object.keys(accountEnabled ?? {}),
-      ...Object.keys(accountLevelEnabled ?? {}),
-    ]);
+    const metricIds = new Set(Object.keys(accountUsage));
     for (const metricId of metricIds) {
       const family = metricId.split(":", 1)[0];
       if (!family || !families.includes(family)) continue;
@@ -107,18 +101,8 @@ function moveAccountUsageToFamilies(day: Record<string, ScopeLimits>, cycle: Rec
       if (!Object.prototype.hasOwnProperty.call(familyScope.usage, metricId) && Object.prototype.hasOwnProperty.call(accountUsage, metricId)) {
         familyScope.usage[metricId] = accountUsage[metricId]!;
       }
-      if (accountEnabled && Object.prototype.hasOwnProperty.call(accountEnabled, metricId)) {
-        familyScope.usageEnabled ??= {};
-        if (!Object.prototype.hasOwnProperty.call(familyScope.usageEnabled, metricId)) familyScope.usageEnabled[metricId] = accountEnabled[metricId]!;
-      }
-      if (accountLevelEnabled && Object.prototype.hasOwnProperty.call(accountLevelEnabled, metricId)) {
-        familyScope.usageLevelEnabled ??= {};
-        if (!Object.prototype.hasOwnProperty.call(familyScope.usageLevelEnabled, metricId)) familyScope.usageLevelEnabled[metricId] = accountLevelEnabled[metricId]!;
-      }
     }
     account.usage = {};
-    if (account.usageEnabled) account.usageEnabled = {};
-    if (account.usageLevelEnabled) account.usageLevelEnabled = {};
   }
 }
 
