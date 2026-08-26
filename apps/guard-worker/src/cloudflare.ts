@@ -9,6 +9,12 @@ import {
   productDatasetVariables,
   type ProductUsageDefinition,
 } from "./product-usage.js";
+import {
+  HistoricalAnalyticsClient,
+  type HistoricalDatasetCapability,
+  type HistoricalUsageRequest,
+  type HistoricalUsageResult,
+} from "./historical-analytics.js";
 
 const API = "https://api.cloudflare.com/client/v4";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -196,78 +202,19 @@ export class CloudflareClient {
   }
 
   async analyticsCapabilities(): Promise<CollectorCoverage[]> {
-    const datasets: Array<{ dataset: string; collectorKey: string; family: string; scope: AssetRef["scope"]; root: "account" | "zone" }> = [
-      { dataset: "durableObjectsInvocationsAdaptiveGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "object", root: "account" },
-      { dataset: "durableObjectsPeriodicGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "object", root: "account" },
-      { dataset: "durableObjectsSqlStorageGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "namespace", root: "account" },
-      { dataset: "durableObjectsStorageGroups", collectorKey: "graphql:durable-objects", family: "durable_objects", scope: "account", root: "account" },
-      { dataset: "workersInvocationsAdaptive", collectorKey: "graphql:workers", family: "workers", scope: "resource", root: "account" },
-      ...PRODUCT_USAGE_DEFINITIONS.flatMap(definition => definition.datasets.map(source => ({
-        dataset: source.dataset,
-        collectorKey: definition.collector,
-        family: definition.family,
-        scope: source.root === "zone" ? "zone" as const : source.resourceDimension ? definition.scope : "account" as const,
-        root: source.root ?? "account",
-      }))),
-    ];
-    const fields = "enabled availableFields maxDuration maxNumberOfFields maxPageSize notOlderThan";
-    const accountDatasets = datasets.filter(item => item.root === "account");
-    const zoneDatasets = datasets.filter(item => item.root === "zone");
-    const query = `query BrollyAnalyticsCapabilities($account: String!, $zones: [string!]!) {
-      viewer { accounts(filter: { accountTag: $account }) { settings {
-        ${accountDatasets.map(item => `${item.dataset} { ${fields} }`).join("\n")}
-      } } zones(filter: { zoneTag_in: $zones }) { settings {
-        ${zoneDatasets.map(item => `${item.dataset} { ${fields} }`).join("\n")}
-      } } }
-    }`;
-    const checkedAt = Date.now();
-    try {
-      this.budget.charge("apiCalls");
-      this.ledgerBudget?.charge("graphqlQueries", datasets.length);
-      const zoneIds = await this.zoneIds();
-      const response = await fetch(`${API}/graphql`, {
-        method: "POST", headers: authHeaders(await this.token()),
-        body: JSON.stringify({ query, variables: { account: this.env.BROLLY_ACCOUNT_ID, zones: zoneIds } }),
-        signal: this.budget.signal,
-      });
-      if (!response.ok) throw await cloudflareApiError(response);
-      type Setting = { enabled?: boolean; availableFields?: string[]; maxDuration?: number; maxNumberOfFields?: number; maxPageSize?: number; notOlderThan?: number };
-      const payload = await response.json() as {
-        data?: { viewer?: { accounts?: Array<{ settings?: Record<string, Setting> }>; zones?: Array<{ settings?: Record<string, Setting> }> } };
-        errors?: Array<{ message: string }>;
-      };
-      if (payload.errors?.length) throw new Error(payload.errors.map(error => error.message).join("; "));
-      const accountSettings = payload.data?.viewer?.accounts?.[0]?.settings ?? {};
-      const zoneSettings = payload.data?.viewer?.zones?.map(zone => zone.settings ?? {}) ?? [];
-      const discovered = datasets.map(item => {
-        const candidates = item.root === "account" ? [accountSettings[item.dataset]] : zoneSettings.map(setting => setting[item.dataset]);
-        const setting = candidates.find(value => value?.enabled === true) ?? candidates.find(Boolean);
-        const available = setting?.enabled === true;
-        return {
-          accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: item.collectorKey, dataset: item.dataset,
-          available, retentionDays: setting?.notOlderThan ? Math.floor(setting.notOlderThan / 86_400) : null,
-          samplingBehavior: setting?.availableFields?.some(field => field.toLowerCase().includes("sampleinterval"))
-            ? "Adaptive sampling; sampleInterval is recorded per result" : "Dataset sampling follows Cloudflare Analytics settings",
-          finestScope: item.scope, lastVerifiedAt: checkedAt, errorCode: available ? null : "dataset_disabled",
-          humanExplanation: available
-            ? `Available with page size ${setting?.maxPageSize ?? "unknown"} and duration limit ${setting?.maxDuration ?? "unknown"} seconds`
-            : "Cloudflare reports this Analytics dataset as unavailable for the current token or plan",
-          state: available ? "healthy" : "unavailable", watermarkAt: null,
-        } satisfies CollectorCoverage;
-      });
-      return [...discovered, ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map(item => item.family)))];
-    } catch (error) {
-      const state: CollectorCoverage["state"] = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
-      const detail = error instanceof Error ? error.message : String(error);
-      return [
-        ...datasets.map(item => ({
-        accountId: this.env.BROLLY_ACCOUNT_ID, collectorKey: item.collectorKey, dataset: item.dataset,
-        available: false, retentionDays: null, samplingBehavior: null, finestScope: item.scope,
-        lastVerifiedAt: checkedAt, errorCode: state, humanExplanation: detail, state, watermarkAt: null,
-        } satisfies CollectorCoverage)),
-        ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(datasets.map(item => item.family))),
-      ];
-    }
+    return this.historicalClient().collectorCapabilities();
+  }
+
+  async historicalCapabilities(): Promise<HistoricalDatasetCapability[]> {
+    return this.historicalClient().discoverCapabilities();
+  }
+
+  async historicalUsage(request: HistoricalUsageRequest): Promise<HistoricalUsageResult> {
+    return this.historicalClient().collect(request);
+  }
+
+  private historicalClient(): HistoricalAnalyticsClient {
+    return new HistoricalAnalyticsClient(this.env, this.budget, this.ledgerBudget, () => this.token(), () => this.zoneIds());
   }
 
   async durableObjectUsage(since: number, until: number, options: { limit?: number } = {}): Promise<{ samples: MetricSample[]; coverage: CoverageResult[] }> {
@@ -845,27 +792,6 @@ async function delayWithSignal(milliseconds: number, signal: AbortSignal): Promi
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
   });
-}
-
-function catalogCapabilityGaps(accountId: string, checkedAt: number, coveredFamilies = new Set(["workers", "durable_objects"])): CollectorCoverage[] {
-  return METRIC_CATALOG
-    .filter(product => !coveredFamilies.has(product.family))
-    .map(product => ({
-      accountId,
-      collectorKey: product.fastSource ? `${product.fastSource}:${product.family}` : "billing:catchall",
-      dataset: product.family,
-      available: false,
-      retentionDays: null,
-      samplingBehavior: null,
-      finestScope: product.preferredScope,
-      lastVerifiedAt: checkedAt,
-      errorCode: "detailed_collector_unavailable",
-      humanExplanation: product.billingSource
-        ? "Authoritative billing lines remain visible. Detailed resource attribution is unavailable for this product."
-        : "Cloudflare does not expose a supported account collector for this product.",
-      state: "unavailable",
-      watermarkAt: null,
-    }));
 }
 
 function slug(value: string): string {

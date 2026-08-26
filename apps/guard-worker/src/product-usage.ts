@@ -195,21 +195,23 @@ export function productDefinitionForDataset(name: string): ProductUsageDefinitio
   return BY_DATASET.get(name);
 }
 
-export function buildProductDatasetQuery(definition: ProductUsageDefinition, source: ProductDatasetDefinition): string {
+export function buildProductDatasetQuery(definition: ProductUsageDefinition, source: ProductDatasetDefinition, limit = 10_000): string {
   const variableType = source.timeKind === "date" ? "Date" : "Time";
   const filter = source.timeKind === "date"
     ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end`
     : `${source.timeField}_geq: $start, ${source.timeField}_lt: $end`;
   const aggregates = [...new Set(source.metrics.map(item => item.aggregate))];
+  const dimensions = [...new Set(["date", ...(source.dimensions ?? [])])];
   const body = [
-    source.dimensions?.length ? `dimensions { ${source.dimensions.join(" ")} }` : "",
+    `dimensions { ${dimensions.join(" ")} }`,
     aggregates.includes("count") ? "count" : "",
     ...(["sum", "max"] as const).map(aggregate => {
       const fields = [...new Set(source.metrics.filter(item => item.aggregate === aggregate).flatMap(item => item.fields ?? []))];
       return fields.length ? `${aggregate} { ${fields.join(" ")} }` : "";
     }),
   ].filter(Boolean).join("\n");
-  const selection = `${source.alias}: ${source.dataset}(limit: 10000, filter: { ${filter} }) { ${body} }`;
+  const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+  const selection = `${source.alias}: ${source.dataset}(limit: ${boundedLimit}, filter: { ${filter} }) { ${body} }`;
   if ((source.root ?? "account") === "zone") {
     return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
   }
@@ -221,8 +223,11 @@ export function productDatasetVariables(source: ProductDatasetDefinition, accoun
     ? { zones: zoneIds }
     : { account: accountId };
   if (source.timeKind === "date") {
-    const day = new Date(startsAt).toISOString().slice(0, 10);
-    return { ...scope, start: day, end: day };
+    return {
+      ...scope,
+      start: new Date(startsAt).toISOString().slice(0, 10),
+      end: new Date(Math.max(startsAt, endsAt - 1)).toISOString().slice(0, 10),
+    };
   }
   return { ...scope, start: new Date(startsAt).toISOString(), end: new Date(endsAt).toISOString() };
 }
@@ -241,6 +246,7 @@ export function normalizeProductDataset(
     const rows = Array.isArray(root[source.alias]) ? root[source.alias] as Array<Record<string, unknown>> : [];
     for (const row of rows) {
       const dimensions = recordValue(row.dimensions);
+      const bounds = dailyBounds(stringValue(dimensions.date), startsAt, endsAt);
       const action = stringValue(dimensions.actionType)?.toLowerCase();
       const resource = source.resourceDimension ? stringValue(dimensions[source.resourceDimension]) : undefined;
       const parent = source.parentDimension ? stringValue(dimensions[source.parentDimension]) : undefined;
@@ -262,13 +268,13 @@ export function normalizeProductDataset(
           : (item.fields ?? []).reduce((sum, field) => sum + numberValue(aggregate[field]), 0);
         const value = raw * (item.factor ?? 1);
         if (!Number.isFinite(value)) continue;
-        const key = `${asset.scope}:${asset.id}:${item.metric}`;
+        const key = `${bounds.start}:${asset.scope}:${asset.id}:${item.metric}`;
         const existing = samples.get(key);
         if (existing) {
           existing.value = item.aggregate === "max" ? Math.max(existing.value, value) : existing.value + value;
         } else {
           samples.set(key, {
-            asset, metric: item.metric, unit: item.unit, value, start: startsAt, end: endsAt,
+            asset, metric: item.metric, unit: item.unit, value, start: bounds.start, end: bounds.end,
             source: "graphql", sampled: false,
           });
         }
@@ -294,3 +300,9 @@ function recordValue(value: unknown): Record<string, unknown> {
 }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value.length ? value : undefined; }
 function numberValue(value: unknown): number { const parsed = Number(value ?? 0); return Number.isFinite(parsed) ? parsed : 0; }
+
+function dailyBounds(day: string | undefined, startsAt: number, endsAt: number): { start: number; end: number } {
+  if (!day) return { start: startsAt, end: endsAt };
+  const start = Date.parse(`${day}T00:00:00.000Z`);
+  return Number.isFinite(start) ? { start, end: start + 86_400_000 } : { start: startsAt, end: endsAt };
+}

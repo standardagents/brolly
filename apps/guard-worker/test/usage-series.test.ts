@@ -1,4 +1,4 @@
-import { resourceId } from "@standardagents/brolly-core";
+import { resourceHashBucket, resourceId } from "@standardagents/brolly-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scopeResourceId, usageSeriesResponse, type UsageSeriesResponse } from "../src/usage-series";
 import { createTestD1, type TestD1 } from "./d1";
@@ -34,8 +34,8 @@ describe("usage series", () => {
     ).bind(id, NOW).run();
     await d1.db.prepare(
       `INSERT INTO usage_accumulator_shards(account_id,product_family,scope_type,local_day,billing_cycle_id,resource_hash_bucket,payload_json,updated_at)
-       VALUES(?1,'workers','product','2026-08-17','cycle-1',0,?2,?3)`,
-    ).bind(ACCOUNT, JSON.stringify({ resources: { [id]: { metrics: { "workers:requests": { day: 250, estimatedDayUsd: 0.075, quality: "complete", sampleInterval: 1 } } } } }), NOW).run();
+       VALUES(?1,'workers','product','2026-08-17','cycle-1',?2,?3,?4)`,
+    ).bind(ACCOUNT, resourceHashBucket(id), JSON.stringify({ resources: { [id]: { metrics: { "workers:requests": { day: 250, estimatedDayUsd: 0.075, quality: "complete", sampleInterval: 1 } } } } }), NOW).run();
     await d1.db.prepare(
       `INSERT INTO billing_cycles(id,account_id,starts_at,ends_at,status,currency,approximate)
        VALUES('cycle-1',?1,?2,?3,'open','USD',1)`,

@@ -32,17 +32,17 @@ export function scopeKey(target: { kind: "account" } | { kind: "family"; family:
   return `asset:${target.key}`;
 }
 
-export function useUsageSeries(token: string, scope: string): UsageSeriesState {
-  const [state, setState] = useState<UsageSeriesState>({ data: null, loading: true, error: "" });
+export function useUsageSeries(token: string, scope: string, enabled = true): UsageSeriesState {
+  const [state, setState] = useState<UsageSeriesState>({ data: null, loading: enabled, error: "" });
   useEffect(() => {
-    if (!scope) return;
+    if (!scope || !enabled) return;
     let cancelled = false;
     setState(current => ({ ...current, loading: true, error: "" }));
     api<UsageSeriesResponse>(`/api/usage-series?scope=${encodeURIComponent(scope)}`, token)
       .then(data => { if (!cancelled) setState({ data, loading: false, error: "" }); })
       .catch(cause => { if (!cancelled) setState({ data: null, loading: false, error: cause instanceof Error ? cause.message : String(cause) }); });
     return () => { cancelled = true; };
-  }, [token, scope]);
+  }, [token, scope, enabled]);
   return state;
 }
 

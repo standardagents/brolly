@@ -290,9 +290,9 @@ const onboarding = {
 const initialIngestion: InitialIngestionResponse = {
   job: { id: "initial-demo", status: "running", startedAt: now, updatedAt: now },
   collectors: [
-    { collector: "graphql:workers", label: "Workers", total: 3, complete: 0, failed: 0, oldestCompleteAt: null },
-    { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 0, failed: 0, oldestCompleteAt: null },
-    { collector: "billing", label: "Billing", total: 1, complete: 0, failed: 0, oldestCompleteAt: null },
+    { collector: "graphql:workers", label: "Workers", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
+    { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
+    { collector: "billing", label: "Billing", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
   ],
 };
 let initialIngestionPolls = 0;
@@ -301,10 +301,11 @@ function advanceInitialIngestion(): InitialIngestionResponse {
   initialIngestionPolls += 1;
   const workers = Math.min(3, initialIngestionPolls);
   const durableObjects = Math.min(3, Math.max(0, initialIngestionPolls - 1));
-  const billing = initialIngestionPolls >= 4 ? 1 : 0;
+  const billing = Math.min(3, Math.max(0, initialIngestionPolls - 3));
   initialIngestion.collectors = initialIngestion.collectors.map(item => {
     const complete = item.collector === "graphql:workers" ? workers : item.collector === "graphql:durable_objects" ? durableObjects : billing;
-    return { ...item, complete, oldestCompleteAt: complete ? "2026-05-19" : null };
+    const completeUnits = item.total ? Math.round(item.totalUnits * complete / item.total) : 0;
+    return { ...item, complete, pending: item.total - complete, completeUnits, oldestCompleteAt: complete ? "2026-05-19" : null };
   });
   const done = initialIngestion.collectors.every(item => item.complete + item.failed >= item.total);
   initialIngestion.job = { ...initialIngestion.job!, status: done ? "complete" : "running", updatedAt: Date.now() };

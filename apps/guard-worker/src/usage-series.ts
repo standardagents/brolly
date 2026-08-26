@@ -1,4 +1,4 @@
-import { resourceId } from "@standardagents/brolly-core";
+import { resourceHashBucket, resourceId } from "@standardagents/brolly-core";
 import { BILLED_VIA, INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
 import { estimatedBillableCostBreakdownSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
 import { readPlanState } from "./plan-tier.js";
@@ -61,6 +61,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 120)));
   const today = new Date(now).toISOString().slice(0, 10);
   const from = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
+  const shard = shardLocation(id);
 
   const [resource, daily, shards, definitions, cycles, planState] = await Promise.all([
     db.prepare(`SELECT id,product_family FROM resources WHERE id=?1 LIMIT 1`).bind(id).first<{ id: string; product_family: string }>(),
@@ -70,9 +71,10 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
     ).bind(id, from, today).all<{ local_day: string; metrics_json: string; estimated_cost_usd: number | null; authoritative_allocated_cost_usd: number | null; sealed: number }>(),
     db.prepare(
       `SELECT local_day,payload_json FROM usage_accumulator_shards
-       WHERE account_id=?1 AND local_day>=?2 AND local_day<=?3
+       WHERE account_id=?1 AND product_family=?2 AND scope_type=?3
+         AND resource_hash_bucket=?4 AND local_day>=?5 AND local_day<=?6
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`,
-    ).bind(accountId, from, today).all<{ local_day: string; payload_json: string }>(),
+    ).bind(accountId, shard.productFamily, shard.scopeType, shard.bucket, from, today).all<{ local_day: string; payload_json: string }>(),
     db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; aggregation_kind: "sum" | "maximum" | "latest"; billing_mapping: string | null }>(),
     db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`)
       .bind(accountId, now - (days + 31) * 86_400_000).all<{ starts_at: number; ends_at: number; approximate: number }>(),
@@ -138,6 +140,16 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
     planTierSource: planState.planTierSource,
   };
   return Response.json(body);
+}
+
+function shardLocation(id: string): { productFamily: string; scopeType: string; bucket: number } {
+  const [, encodedFamily, encodedScope] = id.split(":");
+  if (!encodedFamily || !encodedScope) throw new Error("Invalid ledger resource id");
+  return {
+    productFamily: decodeURIComponent(encodedFamily),
+    scopeType: decodeURIComponent(encodedScope),
+    bucket: resourceHashBucket(id),
+  };
 }
 
 function parseNumberMap(value: string): Record<string, number> {

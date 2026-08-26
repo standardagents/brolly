@@ -46,6 +46,21 @@ describe("product usage registry", () => {
     expect(storage).toMatchObject([{ metric: "storage_bytes", value: 250, asset: { id: "namespace-1", scope: "namespace" } }]);
   });
 
+  it("keeps the same resource's daily buckets separate across a range", () => {
+    const d1 = productUsageDefinition("graphql:d1")!;
+    const samples = normalizeProductDataset(d1, d1.datasets[0]!, [{
+      d1AnalyticsAdaptiveGroups: [
+        { dimensions: { date: "2026-08-15", databaseId: "database-1" }, sum: { rowsRead: 10, rowsWritten: 1 } },
+        { dimensions: { date: "2026-08-16", databaseId: "database-1" }, sum: { rowsRead: 20, rowsWritten: 2 } },
+      ],
+    }], "account-1", Date.UTC(2026, 7, 15), Date.UTC(2026, 7, 17));
+
+    expect(samples.filter(sample => sample.metric === "rows_read").map(sample => [sample.start, sample.value])).toEqual([
+      [Date.UTC(2026, 7, 15), 10],
+      [Date.UTC(2026, 7, 16), 20],
+    ]);
+  });
+
   it("converts container allocation units while retaining its application parent", () => {
     const containers = productUsageDefinition("graphql:containers")!;
     const samples = normalizeProductDataset(containers, containers.datasets[0]!, [{

@@ -135,7 +135,12 @@ export interface InitialIngestionCollector {
   total: number;
   complete: number;
   failed: number;
+  pending: number;
+  totalUnits: number;
+  completeUnits: number;
+  failedUnits: number;
   oldestCompleteAt: string | number | null;
+  errors: string[];
 }
 
 export interface InitialIngestionResponse {

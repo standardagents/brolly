@@ -26,6 +26,10 @@ function useNearViewport(ref: { current: HTMLElement | null }): boolean {
   useEffect(() => {
     const element = ref.current;
     if (!element || near) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setNear(true);
+      return;
+    }
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) setNear(true);
     }, { rootMargin: "800px 0px" });
@@ -245,10 +249,10 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
   onOpenChange: (scope: string, next: OpenState) => void;
   onInfo: (scope: string, info: SectionInfo) => void;
 }) {
-  const usage = useUsageSeries(token, scope);
   const STICKY_TOP = useStickyTop();
   const elementRef = useRef<HTMLElement | null>(null);
   const near = useNearViewport(elementRef);
+  const usage = useUsageSeries(token, scope, near);
   const setRefs = useCallback((element: HTMLElement | null) => { elementRef.current = element; ref(element); }, [ref]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const [deviatedRows, setDeviatedRows] = useState<ReadonlySet<string>>(() => new Set());

@@ -165,17 +165,15 @@ describe("Cloudflare Worker telemetry", () => {
 
 describe("Cloudflare product dataset discovery", () => {
   it("maps account and zone dataset settings to registered product collectors", async () => {
-    let query = "";
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (new URL(url).pathname.endsWith("/zones")) {
         return Response.json({ success: true, result: [{ id: "zone-1" }], result_info: { page: 1, total_pages: 1 } });
       }
-      query = String(init?.body);
       return Response.json({ data: { viewer: {
         accounts: [{ settings: {
           d1AnalyticsAdaptiveGroups: { enabled: true, availableFields: ["rowsRead"], notOlderThan: 7_776_000, maxPageSize: 10_000 },
         } }],
-        zones: [{ settings: {
+        zones: [{ zoneTag: "zone-1", settings: {
           emailSendingAdaptiveGroups: { enabled: true, availableFields: ["datetime"], notOlderThan: 2_592_000, maxPageSize: 10_000 },
         } }],
       } } });
@@ -183,12 +181,9 @@ describe("Cloudflare product dataset discovery", () => {
 
     const result = await new CloudflareClient(env, new RunBudget()).analyticsCapabilities();
 
-    expect(query).toContain("queueMessageOperationsAdaptiveGroups");
-    expect(query).toContain("containersUsageAdaptiveGroups");
-    expect(query).toContain("emailSendingAdaptiveGroups");
-    expect(query).toContain("zoneTag_in: $zones");
     expect(result.find(item => item.dataset === "d1AnalyticsAdaptiveGroups")).toMatchObject({ collectorKey: "graphql:d1", available: true, retentionDays: 90 });
     expect(result.find(item => item.dataset === "emailSendingAdaptiveGroups")).toMatchObject({ collectorKey: "graphql:email", available: true, retentionDays: 30 });
+    expect(result.find(item => item.dataset === "queueMessageOperationsAdaptiveGroups")).toMatchObject({ available: false, state: "unavailable" });
   });
 });
 

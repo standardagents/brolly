@@ -29,6 +29,7 @@ export async function runOneBackfillSlice(
   const slice = await env.DB.prepare(
     `SELECT s.* FROM backfill_slices s JOIN backfill_jobs j ON j.id=s.backfill_job_id
      WHERE s.status='pending' AND j.status IN ('pending','running')
+       AND (?2 IS NOT NULL OR j.kind!='initial_v2')
        AND (?1 IS NULL OR j.id=?1)
        AND (?2 IS NULL OR j.kind=?2)
        AND (s.next_eligible_at IS NULL OR s.next_eligible_at<=?3)

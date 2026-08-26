@@ -10,7 +10,7 @@ import { releaseStatus, saveUpdateRepository } from "./updates.js";
 import { ledgerApiRoute } from "./ledger-api.js";
 import { LedgerStore } from "./ledger-store.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
-import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, runInitialIngestion } from "./initial-ingestion.js";
+import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, resumeInitialIngestion, runInitialIngestion } from "./initial-ingestion.js";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
 import { notificationApiRoute } from "./notification-api.js";
 import { alertLevelsApiRoute, loadAlertLevels } from "./alert-levels.js";
@@ -24,7 +24,9 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil((async () => {
       const activeEnv = await configuredEnv(env);
-      if (activeEnv) await runMonitor(activeEnv);
+      if (!activeEnv) return;
+      await runMonitor(activeEnv).catch(error => console.error("[Brolly] monitor failed", error));
+      await resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error));
     })());
   },
 
@@ -124,7 +126,7 @@ export default {
     }
 
     if (url.pathname === "/api/onboarding/ingest" && request.method === "POST") {
-      const job = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, {
+      const job = await ensureInitialIngestionJob(env, {
         billingAvailable: await billingIngestionAvailable(env),
       });
       if (job.created || job.status === "pending" || job.status === "running") {
@@ -188,11 +190,11 @@ export default {
       const ledger = new LedgerStore(env.DB);
       await ledger.syncMetricCatalog();
       await migrateLegacyPolicyRules(env.DB, env.BROLLY_ACCOUNT_ID, body.policy, true);
-      const initialIngestion = await ensureInitialIngestionJob(env.DB, env.BROLLY_ACCOUNT_ID, {
+      const initialIngestion = await ensureInitialIngestionJob(env, {
         billingAvailable: await billingIngestionAvailable(env), now,
       });
       if (initialIngestion.created || initialIngestion.status === "pending" || initialIngestion.status === "running") {
-        const work = runInitialIngestion(env, initialIngestion.id, now).catch(() => undefined);
+        const work = runInitialIngestion(env, initialIngestion.id).catch(() => undefined);
         if (ctx) ctx.waitUntil(work);
         else void work;
       }
