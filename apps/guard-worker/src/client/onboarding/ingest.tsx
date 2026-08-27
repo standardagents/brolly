@@ -1,7 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { Notice, Spinner } from "../components/ui";
-import type { InitialIngestionCollector, InitialIngestionResponse } from "../types";
+import { Icon, Notice, Popover, Spinner } from "../components/ui";
+import { useOutsideClose } from "../lib/outside-close";
+import type { InitialIngestionDays, InitialIngestionResponse } from "../types";
+
+const ACTIVE_POLL_MS = 5_000;
 
 export function useInitialIngestion(token: string) {
   const [ingestion, setIngestion] = useState<InitialIngestionResponse | null>(null);
@@ -12,28 +15,42 @@ export function useInitialIngestion(token: string) {
     let stopped = false;
     let timer: number | undefined;
     let startComplete = false;
+    let retryDelay = 2_000;
 
-    const readProgress = async () => {
-      const next = await api<InitialIngestionResponse>("/api/onboarding/ingest", token);
-      if (stopped) return;
-      setIngestion(next);
-      if (next.job || startComplete) setStarting(false);
-      if (ingestionIsActive(next) || !startComplete) {
-        timer = window.setTimeout(() => void readProgress().catch(handleError), 2_000);
-      }
+    const schedule = (delay: number) => {
+      if (!stopped) timer = window.setTimeout(() => void readProgress(), delay);
     };
 
     const handleError = (cause: unknown) => {
-      if (!stopped) setError(message(cause));
+      if (stopped) return;
+      setError(message(cause));
+      schedule(retryDelay);
+      retryDelay = Math.min(30_000, retryDelay * 2);
+    };
+
+    const readProgress = async () => {
+      try {
+        const next = await api<InitialIngestionResponse>("/api/onboarding/ingest", token);
+        if (stopped) return;
+        setIngestion(next);
+        setError("");
+        retryDelay = 2_000;
+        if (next.job || startComplete) setStarting(false);
+        if (ingestionIsActive(next) || !startComplete) schedule(ACTIVE_POLL_MS);
+      } catch (cause) {
+        handleError(cause);
+      }
     };
 
     void api("/api/onboarding/ingest", token, { method: "POST" })
-      .catch(handleError)
+      .catch(cause => {
+        if (!stopped) setError(message(cause));
+      })
       .finally(() => {
         startComplete = true;
         if (!stopped) setStarting(false);
       });
-    void readProgress().catch(handleError);
+    void readProgress();
     return () => {
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
@@ -46,11 +63,19 @@ export function useInitialIngestion(token: string) {
 
 /**
  * Sidebar import progress. Mounting it starts the initial ingestion, which runs
- * in the background. It shows two rows, usage (all products combined) and
- * billing. Successful imports disappear; completed coverage gaps remain visible.
+ * in the background. One 90-day row advances only when every available source
+ * for a day is complete. Successful imports disappear; coverage gaps remain.
  */
-export function ImportProgress({ token, billingConnected }: { token: string; billingConnected: boolean }) {
+export function ImportProgress({ token, billingConnected, onRunningChange }: {
+  token: string;
+  billingConnected: boolean;
+  /** Reports whether the import is still running, so the wizard can hold steps that need imported history. */
+  onRunningChange?: (running: boolean) => void;
+}) {
   const { ingestion, running, error } = useInitialIngestion(token);
+  useEffect(() => {
+    onRunningChange?.(running);
+  }, [running, onRunningChange]);
   return <ImportProgressView ingestion={ingestion} running={running} error={error} billingConnected={billingConnected} />;
 }
 
@@ -59,91 +84,180 @@ export function ImportProgressView({
   running,
   error,
   billingConnected,
+  now = Date.now(),
 }: {
   ingestion: InitialIngestionResponse | null;
   running: boolean;
   error: string;
   billingConnected: boolean;
+  now?: number;
 }) {
-  const hasGaps = ingestion?.collectors.some(item => item.failedUnits > 0) ?? false;
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const hasGaps = (ingestion?.days?.gaps ?? 0) > 0;
   if (!ingestion && !running && !error) return null;
   if (ingestion && !running && !error && !hasGaps) return null;
   const paused = isStoragePaused(ingestion?.job?.status);
-  const usage = combine("Usage", ingestion?.collectors.filter(item => item.collector !== "billing") ?? []);
-  const billing = billingConnected ? ingestion?.collectors.find(item => item.collector === "billing") : undefined;
-  const planning = running && (!ingestion?.job || ingestion.job.status === "planning" || ingestion.collectors.length === 0);
+  const days = ingestion?.days ?? null;
+  const planning = running && (!ingestion?.job || ingestion.job.status === "planning" || !days);
   const state = error ? "error" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
+  const overall = ingestion && days ? initialIngestionOverallProgress(ingestion, now) : null;
 
   return (
-    <section className="grid w-[240px] gap-2 max-md:hidden" aria-label="Import progress" aria-live="polite" data-import-state={state}>
-      <strong className="flex items-center gap-2 text-[12.5px] text-muted">
-        {planning && <Spinner />}
-        {planning ? "Preparing history import" : "Account history import"}
-      </strong>
-      {!planning && usage.total > 0 && <ImportCollectorRow collector={usage} paused={paused} />}
-      {billing && <ImportCollectorRow collector={{ ...billing, label: "Billing" }} paused={paused} />}
-      {hasGaps && <p className="text-[10px] leading-4 text-warn">Some history is unavailable. The completed portions remain usable.</p>}
+    <section
+      className="fixed bottom-6 left-1/2 z-50 grid w-[min(480px,calc(100vw-24px))] -translate-x-1/2 gap-2 rounded-panel border border-line bg-panel p-4 shadow-panel max-md:bottom-3"
+      aria-label="Import progress"
+      aria-live="polite"
+      data-import-state={state}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 items-center gap-2 rounded text-left text-[12.5px] font-bold text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-orange"
+          aria-expanded={detailsOpen}
+          data-import-details-trigger
+          onClick={() => setDetailsOpen(value => !value)}
+        >
+          <Icon name="chevron" className={`size-3.5 transition-transform ${detailsOpen ? "rotate-180" : "-rotate-90"}`} />
+          {(planning || running && !paused) && <Spinner />}
+          <span>{planning ? "Preparing 90-day history import" : "90-day history import"}</span>
+          {overall?.estimatedRemainingMs !== null && overall?.estimatedRemainingMs !== undefined && (
+            <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">{formatRemainingTime(overall.estimatedRemainingMs)} remaining</span>
+          )}
+        </button>
+        {days && overall && (
+          <span className="flex items-center gap-2">
+            {paused && <span className="inline-flex text-warn" aria-label="Import paused"><Icon name="pause" className="size-3.5" /></span>}
+            {days.failedWindows > 0 && <ImportErrors days={days} />}
+            <span className="text-[11px] tabular-nums text-muted">{overall.percentage}%</span>
+          </span>
+        )}
+      </div>
+      {days && overall && <ImportOverallBar days={days} overall={overall} paused={paused} />}
+      {detailsOpen && ingestion && ingestion.collectors.length > 0 && (
+        <ImportCollectorProgress collectors={ingestion.collectors} />
+      )}
       {error && <Notice tone="error">{error}</Notice>}
     </section>
   );
 }
 
-function combine(label: string, collectors: InitialIngestionCollector[]): InitialIngestionCollector {
-  return {
-    collector: "usage",
-    label,
-    total: collectors.reduce((sum, item) => sum + item.total, 0),
-    complete: collectors.reduce((sum, item) => sum + item.complete, 0),
-    failed: collectors.reduce((sum, item) => sum + item.failed, 0),
-    pending: collectors.reduce((sum, item) => sum + item.pending, 0),
-    totalUnits: collectors.reduce((sum, item) => sum + item.totalUnits, 0),
-    completeUnits: collectors.reduce((sum, item) => sum + item.completeUnits, 0),
-    failedUnits: collectors.reduce((sum, item) => sum + item.failedUnits, 0),
-    oldestCompleteAt: collectors.reduce<number | null>((oldest, item) => {
-      const value = timestamp(item.oldestCompleteAt);
-      return value === null ? oldest : Math.min(oldest ?? value, value);
-    }, null),
-    errors: [...new Set(collectors.flatMap(item => item.errors))].slice(0, 3),
-  };
-}
-
-function ImportCollectorRow({ collector, paused }: { collector: InitialIngestionCollector; paused: boolean }) {
-  const completed = Math.min(collector.totalUnits, Math.max(0, collector.completeUnits));
-  const failed = Math.min(collector.totalUnits - completed, Math.max(0, collector.failedUnits));
-  const processed = completed + failed;
-  const finished = collector.pending === 0;
-  const completeWithoutGaps = finished && failed === 0 && !paused;
-  const percentage = collector.totalUnits ? Math.min(100, (completed / collector.totalUnits) * 100) : 0;
-  const failedPercentage = collector.totalUnits ? Math.min(100 - percentage, (failed / collector.totalUnits) * 100) : 0;
-  const checkedPercentage = collector.totalUnits ? Math.min(100, (processed / collector.totalUnits) * 100) : 0;
-  const status = paused ? "Paused: storage" : !finished ? `${Math.floor(checkedPercentage)}% checked` : failed ? `${formatUnits(failed)} unavailable` : "Complete";
-  const statusTone = paused || failed ? "text-warn" : completeWithoutGaps ? "text-good" : "text-muted";
-  const unit = collector.collector === "billing" ? "days" : "source-days";
-
+function ImportCollectorProgress({ collectors }: { collectors: InitialIngestionResponse["collectors"] }) {
   return (
-    <article className="grid gap-1.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="flex items-center gap-2"><strong className="text-[13px]">{collector.label}</strong>{!finished && !paused && <Spinner />}</span>
-        <span className={`text-[11px] font-semibold ${statusTone}`}>{status}</span>
-      </div>
-      <div className="flex h-1.5 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={collector.totalUnits} aria-valuenow={processed} aria-valuetext={`${formatUnits(completed)} imported, ${formatUnits(failed)} unavailable, ${formatUnits(Math.max(0, collector.totalUnits - processed))} remaining`} data-import-complete={completed} data-import-failed={failed}>
-        <div className={`h-full transition-[width] duration-500 ${paused ? "bg-warn" : completeWithoutGaps ? "bg-good" : "bg-orange"}`} style={{ width: `${percentage}%` }} />
-        {failed > 0 && <div className="h-full bg-warn transition-[width] duration-500" style={{ width: `${failedPercentage}%` }} />}
-      </div>
-      <span className="text-[9.5px] tabular-nums text-faint">{formatUnits(completed)} / {formatUnits(collector.totalUnits)} {unit} imported{failed > 0 ? ` · ${formatUnits(failed)} unavailable` : ""}</span>
-    </article>
+    <div className="mt-1 grid max-h-[300px] gap-2 overflow-y-auto border-t border-line-soft pt-3" data-import-details>
+      {collectors.map(collector => {
+        const processedUnits = Math.min(collector.totalUnits, collector.completeUnits + collector.failedUnits);
+        const percentage = collector.totalUnits > 0 ? Math.round(processedUnits / collector.totalUnits * 100) : 0;
+        const processedWindows = collector.complete + collector.failed;
+        return (
+          <div key={collector.collector} className="grid gap-1" data-import-collector={collector.collector}>
+            <div className="flex items-center justify-between gap-3 text-[11px]">
+              <span className="min-w-0 truncate font-semibold text-ink">{collector.label}</span>
+              <span className="whitespace-nowrap tabular-nums text-muted">{processedWindows}/{collector.total} windows · {percentage}%</span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label={`${collector.label} import progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage}>
+              <div className={`h-full ${collector.failed > 0 ? "bg-warn" : percentage === 100 ? "bg-good" : "bg-orange"}`} style={{ width: `${percentage}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
-function formatUnits(value: number): string {
-  return Math.round(value).toLocaleString();
+export interface InitialIngestionOverallProgress {
+  percentage: number;
+  estimatedRemainingMs: number | null;
+  processedUnits: number;
+  totalUnits: number;
+}
+
+/** Aggregate every planned source partition so progress moves before a whole day is complete. */
+export function initialIngestionOverallProgress(
+  ingestion: InitialIngestionResponse,
+  now = Date.now(),
+): InitialIngestionOverallProgress {
+  let totalUnits = ingestion.collectors.reduce((total, collector) => total + collector.totalUnits, 0);
+  let processedUnits = ingestion.collectors.reduce(
+    (total, collector) => total + collector.completeUnits + collector.failedUnits,
+    0,
+  );
+  if (totalUnits <= 0 && ingestion.days) {
+    totalUnits = ingestion.days.total;
+    processedUnits = Math.max(0, ingestion.days.total - ingestion.days.pending);
+  }
+  processedUnits = Math.min(totalUnits, processedUnits);
+  const percentage = totalUnits > 0 ? Math.round((processedUnits / totalUnits) * 100) : 0;
+  const remainingUnits = totalUnits - processedUnits;
+  const startedAt = ingestion.job?.startedAt ?? now;
+  const elapsedMs = Math.max(0, now - startedAt);
+  const active = ingestion.job?.status === "pending" || ingestion.job?.status === "running";
+  const estimatedRemainingMs = active && elapsedMs >= 10_000 && processedUnits > 0 && remainingUnits > 0
+    ? Math.max(60_000, Math.min(24 * 60 * 60_000, elapsedMs * remainingUnits / processedUnits))
+    : null;
+  return { percentage, estimatedRemainingMs, processedUnits, totalUnits };
+}
+
+export function formatRemainingTime(milliseconds: number): string {
+  const minutes = Math.max(1, Math.ceil(milliseconds / 60_000));
+  if (minutes < 60) return `~${minutes} min`;
+  const hours = Math.ceil(minutes / 60);
+  return `~${hours} hr`;
+}
+
+function ImportOverallBar({ days, overall, paused }: {
+  days: InitialIngestionDays;
+  overall: InitialIngestionOverallProgress;
+  paused: boolean;
+}) {
+  const finished = days.pending === 0;
+  const incomplete = finished && days.complete < days.total;
+
+  return (
+    <div className="h-1.5 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label="Account history import progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall.percentage} aria-valuetext={`${overall.percentage}% of the 90-day import processed`} data-import-days={days.complete} data-import-progress={overall.percentage} data-import-errors={days.failedWindows}>
+      <div className={`h-full transition-[width] duration-500 ${paused || incomplete ? "bg-warn" : finished ? "bg-good" : "bg-orange"}`} style={{ width: `${overall.percentage}%` }} />
+    </div>
+  );
+}
+
+function ImportErrors({ days }: { days: InitialIngestionDays }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLSpanElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useOutsideClose([anchor, panel], open, () => setOpen(false));
+
+  return (
+    <span ref={anchor} className="inline-flex">
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums text-warn hover:bg-warn-bg focus-visible:outline-2 focus-visible:outline-warn"
+        aria-label={`${days.failedWindows} import errors`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        data-import-error-trigger
+        onClick={() => setOpen(value => !value)}
+      >
+        <Icon name="alert" className="size-3.5" />
+        {days.failedWindows}
+      </button>
+      <Popover anchor={anchor} open={open} side="top" align="end">
+        <div ref={panel} role="dialog" aria-label="Account history import errors" className="w-[min(300px,calc(100vw-24px))] rounded-panel border border-line bg-panel p-3 shadow-panel">
+          <strong className="block text-[12px] text-ink">{days.failedWindows} unavailable import {days.failedWindows === 1 ? "window" : "windows"}</strong>
+          {days.errors.length > 0 && (
+            <ul className="mt-2 grid gap-1.5 text-[11px] leading-4 text-muted">
+              {days.errors.map(item => <li key={item}>{item}</li>)}
+            </ul>
+          )}
+        </div>
+      </Popover>
+    </span>
+  );
 }
 
 function ingestionIsActive(response: InitialIngestionResponse): boolean {
   const status = response.job?.status;
   if (status === "planning") return true;
   if (status !== "pending" && status !== "running") return false;
-  return response.collectors.length === 0 || response.collectors.some(item => item.pending > 0);
+  return !response.days || response.days.pending > 0;
 }
 
 function isStoragePaused(status: string | undefined): boolean {
@@ -152,11 +266,4 @@ function isStoragePaused(status: string | undefined): boolean {
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-function timestamp(value: string | number | null): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }

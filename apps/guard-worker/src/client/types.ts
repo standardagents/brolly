@@ -143,8 +143,18 @@ export interface InitialIngestionCollector {
   errors: string[];
 }
 
+export interface InitialIngestionDays {
+  total: number;
+  complete: number;
+  pending: number;
+  gaps: number;
+  failedWindows: number;
+  errors: string[];
+}
+
 export interface InitialIngestionResponse {
   job: InitialIngestionJob | null;
+  days: InitialIngestionDays | null;
   collectors: InitialIngestionCollector[];
 }
 

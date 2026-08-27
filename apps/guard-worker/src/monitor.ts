@@ -1,4 +1,4 @@
-import { LedgerBudgetExceededError, LedgerRunBudget, METRIC_CATALOG, MonitoringBudgetExceededError, RunBudget, localDayAt, type AssetRef, type ControlAction, type CoverageResult, type Evaluation } from "@standardagents/brolly-core";
+import { LedgerBudgetExceededError, LedgerRunBudget, MonitoringBudgetExceededError, RunBudget, localDayAt, type AssetRef, type ControlAction, type CoverageResult, type Evaluation } from "@standardagents/brolly-core";
 import { notify, type NotificationTarget } from "@standardagents/brolly-notifiers";
 import { CloudflareClient } from "./cloudflare.js";
 import type { Env } from "./env.js";
@@ -429,9 +429,13 @@ async function handleEvaluation(store: Store, evaluation: Evaluation, dailySumma
   }));
 }
 
-async function coverageIncidents(store: Store, coverage: CoverageResult[], env: Env, automaticQueue: Map<string, ControlAction[]>): Promise<void> {
+export async function coverageIncidents(store: Store, coverage: CoverageResult[], env: Env, automaticQueue: Map<string, ControlAction[]>): Promise<void> {
   const accountId = env.BROLLY_ACCOUNT_ID;
-  for (const item of coverage) {
+  await store.resolvePassiveCoverageIncidents(accountId, [
+    ...[...EXPECTED_LIVE_COVERAGE].map(key => `${accountId}:coverage:${key}`),
+    `${accountId}:coverage:billing:authoritative_usage`,
+  ]);
+  for (const item of coverage.filter(isExpectedLiveCoverage)) {
     const key = `${accountId}:coverage:${item.family}:${item.metric}`;
     if (item.state === "healthy") {
       await store.resolveIncident(key);
@@ -443,20 +447,18 @@ async function coverageIncidents(store: Store, coverage: CoverageResult[], env: 
       observed: 0, reason: `${item.family}/${item.metric} telemetry is ${item.state}${item.detail ? `: ${item.detail}` : ""}`, action: "notify",
     }, false, env, automaticQueue);
   }
-  const seen = new Set(coverage.map(item => `${item.family}:${item.metric}`));
-  const missing: CoverageResult[] = [];
-  for (const definition of METRIC_CATALOG) {
-    for (const metric of definition.metrics) {
-      if (seen.has(`${definition.family}:${metric}`)) continue;
-      missing.push({
-        family: definition.family, metric, finestScope: definition.preferredScope,
-        state: "unavailable", checkedAt: Date.now(), detail: "No active fast-telemetry collector",
-      });
-      const asset: AssetRef = { accountId, family: definition.family, id: metric, scope: "account", tier: "control_plane" };
-      await handleEvaluation(store, { key: `${accountId}:coverage:${definition.family}:${metric}`, asset, metric: "telemetry_coverage", severity: "warning", observed: 0, reason: `${definition.family}/${metric} has no active collector`, action: "notify" }, false, env, automaticQueue);
-    }
-  }
-  await store.saveCoverage(missing);
+}
+
+const EXPECTED_LIVE_COVERAGE = new Set([
+  "workers:requests", "workers:cpu_ms",
+  "durable_objects:requests", "durable_objects:duration_gb_seconds", "durable_objects:incoming_websocket_messages",
+  "durable_objects:rows_read", "durable_objects:rows_written", "durable_objects:kv_read_units",
+  "durable_objects:kv_write_units", "durable_objects:kv_delete_requests", "durable_objects:sql_storage_bytes",
+  "durable_objects:kv_storage_bytes",
+]);
+
+export function isExpectedLiveCoverage(item: CoverageResult): boolean {
+  return item.metric === "asset_inventory" || EXPECTED_LIVE_COVERAGE.has(`${item.family}:${item.metric}`);
 }
 
 async function flushAutomaticCloudflareControls(store: Store, env: Env, queued: ControlAction[]): Promise<void> {

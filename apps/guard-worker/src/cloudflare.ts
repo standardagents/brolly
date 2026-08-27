@@ -11,6 +11,7 @@ import {
 } from "./product-usage.js";
 import {
   HistoricalAnalyticsClient,
+  type HistoricalAnalyticsOptions,
   type HistoricalDatasetCapability,
   type HistoricalUsageRequest,
   type HistoricalUsageResult,
@@ -125,6 +126,7 @@ export class CloudflareClient {
     private readonly env: Env,
     private readonly budget: BoundedRunContext,
     private readonly ledgerBudget?: LedgerRunBudget,
+    private readonly historicalOptions: HistoricalAnalyticsOptions = {},
   ) {}
 
   async zones(): Promise<Array<{ id: string; name: string }>> {
@@ -214,7 +216,14 @@ export class CloudflareClient {
   }
 
   private historicalClient(): HistoricalAnalyticsClient {
-    return new HistoricalAnalyticsClient(this.env, this.budget, this.ledgerBudget, () => this.token(), () => this.zoneIds());
+    return new HistoricalAnalyticsClient(
+      this.env,
+      this.budget,
+      this.ledgerBudget,
+      () => this.token(),
+      () => this.zoneIds(),
+      this.historicalOptions,
+    );
   }
 
   async durableObjectUsage(since: number, until: number, options: { limit?: number } = {}): Promise<{ samples: MetricSample[]; coverage: CoverageResult[] }> {

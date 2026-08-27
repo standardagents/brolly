@@ -4,13 +4,14 @@ import { windowDefaults } from "../components/limits-chart/defaults";
 import type { LevelValues } from "../components/limits-chart/levels";
 import { LimitsChart, PLOT, levelColor } from "../components/limits-chart/LimitsChart";
 import { ChartScaleProvider } from "../components/limits-chart/ChartScaleMode";
+import { LevelTrack } from "../components/limits-chart/LevelTrack";
 import { Button, Eyebrow, StepMarker } from "../components/ui";
 import type { AlertLevel, Policy } from "../types";
 import { normalizeRiskTolerance } from "./risk-tolerance";
 
 /**
- * The chart guide: an unnumbered card between the risk-tolerance step and the
- * limit steps that teaches the limit charts one layer at a time. Both charts
+ * The chart guide: an unnumbered card between the alert-levels step and the
+ * risk-tolerance step that teaches the limit charts one layer at a time. Both charts
  * (daily and billing cycle) are visible from the first stage, over one fixed
  * sample meter series built to hold every layer the story needs (level
  * crossings, an included allotment, an exhausted cycle, a projection), so the
@@ -22,10 +23,13 @@ import { normalizeRiskTolerance } from "./risk-tolerance";
  * stays in the flow after it finishes, so every position remains replayable.
  */
 
-type StageKey = "charts" | "levels" | "alerts" | "free" | "motion";
+type StageKey = "charts" | "levels" | "alerts" | "free" | "motion" | "tracks";
 
 /** Included allotment for the sample meter: 10M requests per billing cycle. */
 const SAMPLE_INCLUDED = 10_000_000;
+
+/** Sample per-day limits for the tour's level track, lowest level first. */
+const SAMPLE_TRACK_LADDER = [1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000];
 
 /** Deterministic wobble in [0.85, 1.15); the tour must replay identically. */
 function wobble(seed: number): number {
@@ -67,7 +71,7 @@ function reducedMotion(): boolean {
  * choose the anchor point inside the target's box. A missing target (a layer
  * the current data does not produce) renders nothing.
  */
-interface CalloutSpec { chart: "day" | "cycle"; selector?: string; nth?: number; tx?: number; ty?: number; x: number; y: number; center?: boolean; text: string; target?(wrapper: HTMLElement): Element | null }
+interface CalloutSpec { chart: "day" | "cycle" | "track"; selector?: string; nth?: number; tx?: number; ty?: number; x: number; y: number; center?: boolean; text: string; target?(wrapper: HTMLElement): Element | null }
 type CalloutPhase = "hidden" | "exiting" | "retracting" | "moving" | "appearing" | "drawing" | "shown";
 const CALLOUT_RETRACT_MS = 160;
 const CALLOUT_MOVE_MS = 520;
@@ -79,10 +83,11 @@ const CALLOUT_DRAW_MS = 320;
  * moves and resizes the card, then draws the next arm. Section changes fade
  * the old card before chart motion and reveal the next card after it settles.
  */
-function Callout({ host, dayHost, cycleHost, spec, number, group, delay }: {
+function Callout({ host, dayHost, cycleHost, trackHost, spec, number, group, delay }: {
   host: RefObject<HTMLDivElement | null>;
   dayHost: RefObject<HTMLDivElement | null>;
   cycleHost: RefObject<HTMLDivElement | null>;
+  trackHost: RefObject<HTMLDivElement | null>;
   spec: CalloutSpec;
   number: number;
   group: StageKey;
@@ -144,7 +149,7 @@ function Callout({ host, dayHost, cycleHost, spec, number, group, delay }: {
   useLayoutEffect(() => {
     const measure = () => {
       const wrapper = host.current;
-      const chart = displayed.chart === "day" ? dayHost.current : cycleHost.current;
+      const chart = ({ day: dayHost, cycle: cycleHost, track: trackHost })[displayed.chart].current;
       if (!wrapper || !chart) return;
       const box = wrapper.getBoundingClientRect();
       const chartBox = chart.getBoundingClientRect();
@@ -174,7 +179,7 @@ function Callout({ host, dayHost, cycleHost, spec, number, group, delay }: {
     if (host.current) observer?.observe(host.current);
     window.addEventListener("resize", measure);
     return () => { cancelAnimationFrame(frame); timers.forEach(window.clearTimeout); observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [displayed, host, dayHost, cycleHost, delay]);
+  }, [displayed, host, dayHost, cycleHost, trackHost, delay]);
   if (!layout) return null;
 
   const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
@@ -387,7 +392,7 @@ function tallestBarTopSegment(wrapper: HTMLElement): Element | null {
 
 /** Pointer cards hold back until each stage's chart animation has settled. */
 // motion covers the pointer demo's full single pass (600+250+1500+700+1500ms).
-const CALLOUT_SETTLE_MS: Record<StageKey, number> = { charts: 450, levels: 1000, alerts: 1000, free: FREE_SWEEP_IN_MS + 200, motion: 4700 };
+const CALLOUT_SETTLE_MS: Record<StageKey, number> = { charts: 450, levels: 1000, alerts: 1000, free: FREE_SWEEP_IN_MS + 200, motion: 4700, tracks: 450 };
 
 /**
  * Which chart layers each stage shows. Stepping in either direction diffs
@@ -403,6 +408,9 @@ const LAYER_TARGETS: Record<StageKey, Record<LayerKey, boolean>> = {
   alerts: { levels: true, alarms: true, quota: false },
   free: { levels: true, alarms: false, quota: true },
   motion: { levels: true, alarms: false, quota: true },
+  // The tracks stage hides both charts, so it keeps motion's targets to avoid
+  // pointless layer exits on the way in or back out.
+  tracks: { levels: true, alarms: false, quota: true },
 };
 const LAYER_EXIT_MS: Record<LayerKey, number> = { levels: 950, alarms: 750, quota: 1150 };
 
@@ -468,6 +476,7 @@ const STAGES: Array<{ key: StageKey; title: string; short: string; pages: number
   { key: "alerts", title: "Where alerts fire", short: "Alerts", pages: 2 },
   { key: "free", title: "Free usage", short: "Free usage", pages: 3 },
   { key: "motion", title: "Levels move", short: "Adjust", pages: 2 },
+  { key: "tracks", title: "Horizontal tracks", short: "Tracks", pages: 2 },
 ];
 
 export function ChartTour({ levels, policy, done, onDone }: {
@@ -481,13 +490,21 @@ export function ChartTour({ levels, policy, done, onDone }: {
   const tourHostRef = useRef<HTMLDivElement>(null);
   const dayHostRef = useRef<HTMLDivElement>(null);
   const cycleHostRef = useRef<HTMLDivElement>(null);
+  const trackHostRef = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
   const [page, setPage] = useState(0);
   const [demoValues, setDemoValues] = useState<LevelValues | null>(null);
+  // The tracks stage is hands-on: drags stick in local state and never touch
+  // the wizard's policy.
+  const [tourTrack, setTourTrack] = useState<LevelValues | null>(null);
 
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const chartLevels = useMemo(() => levels.map((level, position) => ({ id: level.id, label: level.label, color: levelColor(position, levels.length) })), [levels]);
   const tolerance = useMemo(() => normalizeRiskTolerance(policy.riskTolerance, order).percentOfTypical, [policy.riskTolerance, order]);
+  const trackDefaults = useMemo<LevelValues>(
+    () => Object.fromEntries(order.map((id, position) => [id, SAMPLE_TRACK_LADDER[Math.min(position, SAMPLE_TRACK_LADDER.length - 1)]!])),
+    [order],
+  );
 
   // One sample dataset for the whole story, built once per mount.
   const sample = useMemo(() => {
@@ -542,6 +559,10 @@ export function ChartTour({ levels, policy, done, onDone }: {
       case "motion": return [
         { chart: "day", selector: `[data-level-line="${lowest}"] polygon`, x: 0.4, y: 0.28, text: "The initial placement of your levels is determined by your defined risk tolerance, but you can freely adjust them at will." },
         { chart: "cycle", selector: `[data-level-line="${lowest}"]`, tx: 0.6, ty: 0.5, x: 0.5, y: 0.5, center: true, text: "Tune your limits between daily and cycle usage to fit your needs. In the next steps you'll define global spend thresholds and then (optionally) per product spend and usage limits across every billable metric." },
+      ];
+      case "tracks": return [
+        { chart: "track", selector: "polygon", nth: 0, x: 0.62, y: 0.05, text: "Some settings use a horizontal track instead of a chart. Each diamond is one alert level; drag it to move that level's threshold." },
+        { chart: "track", selector: "polygon", nth: 1, x: 0.3, y: 0.05, text: "You'll set your global risk tolerance on a track like this in the next step. Products with no usage history to chart use one too." },
       ];
     }
   }, [stage.key, chartLevels]);
@@ -632,12 +653,19 @@ export function ChartTour({ levels, policy, done, onDone }: {
   }, []);
 
   return (
-    <section ref={sectionRef} data-chart-tour className="min-w-0 scroll-mt-[76px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:scroll-mt-[116px] max-md:px-4 max-md:py-[22px]" aria-label="How to read the limit charts">
-      <Eyebrow tone="orange">Chart guide</Eyebrow>
-      <h2 className="text-[27px] tracking-[-.025em]">How to read the limit charts</h2>
-      <p className="mb-6 mt-1 text-[12.5px] text-faint">This guide uses sample data. The steps after it use your account's real usage.</p>
+    <section ref={sectionRef} data-chart-tour className="min-w-0 scroll-mt-[76px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:scroll-mt-[116px] max-md:px-4 max-md:py-[22px]" aria-label="How to use Brolly">
+      <Eyebrow tone="orange">Guide</Eyebrow>
+      <h2 className="text-[27px] tracking-[-.025em]">How to use Brolly</h2>
+      <p className="mb-6 mt-1 text-[12.5px] text-faint">Brolly alerts you when usage or spend crosses levels you set. This short tour shows how to read and adjust those levels, on sample data. The steps after it use your account's real usage.</p>
       <ChartScaleProvider initialMode="logarithmic">
       <div ref={tourHostRef} data-tour-stage={stage.key} data-tour-page={page} data-tour-exit={exiting.join(" ") || undefined} className="relative grid grid-cols-2 gap-5 max-xl:grid-cols-1">
+        {stage.key === "tracks" ? (
+          <div className="col-span-full grid min-h-[300px] content-center">
+            <div ref={trackHostRef} className="mx-auto w-full max-w-[680px] rounded-panel border border-line bg-panel px-5 pb-3 pt-4">
+              <LevelTrack levels={chartLevels} unit="requests" value={tourTrack ?? trackDefaults} onChange={setTourTrack} />
+            </div>
+          </div>
+        ) : <>
         {/* Fixed cell height keeps the footer controls stationary. */}
         <div ref={dayHostRef} className="relative min-h-[300px] min-w-0">
           <LimitsChart kind="usage" unit="requests" window="day" series={sample.series} cycles={sample.cycles} today={sample.today}
@@ -660,7 +688,8 @@ export function ChartTour({ levels, policy, done, onDone }: {
             crossingAlarms={layers.alarms}
             onChange={noop} readOnly pointerInteractions={false} label="Tour: billing cycle chart" />
         </div>
-        {activeCallout && <Callout host={tourHostRef} dayHost={dayHostRef} cycleHost={cycleHostRef} spec={activeCallout} number={page + 1} group={stage.key} delay={settle} />}
+        </>}
+        {activeCallout && <Callout host={tourHostRef} dayHost={dayHostRef} cycleHost={cycleHostRef} trackHost={trackHostRef} spec={activeCallout} number={page + 1} group={stage.key} delay={settle} />}
       </div>
       </ChartScaleProvider>
       <footer className="mt-7 grid grid-cols-[1fr_auto_1fr] items-start gap-3 max-md:flex max-md:flex-wrap max-md:justify-between">
@@ -693,7 +722,7 @@ export function ChartTour({ levels, policy, done, onDone }: {
             <Button data-action="tour-back" disabled={index === 0 && page === 0} onClick={back}>Back</Button>
             {index < STAGES.length - 1 || page < stage.pages - 1
               ? <Button variant="primary" data-action="tour-next" onClick={next}>Next</Button>
-              : <Button variant="primary" data-action="tour-next" onClick={next}>Set global spend limits</Button>}
+              : <Button variant="primary" data-action="tour-next" onClick={next}>Set your risk tolerance</Button>}
           </span>
           {!done && <button type="button" data-action="tour-skip" className="border-0 bg-transparent p-1 text-[10.5px] font-[560] text-faint underline-offset-2 hover:text-muted hover:underline" onClick={onDone}>Skip tutorial</button>}
         </span>

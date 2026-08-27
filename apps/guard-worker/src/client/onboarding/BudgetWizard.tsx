@@ -6,6 +6,7 @@ import {
   AccessStep,
   RuntimeStep,
   StepActions,
+  StepIntro,
   VerifyStep,
 } from "./BudgetSteps";
 import { AlertsStep } from "./alerts";
@@ -63,9 +64,12 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   const [accessCheckComplete, setAccessCheckComplete] = useState(false);
   const [breakerClaimed, setBreakerClaimed] = useState(false);
-  // Chart guide card between risk tolerance and the limit steps: it appears
-  // when the tolerance step's Continue is pressed on a first-run wizard, the
-  // account step unlocks when it finishes or is skipped, and the card stays
+  // Risk tolerance and the limit steps chart imported history, so the wizard
+  // holds at alert levels until the initial import finishes.
+  const [importRunning, setImportRunning] = useState(true);
+  // Chart guide card between alert levels and risk tolerance: it appears
+  // when the levels step's Continue is pressed on a first-run wizard, the
+  // tolerance step unlocks when it finishes or is skipped, and the card stays
   // in the flow afterwards for replay.
   const [tour, setTour] = useState<"pending" | "open" | "done">(editing ? "done" : "pending");
   const board = useAlertLevels(token);
@@ -102,7 +106,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     />,
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
-    <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
+    importRunning && !editing
+      ? <ImportHoldStep />
+      : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={data.planTier} />,
     <ProductLimitsStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} />,
@@ -119,7 +125,6 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           <WizardStepper active={navigation.active} unlocked={navigation.unlocked} onSelect={navigation.scrollToSection} />
         </div>
         <span className="flex flex-none items-center gap-2 justify-self-end whitespace-nowrap py-2.5 max-md:col-start-2 max-md:row-start-1">
-          {navigation.unlocked >= 1 && <span className="max-lg:hidden"><ImportProgress token={token} billingConnected={billingConnected} /></span>}
           {onCancel && <Button variant="quiet" onClick={onCancel}>Close</Button>}
           <Button variant="quiet" onClick={onLogout} title="Sign out of Brolly"><Icon name="logout" /> Sign out</Button>
         </span>
@@ -127,9 +132,10 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
       <div className="mx-auto max-w-[1440px] px-8 pt-8 pb-[100px] max-xl:px-6 max-xl:pb-20 max-md:px-3.5 max-md:pt-4 max-md:pb-[60px]">
         <div className="grid min-w-0 gap-5">
           {STEPS.map((step, index) => <Fragment key={step.label}>
-            {step.key === "account" && tour !== "pending" && (
-              <ChartTour levels={board.levels} policy={policy} done={tour === "done"}
-                onDone={() => { setTour("done"); navigation.advance(); }} />
+            {step.key === "tolerance" && (tour === "pending"
+              ? <LockedGuideCard />
+              : <ChartTour levels={board.levels} policy={policy} done={tour === "done"}
+                  onDone={() => { setTour("done"); navigation.advance(); }} />
             )}
             {index > navigation.unlocked
             ? <LockedStep step={step} index={index} />
@@ -147,7 +153,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     billingRequired={billingRequired}
                     planTier={planTier}
                     busy={save.busy || (index === 0 && estimates.busy)}
-                    blocked={index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue." : ""}
+                    blocked={
+                      index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue."
+                      : index === stepIndex("tolerance") && importRunning && !editing ? "This step opens when the account history import finishes."
+                      : ""
+                    }
                     firstStep={index === 0}
                     billingFlow={billingFlow}
                     label={step.continueLabel}
@@ -155,7 +165,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     onOpenBilling={() => setBillingDialogOpen(true)}
                     onContinue={() => {
                       if (step.key === "runtime") setBreakerClaimed(true);
-                      if (step.key === "tolerance" && tour !== "done") {
+                      if (step.key === "levels" && tour !== "done") {
                         setTour("open");
                         if (tour === "open") document.querySelector("[data-chart-tour]")?.scrollIntoView({ behavior: "smooth", block: "start" });
                         return;
@@ -179,6 +189,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           </Fragment>)}
         </div>
       </div>
+      {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} onRunningChange={setImportRunning} />}
     </main>
   );
 }
@@ -228,17 +239,44 @@ function WizardStepper({ active, unlocked, onSelect }: {
   );
 }
 
-function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number }) {
+/** Step 4 body while the account history import runs: tolerance charts real usage, so the step holds until the data exists. */
+function ImportHoldStep() {
+  return <>
+    <StepIntro title="Risk tolerance">
+      Set how far above your usual daily spend each alert level starts.
+    </StepIntro>
+    <div className="grid justify-items-center gap-3 rounded-panel border border-dashed border-line px-6 py-14 text-center">
+      <Spinner />
+      <strong className="text-[14px] text-ink">Importing your account history…</strong>
+      <p className="max-w-[46ch] text-[12.5px] leading-normal text-muted">Risk tolerance is set against your real usage. This step opens when the import finishes.</p>
+    </div>
+  </>;
+}
+
+function LockedCard({ marker, title, preview, label }: { marker: ReactNode; title: string; preview: string; label: string }) {
   return (
-    <section className="flex items-center gap-3.5 rounded-xl border border-dashed border-line px-[22px] py-4 text-faint" aria-label={`${step.label} (locked)`}>
-      <StepMarker>{index + 1}</StepMarker>
+    <section className="flex items-center gap-3.5 rounded-xl border border-dashed border-line px-[22px] py-4 text-faint" aria-label={`${label} (locked)`}>
+      <StepMarker>{marker}</StepMarker>
       <div>
-        <strong className="block text-sm text-muted">{step.label}</strong>
-        <p className="mt-0.5 text-[12.5px] leading-normal">{step.preview}</p>
+        <strong className="block text-sm text-muted">{title}</strong>
+        <p className="mt-0.5 text-[12.5px] leading-normal">{preview}</p>
       </div>
       <span className="ml-auto flex-none"><Icon name="lock" className="size-4" /></span>
     </section>
   );
+}
+
+function LockedStep({ step, index }: { step: typeof STEPS[number]; index: number }) {
+  return <LockedCard marker={index + 1} title={step.label} preview={step.preview} label={step.label} />;
+}
+
+/**
+ * Stand-in card for the guide before it opens, so the flow shows where it will
+ * appear. The guide stays out of the header step rail on purpose: it is an
+ * unnumbered card between steps 3 and 4.
+ */
+function LockedGuideCard() {
+  return <LockedCard marker={<Icon name="sliders" className="size-3.5" />} title="How to use Brolly" preview="A guided tour of the charts and controls the next steps use." label="How to use Brolly" />;
 }
 
 type BillingFlow = "idle" | "settling" | "done";

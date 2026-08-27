@@ -48,9 +48,23 @@ The first-run **Alert channels** step starts a one-shot 90-day ingestion job in
 the background and shows its progress while the operator connects channels.
 Usage collectors create daily slices within each dataset's available retention,
 up to 90 days. Billing Read creates three contiguous slices of no more than 31
-days. The job uses a separate budget of 40 GraphQL queries, five REST requests,
-and 25 seconds. Setup can continue while the cron scheduler finishes eligible
-slices. The progress view reports stored slice counts and dates.
+days. Initial ingestion uses Cloudflare's account-based Analytics limiter. Its
+persisted five-minute state reserves 240 logical queries for the account, 240
+for each zone, and a 700-request physical ceiling. Exact-zone work can continue
+when the account allowance is full. One import lease covers browser and cron
+starts. Six Analytics producers feed one serialized D1 consumer. Claimed work
+reserves D1 capacity. A persistence limit requeues the original range for one
+fresh-budget attempt before splitting it. Cloudflare rate limits defer work
+without consuming an import retry. Billing receives reserved REST capacity.
+Monitoring and initial ingestion run concurrently from the cron scheduler.
+Setup can continue while the scheduler finishes eligible slices. One progress
+row combines weighted work across every planned source
+partition. It shows the completed percentage and an estimated remaining time.
+The collapsed row opens to show per-source percentages and completed window
+counts. A counted warning control contains unavailable window details. Progress
+polling uses a five-second active interval and retries transient request
+failures with bounded backoff. A lease takeover
+returns interrupted running slices to the pending queue.
 
 One run has default limits of 300 GraphQL dataset queries, 50 REST requests,
 100,000 D1 rows read, 50,000 D1 rows written, 30 dataset pages, four backfill
@@ -183,6 +197,9 @@ again and continue setup.
 It starts with one bounded read-only check and does not apply suggested limits.
 Results are shown before any credential form.
 OAuth reconnection is revealed only for an Analytics permission problem.
+The OAuth grant requires Account Analytics Read and zone Analytics Read.
+The first authorization under a new scope revision replaces the previous
+history plan. Stored ledger history remains available during the new import.
 When Billing Read is unavailable, both **Grant billing access** actions open the
 same token setup dialog.
 Each result says what Brolly can monitor, what remains missing, and the next
@@ -245,9 +262,12 @@ The setup sequence is:
 6. **Billing-cycle limits.** Set cost and billable usage limits for the same scopes.
 7. **Shutdown fuse.** Review the resource-aware coding-agent handoff and install the runtime integration through the normal application release process.
 
-The history import starts when Alert channels opens. The sidebar shows two
-bounded progress rows until the import completes. Channel and level edits remain
-available while ingestion runs.
+The history import starts when Alert channels opens. The sidebar shows one
+90-day account-history row until the import completes. The bar advances with
+weighted work across every planned source partition. The row shows an estimated
+remaining time after progress begins. The collapsed row opens to per-source
+progress. A counted warning control contains unavailable window details.
+Channel and level edits remain available while ingestion runs.
 
 Balanced is the default for existing installations. New values use the median
 nonzero daily history or the median of complete billing cycles. Saved chart

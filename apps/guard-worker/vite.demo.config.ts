@@ -289,6 +289,7 @@ const onboarding = {
 
 const initialIngestion: InitialIngestionResponse = {
   job: { id: "initial-demo", status: "running", startedAt: now, updatedAt: now },
+  days: { total: 90, complete: 0, pending: 90, gaps: 0, failedWindows: 0, errors: [] },
   collectors: [
     { collector: "graphql:workers", label: "Workers", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
     { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
@@ -297,7 +298,31 @@ const initialIngestion: InitialIngestionResponse = {
 };
 let initialIngestionPolls = 0;
 
+/**
+ * `BROLLY_DEMO_INGEST=errors pnpm dev:demo` freezes the import mid-run with
+ * failed windows and error detail, so the in-progress + errors UI holds still
+ * for review instead of completing after a few polls.
+ */
+const frozenIngestErrors: InitialIngestionResponse | null = process.env.BROLLY_DEMO_INGEST === "errors"
+  ? {
+      job: { id: "initial-demo", status: "running", startedAt: now - 4 * 60_000, updatedAt: now },
+      days: {
+        total: 90, complete: 10, pending: 80, gaps: 60, failedWindows: 4,
+        errors: [
+          "Cloudflare GraphQL rejected an Analytics import window.",
+          "Billing API access is unavailable.",
+        ],
+      },
+      collectors: [
+        { collector: "graphql:workers", label: "Workers", total: 3, complete: 1, failed: 1, pending: 1, totalUnits: 90, completeUnits: 34, failedUnits: 18, oldestCompleteAt: "2026-05-19", errors: ["Cloudflare GraphQL rejected the workersInvocationsAdaptive query for 2026-06-02 through 2026-06-19 (HTTP 500)."] },
+        { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 1, failed: 1, pending: 1, totalUnits: 90, completeUnits: 28, failedUnits: 12, oldestCompleteAt: "2026-05-19", errors: ["Durable Objects analytics returned no data before 2026-06-14; the account predates retention for that range."] },
+        { collector: "billing", label: "Billing", total: 3, complete: 1, failed: 2, pending: 0, totalUnits: 90, completeUnits: 30, failedUnits: 60, oldestCompleteAt: "2026-07-28", errors: ["Billing API token lacks the Billing Read permission (HTTP 403).", "Invoice detail for June 2026 timed out after 3 attempts."] },
+      ],
+    }
+  : null;
+
 function advanceInitialIngestion(): InitialIngestionResponse {
+  if (frozenIngestErrors) return frozenIngestErrors;
   initialIngestionPolls += 1;
   const workers = Math.min(3, initialIngestionPolls);
   const durableObjects = Math.min(3, Math.max(0, initialIngestionPolls - 1));
@@ -308,6 +333,8 @@ function advanceInitialIngestion(): InitialIngestionResponse {
     return { ...item, complete, pending: item.total - complete, completeUnits, oldestCompleteAt: complete ? "2026-05-19" : null };
   });
   const done = initialIngestion.collectors.every(item => item.complete + item.failed >= item.total);
+  const complete = Math.min(...initialIngestion.collectors.map(item => item.completeUnits));
+  initialIngestion.days = { total: 90, complete, pending: 90 - complete, gaps: 0, failedWindows: 0, errors: [] };
   initialIngestion.job = { ...initialIngestion.job!, status: done ? "complete" : "running", updatedAt: Date.now() };
   return initialIngestion;
 }

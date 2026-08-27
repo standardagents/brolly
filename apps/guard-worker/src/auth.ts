@@ -10,6 +10,7 @@ const OAUTH_STATE_TTL_MS = 10 * 60_000;
 const SESSION_TTL_MS = 12 * 60 * 60_000;
 const SESSION_COOKIE = "brolly_session";
 const STATE_COOKIE = "brolly_oauth_state";
+const OAUTH_SCOPE_REVISION = "zone-analytics-v1";
 
 export const BROLLY_OAUTH_SCOPES = [
   "offline_access",
@@ -17,6 +18,7 @@ export const BROLLY_OAUTH_SCOPES = [
   "memberships.read",
   "account-settings.read",
   "account-analytics.read",
+  "analytics.read",
   "workers-scripts.read",
   "workers-scripts.write",
   "workers-kv-storage.read",
@@ -211,10 +213,31 @@ async function finishLogin(request: Request, env: Env): Promise<Response> {
     env.DB.prepare(`INSERT INTO auth_sessions(token_hash,user_id,email,display_name,account_id,created_at,last_seen_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?6,?7)`).bind(sessionHash, user.sub, user.email ?? null, user.name ?? user.preferred_username ?? null, account.id, now, now + SESSION_TTL_MS),
     env.DB.prepare(`DELETE FROM auth_sessions WHERE expires_at < ?1`).bind(now),
   ]);
+  await refreshInitialIngestionForOAuthScopes(env.DB, account.id, now);
   const headers = new Headers({ location: "/", "cache-control": "no-store" });
   headers.append("set-cookie", serializeCookie(SESSION_COOKIE, sessionToken, request, SESSION_TTL_MS));
   headers.append("set-cookie", serializeCookie(STATE_COOKIE, "", request, 0));
   return new Response(null, { status: 302, headers });
+}
+
+/** Replan history once when a release adds monitoring permissions. */
+export async function refreshInitialIngestionForOAuthScopes(db: D1Database, accountId: string, now = Date.now()): Promise<void> {
+  const revisionChanged = `COALESCE((SELECT value FROM settings WHERE key='oauth_scope_revision'),'')!=?2`;
+  await db.batch([
+    db.prepare(
+      `UPDATE backfill_slices SET status='superseded',updated_at=?3
+       WHERE backfill_job_id IN (SELECT id FROM backfill_jobs WHERE account_id=?1 AND kind='initial_v2')
+         AND ${revisionChanged}`,
+    ).bind(accountId, OAUTH_SCOPE_REVISION, now),
+    db.prepare(
+      `UPDATE backfill_jobs SET kind='initial_v2_superseded',status='superseded',updated_at=?3
+       WHERE account_id=?1 AND kind='initial_v2' AND ${revisionChanged}`,
+    ).bind(accountId, OAUTH_SCOPE_REVISION, now),
+    db.prepare(
+      `INSERT INTO settings(key,value,updated_at) VALUES('oauth_scope_revision',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+    ).bind(OAUTH_SCOPE_REVISION, now),
+  ]);
 }
 
 export function hasRenewableAccess(oauth: Pick<OAuthTokenResponse, "refresh_token">): boolean {

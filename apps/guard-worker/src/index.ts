@@ -25,8 +25,10 @@ export default {
     ctx.waitUntil((async () => {
       const activeEnv = await configuredEnv(env);
       if (!activeEnv) return;
-      await runMonitor(activeEnv).catch(error => console.error("[Brolly] monitor failed", error));
-      await resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error));
+      await Promise.all([
+        runMonitor(activeEnv).catch(error => console.error("[Brolly] monitor failed", error)),
+        resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error)),
+      ]);
     })());
   },
 

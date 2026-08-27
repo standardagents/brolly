@@ -34,6 +34,7 @@ async function install(): Promise<void> {
   console.log("Opening Cloudflare to authorize Brolly. Brolly will ask you to choose exactly one account.");
   const scopes = (process.env.BROLLY_OAUTH_SCOPES ?? [
     "offline_access", "user-details.read", "memberships.read", "account-settings.read", "account-analytics.read",
+    "analytics.read",
     "workers-scripts.read", "workers-scripts.write", "workers-kv-storage.read", "workers-r2.read",
     "d1.read", "d1.write", "queues.read", "queues.write", "vectorize.read", "query-cache.read",
     "page.read", "aig.read", "zone.read",

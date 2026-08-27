@@ -126,9 +126,18 @@ describe("ChartTour", () => {
     expect(container.querySelector("[data-tour-cursor]")).not.toBeNull();
     expect(container.querySelectorAll("[role='slider']").length).toBe(0);
 
-    expect(onDone).not.toHaveBeenCalled();
     await next();
     expect(stageKey()).toBe("motion");
+    expect(pageIndex()).toBe("1");
+
+    await next();
+    expect(stageKey()).toBe("tracks");
+    // The horizontal track is interactive: one diamond slider per level.
+    expect(container.querySelectorAll("[role='slider']").length).toBe(levels.length);
+
+    expect(onDone).not.toHaveBeenCalled();
+    await next();
+    expect(stageKey()).toBe("tracks");
     expect(pageIndex()).toBe("1");
     await next();
     expect(onDone).toHaveBeenCalledTimes(1);
@@ -258,9 +267,9 @@ describe("BudgetWizard chart tour", () => {
     }));
   });
 
-  it("opens between risk tolerance and account limits, unlocks the account step, and stays in the flow", async () => {
+  it("opens between alert levels and risk tolerance, unlocks the tolerance step, and stays in the flow", async () => {
     await act(async () => {
-      root!.render(<BudgetWizard data={data} token="test" editing={false} initialStep={3} onLogout={() => {}} onSaved={async () => {}} />);
+      root!.render(<BudgetWizard data={data} token="test" editing={false} initialStep={2} onLogout={() => {}} onSaved={async () => {}} />);
       await Promise.resolve();
     });
     await waitFor(() => expect(continueButton()).not.toBeNull());
@@ -268,15 +277,15 @@ describe("BudgetWizard chart tour", () => {
 
     await act(async () => { continueButton()!.click(); await Promise.resolve(); });
     await waitFor(() => expect(container.querySelector("[data-chart-tour]")).not.toBeNull());
-    // The account step stays locked behind the guide.
-    expect(container.querySelector("section[aria-label='Account limits (locked)']")).not.toBeNull();
+    // The tolerance step stays locked behind the guide.
+    expect(container.querySelector("section[aria-label='Risk tolerance (locked)']")).not.toBeNull();
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>("[data-chart-tour] button[data-action='tour-skip']")!.click();
       await Promise.resolve();
     });
-    // The account step unlocks and the guide card remains in the flow.
-    await waitFor(() => expect(container.querySelector("section[aria-label='Account limits (locked)']")).toBeNull());
+    // The tolerance step unlocks and the guide card remains in the flow.
+    await waitFor(() => expect(container.querySelector("section[aria-label='Risk tolerance (locked)']")).toBeNull());
     expect(container.querySelector("[data-chart-tour]")).not.toBeNull();
   });
 

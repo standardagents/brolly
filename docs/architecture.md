@@ -67,6 +67,14 @@ under a D1 lease so overlapping monitor and control requests cannot race token
 rotation. Installations authorized before refresh-token support was enabled
 must reconnect once to replace their original short-lived grant.
 
+The operational grant includes Account Analytics Read and zone Analytics Read.
+Account Analytics supplies account datasets. Zone Analytics supplies HTTP and
+Email dataset access for each authorized zone. An installation authorized
+before zone Analytics access was added must reconnect once. The first login
+under this scope revision supersedes its old import plan. The scheduler creates
+a fresh plan from newly available capabilities while retaining imported ledger
+history.
+
 An unbound deployment accepts exactly one account in its first successful
 browser authorization and persists that account ID in D1. This binds the
 Cloudflare account, not the person: later sign-ins are accepted only when their
@@ -94,8 +102,18 @@ registered Cloudflare usage dataset during the initial import. Hot watch can run
 instance is open and the aligned Cloudflare watermark has advanced. Inventory,
 billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
-budget left after active safeguards. First-run initial ingestion has a separate
-bounded request budget and leaves unfinished slices for the cron scheduler.
+budget left after active safeguards. First-run initial ingestion opts into
+Cloudflare's account-based Analytics limiter. A persisted five-minute window
+reserves 240 logical queries for the account and 240 for each zone. A
+700-request physical ceiling leaves global API capacity for monitoring and
+operator actions. Exact-zone slices use each zone's independent allowance. One
+lease coordinates browser and cron starts. Six Analytics producers feed one
+serialized D1 consumer. Each claimed slice reserves D1 capacity until
+persistence starts. Rate limits keep work pending until the reported reset.
+Persistence exhaustion requeues the range for a fresh-budget attempt before
+range splitting. Reserved REST capacity runs Billing Read before Analytics.
+The cron runs monitoring and initial ingestion concurrently. A lease takeover
+returns interrupted running slices to the pending queue before work resumes.
 
 Active telemetry uses one fixed completed five-minute window and a fixed pass
 over the preceding window for correction. Continuations retain those original
@@ -105,6 +123,12 @@ Workers are grouped by script name. Both collectors use stable identifier
 ordering, 10,000-row keyset pages, independent continuation cursors, and
 explicit partial coverage. A collection pass never wakes a Durable Object or
 reads customer application storage.
+
+Coverage incidents come from explicit active-telemetry and asset-inventory
+results. Passive product limitations and metrics outside the active fast pass
+remain coverage state for the Configuration page. They do not notify channels.
+The next active monitor pass resolves legacy incidents created for those
+passive metrics.
 
 Current local-day and billing-cycle totals live in deterministic 8-bit
 accumulator shards. Rows approaching 1.5 MB split into deterministic secondary
@@ -144,8 +168,12 @@ admin token. The wizard connects Cloudflare, adds alert channels, configures the
 alert level board, records risk tolerance, collects daily limits, collects
 billing-cycle limits, and presents the runtime-fuse handoff.
 
-The Alert channels step starts the bounded history import. Two progress rows
-remain in the wizard sidebar while the import runs. The import writes ledger
+The Alert channels step starts the bounded history import. The wizard sidebar
+shows one 90-day account-history row. Its bar combines completed work across
+every planned source partition. The row shows a percentage and an estimated
+remaining time. The collapsed row opens to show per-source progress and window
+counts. Unavailable windows appear as a count on a warning control. The control
+opens their details. The import writes ledger
 history and coverage state without creating alert instances, notifications, or
 control actions. Risk tolerance and both limit steps remain editable while the
 import continues.

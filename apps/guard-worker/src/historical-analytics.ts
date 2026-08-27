@@ -11,7 +11,9 @@ import type { Env } from "./env.js";
 import { operationalToken } from "./credentials.js";
 import {
   PRODUCT_USAGE_DEFINITIONS,
+  buildExactZoneProductDatasetQuery,
   buildProductDatasetQuery,
+  exactZoneProductDatasetVariables,
   normalizeProductDataset,
   productDatasetVariables,
   type ProductDatasetDefinition,
@@ -23,6 +25,17 @@ const DAY_MS = 86_400_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_ZONE_BATCH = 10;
 const SETTINGS_BATCH = 12;
+
+export type HistoricalRateScope = { kind: "account" } | { kind: "zone"; zoneId: string };
+
+export interface HistoricalRateBudget {
+  charge(scope: HistoricalRateScope, logicalQueries: number): void;
+}
+
+export interface HistoricalAnalyticsOptions {
+  accountBasedRateLimit?: boolean;
+  rateBudget?: HistoricalRateBudget;
+}
 
 type HistoricalDatasetKind = "workers" | "durable_invocations" | "durable_periodic" | "durable_sql_storage" | "durable_kv_storage" | "product";
 
@@ -70,6 +83,7 @@ export interface HistoricalUsageResult {
   coverage: CoverageResult[];
   complete: boolean;
   rows: number;
+  zoneGaps?: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }>;
 }
 
 interface DatasetSetting {
@@ -119,6 +133,7 @@ export class HistoricalAnalyticsClient {
     private readonly ledgerBudget?: LedgerRunBudget,
     private readonly tokenProvider: () => Promise<string> = () => operationalToken(env),
     private readonly zoneProvider?: () => Promise<string[]>,
+    private readonly options: HistoricalAnalyticsOptions = {},
   ) {}
 
   async discoverCapabilities(): Promise<HistoricalDatasetCapability[]> {
@@ -127,13 +142,7 @@ export class HistoricalAnalyticsClient {
     const capabilities: HistoricalDatasetCapability[] = [];
     for (let offset = 0; offset < account.length; offset += SETTINGS_BATCH) {
       const batch = account.slice(offset, offset + SETTINGS_BATCH);
-      try {
-        const settings = await this.accountSettings(batch);
-        capabilities.push(...batch.map(spec => capability(spec, settings[spec.dataset], null)));
-      } catch (error) {
-        if (isBudgetError(error)) throw error;
-        capabilities.push(...batch.map(spec => unavailableCapability(spec, null, errorMessage(error))));
-      }
+      capabilities.push(...await this.accountSettingsIsolated(batch));
     }
 
     let zoneIds: string[];
@@ -150,8 +159,16 @@ export class HistoricalAnalyticsClient {
         state: "healthy" as const,
       }))];
     }
-    for (let offset = 0; offset < zoneIds.length; offset += MAX_ZONE_BATCH) {
-      capabilities.push(...await this.zoneSettings(zones, zoneIds.slice(offset, offset + MAX_ZONE_BATCH)));
+    const settingsBatchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+    const zoneBatches = Array.from(
+      { length: Math.ceil(zoneIds.length / settingsBatchSize) },
+      (_, index) => zoneIds.slice(index * settingsBatchSize, (index + 1) * settingsBatchSize),
+    );
+    for (let offset = 0; offset < zoneBatches.length; offset += 6) {
+      const discovered = await Promise.all(
+        zoneBatches.slice(offset, offset + 6).map(batch => this.zoneSettings(zones, batch)),
+      );
+      capabilities.push(...discovered.flat());
     }
     return capabilities;
   }
@@ -209,7 +226,7 @@ export class HistoricalAnalyticsClient {
       since: new Date(request.startsAt).toISOString(),
       until: new Date(request.endsAt).toISOString(),
     };
-    const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>> } }>(query, variables, 1);
+    const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>> } }>(query, variables, 1, { kind: "account" });
     const rows = arrayValue(payload.viewer?.accounts?.[0]?.[spec.dataset]);
     const samples = normalizeSpecial(spec, rows, this.env, request.startsAt, request.endsAt);
     return {
@@ -227,14 +244,32 @@ export class HistoricalAnalyticsClient {
     const source = spec.source!;
     const zoneIds = source.root === "zone" ? request.zoneIds ?? [] : [];
     if (source.root === "zone" && !zoneIds.length) throw new Error(`${source.dataset} requires at least one authorized zone`);
-    const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>>; zones?: Array<Record<string, unknown>> } }>(
-      buildProductDatasetQuery(product, source, limit),
-      productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds),
-      source.root === "zone" ? zoneIds.length : 1,
-    );
-    const roots = source.root === "zone" ? payload.viewer?.zones ?? [] : payload.viewer?.accounts ?? [];
+    const failedZones: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> = [];
+    let roots: Array<Record<string, unknown>>;
+    if (source.root === "zone") {
+      const isolated = await this.collectProductZones(spec, request, limit, zoneIds);
+      roots = isolated.roots;
+      failedZones.push(...isolated.failed);
+    } else {
+      const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>> } }>(
+        buildProductDatasetQuery(product, source, limit),
+        productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, []),
+        1,
+        { kind: "account" },
+      );
+      roots = payload.viewer?.accounts ?? [];
+    }
+    if (source.root === "zone") {
+      const returned = new Set(roots.flatMap(root => stringValue(root.zoneTag) ? [stringValue(root.zoneTag)!] : []));
+      for (const zoneId of zoneIds) if (!returned.has(zoneId) && !failedZones.some(item => item.zoneId === zoneId)) {
+        failedZones.push({ zoneId, state: "unavailable", detail: "Cloudflare did not return this zone in the Analytics response." });
+      }
+    }
     const rows = roots.reduce((count, root) => count + arrayValue(root[source.alias]).length, 0);
     const truncated = roots.some(root => arrayValue(root[source.alias]).length >= limit);
+    const failedDetail = failedZones.length
+      ? failedZones.map(item => `${item.zoneId}: ${item.detail}`).join("; ")
+      : undefined;
     return {
       collector: spec.collector,
       dataset: spec.dataset,
@@ -243,42 +278,120 @@ export class HistoricalAnalyticsClient {
         family: product.family,
         metric: item.metric,
         finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? product.scope : "account",
-        state: truncated ? "delayed" : "healthy",
+        state: failedZones.length ? failedZones.some(item => item.state === "permission_denied") ? "permission_denied" : "unavailable" : truncated ? "delayed" : "healthy",
         checkedAt: Date.now(),
-        detail: truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : undefined,
+        detail: failedDetail ?? (truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : undefined),
       })),
-      complete: !truncated,
+      complete: !truncated && failedZones.length === 0,
       rows,
+      zoneGaps: failedZones.length ? failedZones : undefined,
     };
+  }
+
+  private async collectProductZones(
+    spec: HistoricalDatasetSpec,
+    request: HistoricalUsageRequest,
+    limit: number,
+    zoneIds: string[],
+  ): Promise<{ roots: Array<Record<string, unknown>>; failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> }> {
+    const source = spec.source!;
+    if (zoneIds.length > (this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH)) {
+      const roots: Array<Record<string, unknown>> = [];
+      const failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> = [];
+      const batchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+      for (let offset = 0; offset < zoneIds.length; offset += batchSize) {
+        const result = await this.collectProductZones(spec, request, limit, zoneIds.slice(offset, offset + batchSize));
+        roots.push(...result.roots);
+        failed.push(...result.failed);
+      }
+      return { roots, failed };
+    }
+    try {
+      const zoneId = zoneIds[0];
+      const payload = await this.graphql<{ viewer?: { zones?: Array<Record<string, unknown>> } }>(
+        this.options.accountBasedRateLimit
+          ? buildExactZoneProductDatasetQuery(spec.product!, source, limit)
+          : buildProductDatasetQuery(spec.product!, source, limit),
+        this.options.accountBasedRateLimit && zoneId
+          ? exactZoneProductDatasetVariables(source, request.startsAt, request.endsAt, zoneId)
+          : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds),
+        this.options.accountBasedRateLimit ? 1 : zoneIds.length,
+        zoneId ? { kind: "zone", zoneId } : { kind: "account" },
+      );
+      return { roots: payload.viewer?.zones ?? [], failed: [] };
+    } catch (error) {
+      if (isBudgetError(error)) throw error;
+      if (!isIsolatableAnalyticsError(error)) throw error;
+      if (zoneIds.length > 1) {
+        const middle = Math.ceil(zoneIds.length / 2);
+        const left = await this.collectProductZones(spec, request, limit, zoneIds.slice(0, middle));
+        const right = await this.collectProductZones(spec, request, limit, zoneIds.slice(middle));
+        return { roots: [...left.roots, ...right.roots], failed: [...left.failed, ...right.failed] };
+      }
+      const zoneId = zoneIds[0];
+      return zoneId ? { roots: [], failed: [{ zoneId, state: unavailableState(error), detail: errorMessage(error) }] } : { roots: [], failed: [] };
+    }
   }
 
   private async accountSettings(specs: readonly HistoricalDatasetSpec[]): Promise<Record<string, DatasetSetting | undefined>> {
     const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
     const query = `query BrollyAccountAnalyticsSettings($account: String!) { viewer { accounts(filter: { accountTag: $account }) { settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
-    const payload = await this.graphql<{ viewer?: { accounts?: Array<{ settings?: Record<string, DatasetSetting> }> } }>(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length);
+    const payload = await this.graphql<{ viewer?: { accounts?: Array<{ settings?: Record<string, DatasetSetting> }> } }>(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length, { kind: "account" });
     return payload.viewer?.accounts?.[0]?.settings ?? {};
+  }
+
+  private async accountSettingsIsolated(specs: readonly HistoricalDatasetSpec[]): Promise<HistoricalDatasetCapability[]> {
+    try {
+      const settings = await this.accountSettings(specs);
+      return specs.map(spec => capability(spec, settings[spec.dataset], null));
+    } catch (error) {
+      if (isBudgetError(error)) throw error;
+      if (!isIsolatableAnalyticsError(error)) throw error;
+      if (specs.length > 1) {
+        const middle = Math.ceil(specs.length / 2);
+        return [
+          ...await this.accountSettingsIsolated(specs.slice(0, middle)),
+          ...await this.accountSettingsIsolated(specs.slice(middle)),
+        ];
+      }
+      const spec = specs[0];
+      return spec ? [unavailableCapability(spec, null, errorMessage(error), unavailableState(error))] : [];
+    }
   }
 
   private async zoneSettings(specs: readonly HistoricalDatasetSpec[], zoneIds: string[]): Promise<HistoricalDatasetCapability[]> {
     const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
-    const query = `query BrollyZoneAnalyticsSettings($zones: [string!]!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
+    const exact = this.options.accountBasedRateLimit;
+    const query = exact
+      ? `query BrollyZoneAnalyticsSettings($zone: string!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`
+      : `query BrollyZoneAnalyticsSettings($zones: [string!]!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
+    const zoneId = zoneIds[0]!;
     try {
       const payload = await this.graphql<{ viewer?: { zones?: Array<{ zoneTag?: string; settings?: Record<string, DatasetSetting> }> } }>(
         query,
-        { zones: zoneIds },
+        exact ? { zone: zoneId } : { zones: zoneIds },
         specs.length * zoneIds.length,
+        { kind: "zone", zoneId },
       );
       const returned = new Map((payload.viewer?.zones ?? []).flatMap(zone => zone.zoneTag ? [[zone.zoneTag, zone.settings ?? {}] as const] : []));
-      return zoneIds.flatMap(zoneId => specs.map(spec => returned.has(zoneId)
-        ? capability(spec, returned.get(zoneId)?.[spec.dataset], zoneId)
-        : unavailableCapability(spec, zoneId, "Cloudflare did not return Analytics settings for this zone.")));
+      return zoneIds.flatMap(currentZone => specs.map(spec => returned.has(currentZone)
+        ? capability(spec, returned.get(currentZone)?.[spec.dataset], currentZone)
+        : unavailableCapability(spec, currentZone, "Cloudflare did not return Analytics settings for this zone.")));
     } catch (error) {
       if (isBudgetError(error)) throw error;
       const unauthorized = unauthorizedZoneIds(errorMessage(error), zoneIds);
       if (unauthorized.length) {
-        const denied = unauthorized.flatMap(zoneId => specs.map(spec => unavailableCapability(spec, zoneId, "Cloudflare denied Analytics access to this zone.", "permission_denied")));
-        const remaining = zoneIds.filter(zoneId => !unauthorized.includes(zoneId));
+        const denied = unauthorized.flatMap(deniedZone => specs.map(spec => unavailableCapability(spec, deniedZone, "Cloudflare denied Analytics access to this zone.", "permission_denied")));
+        const remaining = zoneIds.filter(currentZone => !unauthorized.includes(currentZone));
         return remaining.length ? [...denied, ...await this.zoneSettings(specs, remaining)] : denied;
+      }
+      if (!isIsolatableAnalyticsError(error)) throw error;
+      if (specs.length > 1) {
+        const middle = Math.ceil(specs.length / 2);
+        return [
+          ...await this.zoneSettings(specs.slice(0, middle), zoneIds),
+          ...await this.zoneSettings(specs.slice(middle), zoneIds),
+        ];
       }
       if (zoneIds.length > 1) {
         const middle = Math.ceil(zoneIds.length / 2);
@@ -287,7 +400,7 @@ export class HistoricalAnalyticsClient {
           ...await this.zoneSettings(specs, zoneIds.slice(middle)),
         ];
       }
-      return specs.map(spec => unavailableCapability(spec, zoneIds[0] ?? null, errorMessage(error)));
+      return specs.map(spec => unavailableCapability(spec, zoneId, errorMessage(error), unavailableState(error)));
     }
   }
 
@@ -311,16 +424,29 @@ export class HistoricalAnalyticsClient {
     return zoneIds;
   }
 
-  private async graphql<T>(query: string, variables: Record<string, unknown>, logicalQueries: number): Promise<T> {
+  private async graphql<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    logicalQueries: number,
+    scope: HistoricalRateScope,
+  ): Promise<T> {
+    this.options.rateBudget?.charge(scope, logicalQueries);
     this.budget.charge("apiCalls");
     this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
     const response = await fetch(`${API}/graphql`, {
       method: "POST",
-      headers: { authorization: `Bearer ${await this.token()}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${await this.token()}`,
+        "content-type": "application/json",
+        ...(this.options.accountBasedRateLimit ? { "x-rate-limit-type": "account-based" } : {}),
+      },
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     });
-    const payload = await response.json() as GraphqlPayload<T>;
+    const payload = await response.json().catch(() => ({})) as GraphqlPayload<T>;
+    if (response.status === 429 || isGraphqlRateLimit(payload.errors)) {
+      throw new HistoricalRateLimitError(response.status, rateLimitResetAt(response.headers), payload.errors?.map(item => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached");
+    }
     if (!response.ok || payload.errors?.length) {
       throw new HistoricalAnalyticsError(response.status, payload.errors?.map(item => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
     }
@@ -339,6 +465,17 @@ export class HistoricalAnalyticsError extends Error {
     super(message);
     this.name = "HistoricalAnalyticsError";
   }
+}
+
+export class HistoricalRateLimitError extends HistoricalAnalyticsError {
+  constructor(status: number, readonly retryAt: number, message: string) {
+    super(status, message);
+    this.name = "HistoricalRateLimitError";
+  }
+}
+
+export function isHistoricalRateLimitError(error: unknown): error is HistoricalRateLimitError {
+  return error instanceof HistoricalRateLimitError;
 }
 
 function special(collector: string, label: string, dataset: string, family: string, scope: AssetRef["scope"], kind: HistoricalDatasetKind): HistoricalDatasetSpec {
@@ -530,7 +667,31 @@ function boundedPageSize(value: number): number { return Math.max(1, Math.min(10
 function positive(value: number | undefined): number | null { return Number.isFinite(value) && Number(value) > 0 ? Number(value) : null; }
 function minimum(values: number[]): number | null { return values.length ? Math.min(...values) : null; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function isBudgetError(error: unknown): boolean { return error instanceof Error && /BudgetExceededError$/.test(error.name); }
+function isBudgetError(error: unknown): boolean {
+  return isHistoricalRateLimitError(error) || error instanceof Error && /BudgetExceededError$/.test(error.name);
+}
+function isGraphqlRateLimit(errors: GraphqlPayload<unknown>["errors"]): boolean {
+  return Boolean(errors?.some(error => error.extensions?.code?.toLowerCase() === "budget"
+    || /rate.?limit|query budget|quota exceeded|too many requests/i.test(error.message ?? "")));
+}
+function rateLimitResetAt(headers: Headers, now = Date.now()): number {
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return now + seconds * 1_000;
+    const timestamp = Date.parse(retryAfter);
+    if (Number.isFinite(timestamp)) return Math.max(now, timestamp);
+  }
+  const resetSeconds = headers.get("ratelimit")?.match(/(?:^|;)\s*t=(\d+)/i)?.[1];
+  return now + (resetSeconds ? Number(resetSeconds) * 1_000 : 5 * 60_000);
+}
+function unavailableState(error: unknown): CoverageResult["state"] {
+  return /permission|unauthoriz|forbidden|access denied|not authorized/i.test(errorMessage(error)) ? "permission_denied" : "unavailable";
+}
+function isIsolatableAnalyticsError(error: unknown): boolean {
+  if (error instanceof HistoricalAnalyticsError && [400, 403].includes(error.status)) return true;
+  return /permission|unauthoriz|forbidden|access denied|not authorized|cannot query field|unknown field|not available|unavailable/i.test(errorMessage(error));
+}
 function arrayValue(value: unknown): Array<Record<string, unknown>> { return Array.isArray(value) ? value.filter(item => item && typeof item === "object") as Array<Record<string, unknown>> : []; }
 function recordValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value.length ? value : undefined; }

@@ -143,6 +143,24 @@ export class Store {
     this.chargeMeta(result.meta);
   }
 
+  async resolvePassiveCoverageIncidents(accountId: string, preservedKeys: string[]): Promise<void> {
+    const placeholders = preservedKeys.map((_, index) => `?${index + 5}`).join(",");
+    const result = await this.db.prepare(
+      `UPDATE incidents SET status='resolved',last_seen=?2
+       WHERE account_id=?1 AND metric='telemetry_coverage' AND status!='resolved'
+         AND incident_key GLOB ?3
+         AND incident_key NOT GLOB ?4
+         AND incident_key NOT IN (${placeholders})`,
+    ).bind(
+      accountId,
+      Date.now(),
+      `${accountId}:coverage:*`,
+      `${accountId}:coverage:*:asset_inventory`,
+      ...preservedKeys,
+    ).run();
+    this.chargeMeta(result.meta);
+  }
+
   async setActionState(actionId: string, state: ControlAction["state"], error?: string): Promise<void> {
     const result = await this.db.prepare(`UPDATE actions SET state=?2,error=?3,updated_at=?4 WHERE id=?1`).bind(actionId, state, error ?? null, Date.now()).run();
     this.chargeMeta(result.meta);

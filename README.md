@@ -76,9 +76,11 @@ The billing guide provides a copyable least-privilege token recipe. A token
 entered there is verified before
 it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
 the installation's D1. The next step imports Cloudflare's available 90-day
-usage and billing history with exact per-collector progress. Setup can continue
-while that bounded job runs in the background. Risk tolerance uses the imported
-history to seed daily and billing-cycle limits. An operator may continue
+usage and billing history. Its progress indicator combines planned work across
+collectors and shows an estimated remaining time. Its collapsed summary opens
+to show progress for each Cloudflare data source. Setup can continue while that
+bounded job runs in the background. Risk tolerance uses the imported history
+to seed daily and billing-cycle limits. An operator may continue
 supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which takes precedence
 over the D1 credential.
 

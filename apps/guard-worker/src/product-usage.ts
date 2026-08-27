@@ -196,6 +196,35 @@ export function productDefinitionForDataset(name: string): ProductUsageDefinitio
 }
 
 export function buildProductDatasetQuery(definition: ProductUsageDefinition, source: ProductDatasetDefinition, limit = 10_000): string {
+  const { selection, variableType } = productDatasetSelection(source, limit);
+  if ((source.root ?? "account") === "zone") {
+    return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
+  }
+  return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
+}
+
+/** Build the exact-zone form required by Cloudflare's account-based limiter. */
+export function buildExactZoneProductDatasetQuery(
+  definition: ProductUsageDefinition,
+  source: ProductDatasetDefinition,
+  limit = 10_000,
+): string {
+  if ((source.root ?? "account") !== "zone") throw new TypeError(`${source.dataset} is not a zone dataset`);
+  const { selection, variableType } = productDatasetSelection(source, limit);
+  return `query BrollyExactZoneProductUsage($zone: string!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag ${selection} } } }`;
+}
+
+export function exactZoneProductDatasetVariables(
+  source: ProductDatasetDefinition,
+  startsAt: number,
+  endsAt: number,
+  zoneId: string,
+): Record<string, string> {
+  const variables = productDatasetVariables(source, "", startsAt, endsAt, [zoneId]);
+  return { zone: zoneId, start: String(variables.start), end: String(variables.end) };
+}
+
+function productDatasetSelection(source: ProductDatasetDefinition, limit: number): { selection: string; variableType: "Date" | "Time" } {
   const variableType = source.timeKind === "date" ? "Date" : "Time";
   const filter = source.timeKind === "date"
     ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end`
@@ -211,11 +240,10 @@ export function buildProductDatasetQuery(definition: ProductUsageDefinition, sou
     }),
   ].filter(Boolean).join("\n");
   const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
-  const selection = `${source.alias}: ${source.dataset}(limit: ${boundedLimit}, filter: { ${filter} }) { ${body} }`;
-  if ((source.root ?? "account") === "zone") {
-    return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
-  }
-  return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
+  return {
+    variableType,
+    selection: `${source.alias}: ${source.dataset}(limit: ${boundedLimit}, filter: { ${filter} }) { ${body} }`,
+  };
 }
 
 export function productDatasetVariables(source: ProductDatasetDefinition, accountId: string, startsAt: number, endsAt: number, zoneIds: string[] = []): Record<string, string | string[]> {

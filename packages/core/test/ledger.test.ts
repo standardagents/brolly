@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   LedgerBudgetExceededError,
   LedgerRunBudget,
+  DEFAULT_LEDGER_RUN_LIMITS,
+  INITIAL_INGESTION_LIMITS,
   capacityDecision,
   exactAutomaticActionEligible,
   localDayBounds,
@@ -69,6 +71,24 @@ describe("automatic action evidence", () => {
 });
 
 describe("ledger run budget", () => {
+  it("gives bootstrap a bounded account-based GraphQL allowance", () => {
+    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBe(700);
+    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBeGreaterThan(DEFAULT_LEDGER_RUN_LIMITS.graphqlQueries);
+    expect(INITIAL_INGESTION_LIMITS.restRequests).toBe(9);
+    expect(INITIAL_INGESTION_LIMITS.backfillSlices).toBe(100);
+    expect(INITIAL_INGESTION_LIMITS.wallMs).toBe(55_000);
+    const budget = new LedgerRunBudget(INITIAL_INGESTION_LIMITS, "initial_ingestion");
+    expect(budget.limits).toEqual(INITIAL_INGESTION_LIMITS);
+  });
+
+  it("refunds a failed conditional claim without allowing negative usage", () => {
+    const budget = new LedgerRunBudget();
+    budget.charge("backfillSlices", 2);
+    budget.refund("backfillSlices");
+    budget.refund("backfillSlices", 10);
+    expect(budget.usage.backfillSlices).toBe(0);
+  });
+
   it("caps configurable limits at the product hard maximum", () => {
     const budget = new LedgerRunBudget({ graphqlQueries: 50_000 });
     expect(budget.limits.graphqlQueries).toBe(500);

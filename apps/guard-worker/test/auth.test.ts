@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { authRoute, authenticate, configuredEnv, hasRenewableAccess } from "../src/auth.js";
+import { authRoute, authenticate, configuredEnv, hasRenewableAccess, refreshInitialIngestionForOAuthScopes } from "../src/auth.js";
 import type { Env } from "../src/env.js";
+import { createTestD1 } from "./d1.js";
 
 function database(first: (sql: string, values: unknown[]) => unknown = () => null) {
   const writes: Array<{ sql: string; values: unknown[] }> = [];
@@ -41,6 +42,8 @@ describe("Cloudflare OAuth authentication", () => {
     expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
     expect(authorization.searchParams.get("redirect_uri")).toBe("https://oauth.brolly.example/oauth/callback");
     const scopes = authorization.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain("account-analytics.read");
+    expect(scopes).toContain("analytics.read");
     expect(scopes).toContain("workers-scripts.write");
     expect(scopes).toContain("workers-kv-storage.read");
     expect(scopes).not.toContain("workers-kv-storage.metadata_read");
@@ -57,9 +60,36 @@ describe("Cloudflare OAuth authentication", () => {
     expect(hasRenewableAccess({ refresh_token: "  " })).toBe(false);
   });
 
-  it("clears cached access results when Cloudflare is reauthorized", async () => {
-    const source = await import("node:fs/promises").then(fs => fs.readFile("apps/guard-worker/src/auth.ts", "utf8"));
-    expect(source).toContain("DELETE FROM settings WHERE key='onboarding_budget_estimates'");
+  it("replans permission gaps once after the OAuth scope set changes", async () => {
+    const testD1 = createTestD1();
+    const now = Date.now();
+    try {
+      await testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('old-job','account-1','initial_v2',?1,?2,'complete_with_gaps',?2,?2)`,
+      ).bind(now - 86_400_000, now).run();
+      await testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('old-slice','old-job','graphql:zones','{}',?1,?2,'failed','missing',?2)`,
+      ).bind(now - 86_400_000, now).run();
+
+      await refreshInitialIngestionForOAuthScopes(testD1.db, "account-1", now);
+      expect(await testD1.db.prepare(`SELECT kind,status FROM backfill_jobs WHERE id='old-job'`).first()).toMatchObject({
+        kind: "initial_v2_superseded", status: "superseded",
+      });
+      expect(await testD1.db.prepare(`SELECT status FROM backfill_slices WHERE id='old-slice'`).first()).toMatchObject({ status: "superseded" });
+
+      await testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('new-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 86_400_000, now).run();
+      await refreshInitialIngestionForOAuthScopes(testD1.db, "account-1", now + 1);
+      expect(await testD1.db.prepare(`SELECT kind,status FROM backfill_jobs WHERE id='new-job'`).first()).toMatchObject({
+        kind: "initial_v2", status: "pending",
+      });
+    } finally {
+      testD1.close();
+    }
   });
 
   it("uses the publisher OAuth client without deploy-time OAuth fields", async () => {
