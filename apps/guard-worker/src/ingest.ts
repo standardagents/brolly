@@ -5,6 +5,7 @@ import type { Env } from "./env.js";
 import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
 import { productUsageDefinition, type ProductUsageCollector } from "./product-usage.js";
 import type { CoverageResult, LedgerRunBudget, MetricSample, UsageObservation } from "@standardagents/brolly-core";
+import { coverageStateFromResults, saveCoverageIntervals, type CoverageIntervalInput } from "./coverage-intervals.js";
 
 export type UsageCollector = "graphql:durable-objects" | "graphql:workers" | ProductUsageCollector | "billing";
 
@@ -32,6 +33,7 @@ export interface IngestWindowResult {
   changes: AccumulatorChange[];
   watermarkAt: number;
   normalizedObservations?: UsageObservation[];
+  coverageIntervals: CoverageIntervalInput[];
 }
 
 /** Collects, normalizes, and persists one bounded usage or billing window. */
@@ -48,16 +50,22 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
       ? "permission_denied"
       : result.error && options.historical ? "delayed"
         : result.complete ? "healthy" : "delayed";
+    const coverage = [{
+      family: "billing", metric: options.historical ? "initial_import_gaps" : "authoritative_usage", finestScope: "account", state,
+      checkedAt: options.endsAt,
+      detail: result.error ?? (result.available ? undefined : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries"),
+    }] satisfies CoverageResult[];
+    const coverageIntervals = [interval(options, "billable-usage", coverage)];
+    if (options.persist !== false && (!options.historical || result.complete)) {
+      await saveCoverageIntervals(options.env.DB, coverageIntervals, options.budget);
+    }
     return {
       observations: result.records,
       complete: result.complete,
       continuation: null,
       samples: [],
-      coverage: [{
-        family: "billing", metric: options.historical ? "initial_import_gaps" : "authoritative_usage", finestScope: "account", state,
-        checkedAt: options.endsAt,
-        detail: result.error ?? (result.available ? undefined : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries"),
-      }],
+      coverage,
+      coverageIntervals,
       changes: result.alertChanges,
       watermarkAt: options.endsAt,
     };
@@ -89,6 +97,8 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
     },
   );
   const changes = options.persist === false ? [] : await options.ledger.applyObservations(observations, options.timeZone);
+  const coverageIntervals = collectorCoverageIntervals(options, result, definition);
+  if (options.persist !== false) await saveCoverageIntervals(options.env.DB, coverageIntervals, options.budget);
   return {
     observations: observations.length,
     complete: result.complete,
@@ -98,6 +108,50 @@ export async function ingestWindow(options: IngestWindowOptions): Promise<Ingest
     changes,
     watermarkAt: result.watermarkAt,
     normalizedObservations: observations,
+    coverageIntervals,
+  };
+}
+
+function collectorCoverageIntervals(
+  options: IngestWindowOptions,
+  result: UsageIngestResult,
+  definition: ReturnType<typeof productUsageDefinition>,
+): CoverageIntervalInput[] {
+  const coverage = result.coverage;
+  if (options.collector === "graphql:workers") {
+    return [interval(options, "workersInvocationsAdaptive", coverage.filter(item => item.metric !== "cache_requests"))];
+  }
+  if (options.collector === "graphql:durable-objects") {
+    const sources: Array<[string, string[]]> = [
+      ["durableObjectsInvocationsAdaptiveGroups", ["requests", "incoming_websocket_messages"]],
+      ["durableObjectsPeriodicGroups", ["duration_gb_seconds", "incoming_websocket_messages", "rows_read", "rows_written", "kv_read_units", "kv_write_units", "kv_delete_requests"]],
+      ["durableObjectsSqlStorageGroups", ["sql_storage_bytes"]],
+      ["durableObjectsStorageGroups", ["kv_storage_bytes"]],
+    ];
+    return sources.map(([dataset, metrics]) => interval(options, dataset, coverage.filter(item => metrics.includes(item.metric))));
+  }
+  if (!definition) return [];
+  if ("datasetCoverage" in result) return result.datasetCoverage.flatMap(item => item.scopeKeys.map(scopeKey => ({
+    accountId: options.env.BROLLY_ACCOUNT_ID,
+    dataset: item.dataset,
+    scopeKey,
+    startsAt: options.startsAt,
+    endsAt: options.endsAt,
+    state: item.state,
+    reason: item.reason,
+  })));
+  return definition.datasets.map(source => interval(options, source.dataset,
+    coverage.filter(item => source.metrics.some(metric => metric.metric === item.metric))));
+}
+
+function interval(options: IngestWindowOptions, dataset: string, coverage: CoverageResult[]): CoverageIntervalInput {
+  return {
+    accountId: options.env.BROLLY_ACCOUNT_ID,
+    dataset,
+    startsAt: options.startsAt,
+    endsAt: options.endsAt,
+    state: coverageStateFromResults(coverage),
+    reason: coverage.find(item => item.state !== "healthy")?.detail,
   };
 }
 

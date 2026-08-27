@@ -18,6 +18,7 @@ import {
   type HistoricalRateBudget,
   type HistoricalRateScope,
 } from "./historical-analytics.js";
+import { saveCoverageInterval, saveCoverageIntervals } from "./coverage-intervals.js";
 
 const DAY_MS = 86_400_000;
 const HISTORY_DAYS = 90;
@@ -50,7 +51,7 @@ export interface InitialIngestionSlicePlan {
   startsAt: number;
   endsAt: number;
   scopeKey: string;
-  status: "pending" | "failed";
+  status: "pending" | "complete" | "failed";
   coverageStatus: "missing";
   error: string | null;
 }
@@ -63,6 +64,7 @@ export interface InitialIngestionSliceMetadata {
   units: number;
   availability?: "available" | "unavailable";
   terminalGap?: boolean;
+  expectedGap?: boolean;
   persistenceRetry?: boolean;
 }
 
@@ -208,6 +210,31 @@ export async function ensureInitialIngestionJob(
           slice.status, now, slice.coverageStatus, slice.error,
         )));
       }
+      await saveCoverageIntervals(env.DB, slices.filter(slice => {
+        const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
+        return metadata.availability === "unavailable";
+      }).map(slice => {
+        const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
+        return {
+          accountId: env.BROLLY_ACCOUNT_ID,
+          dataset: metadata.dataset,
+          scopeKey: metadata.zoneIds[0] ?? "",
+          startsAt: slice.startsAt,
+          endsAt: slice.endsAt,
+          state: "unavailable" as const,
+          reason: slice.error ?? undefined,
+          recordedAt: now,
+        };
+      }));
+      if (!billingAvailable) await saveCoverageInterval(env.DB, {
+        accountId: env.BROLLY_ACCOUNT_ID,
+        dataset: "billable-usage",
+        startsAt: historyStart(now),
+        endsAt: now,
+        state: "unavailable",
+        reason: "Billing Read access is unavailable.",
+        recordedAt: now,
+      });
       await updateInitialJobStatus(env.DB, jobId);
     } finally {
       await saveInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, discoveryQuota);
@@ -697,12 +724,19 @@ async function finalizeInitialSlice(
   try {
     if (slice.collector_key === "billing") {
       if (fetched.error) throw fetched.error;
+      await saveCoverageInterval(env.DB, {
+        accountId: env.BROLLY_ACCOUNT_ID,
+        dataset: "billable-usage",
+        startsAt: slice.starts_at,
+        endsAt: slice.ends_at,
+        state: "measured",
+      }, budget);
     } else {
       if (fetched.error) throw fetched.error;
       const result = fetched.usage;
       if (!result) throw new Error("Historical Analytics returned no result");
       if (result.zoneGaps?.length && metadata.zoneIds.length) {
-        await splitZoneGapSlice(env.DB, slice, metadata, result.zoneGaps, budget);
+        await splitZoneGapSlice(env.DB, env.BROLLY_ACCOUNT_ID, slice, metadata, result.zoneGaps, budget);
         await updateInitialJobStatus(env.DB, jobId, budget);
         return true;
       }
@@ -721,11 +755,13 @@ async function finalizeInitialSlice(
       await ledger.applyObservations(observations, timeZone);
       if (!result.complete) {
         const detail = "Cloudflare's row limit was reached for a single day; retained rows are marked partial";
+        await saveDatasetSliceCoverage(env, slice, metadata, "partial", detail, budget);
         await markSliceTerminalGap(env.DB, slice, metadata, detail, budget);
         await finishSlice(env.DB, budget, slice.id, "failed", detail, "partial");
         await updateInitialJobStatus(env.DB, jobId, budget);
         return true;
       }
+      await saveDatasetSliceCoverage(env, slice, metadata, "measured", undefined, budget);
     }
     await finishSlice(env.DB, budget, slice.id, "complete", null, "complete");
     await updateInitialJobStatus(env.DB, jobId, budget);
@@ -781,7 +817,10 @@ async function finalizeInitialSlice(
       const previous = Math.min(3, Number(slice.retry_count ?? 0));
       const failed = previous >= 3;
       const retryCount = failed ? 3 : previous + 1;
-      if (failed) await markSliceTerminalGap(env.DB, slice, metadata, error.message);
+      if (failed) {
+        await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", error.message, budget);
+        await markSliceTerminalGap(env.DB, slice, metadata, error.message);
+      }
       await env.DB.prepare(
         `UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,
            coverage_status=?6,updated_at=?7 WHERE id=?1`,
@@ -801,7 +840,10 @@ async function finalizeInitialSlice(
     const failed = previous >= 3;
     const retryCount = failed ? 3 : previous + 1;
     const nextEligibleAt = failed ? null : Date.now() + [30_000, 120_000, 480_000][retryCount - 1]!;
-    if (failed) await markSliceTerminalGap(env.DB, slice, metadata, errorMessage(error), budget);
+    if (failed) {
+      await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", errorMessage(error), budget);
+      await markSliceTerminalGap(env.DB, slice, metadata, errorMessage(error), budget);
+    }
     const result = await env.DB.prepare(
       `UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,coverage_status='missing',updated_at=?6 WHERE id=?1`,
     ).bind(slice.id, failed ? "failed" : "pending", errorMessage(error).slice(0, 2_000), retryCount, nextEligibleAt, Date.now()).run();
@@ -813,6 +855,7 @@ async function finalizeInitialSlice(
 
 async function splitZoneGapSlice(
   db: D1Database,
+  accountId: string,
   slice: InitialSliceRow,
   metadata: InitialIngestionSliceMetadata,
   gaps: NonNullable<Awaited<ReturnType<CloudflareClient["historicalUsage"]>>["zoneGaps"]>,
@@ -846,6 +889,16 @@ async function splitZoneGapSlice(
   ));
   const results = await db.batch(statements);
   if (budget) for (const result of results) chargeMeta(budget, result.meta);
+  for (const gap of gaps) await saveCoverageInterval(db, {
+    accountId,
+    dataset: metadata.dataset,
+    scopeKey: gap.zoneId,
+    startsAt: slice.starts_at,
+    endsAt: slice.ends_at,
+    state: "unavailable",
+    reason: gap.detail,
+    recordedAt: now,
+  }, budget);
 }
 
 async function migrateLegacyZoneSlice(
@@ -965,7 +1018,12 @@ async function updateInitialJobStatus(db: D1Database, jobId: string, budget?: Le
 function rangeSlices(collector: string, dataset: string, zoneIds: string[], now: number, setting: HistoricalDatasetCapability): InitialIngestionSlicePlan[] {
   const retentionDays = Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86_400)));
   const maxDays = Math.max(1, Math.floor(setting.maxDurationSeconds / 86_400));
-  return boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, setting.maxPageSize);
+  const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, setting.maxPageSize);
+  if (retentionDays >= HISTORY_DAYS) return ranges;
+  const requestedStart = historyStart(now, HISTORY_DAYS);
+  const availableStart = historyStart(now, retentionDays);
+  return [gapRange(collector, dataset, zoneIds, requestedStart, availableStart,
+    `Cloudflare retains ${retentionDays} days for this dataset.`, true), ...ranges];
 }
 
 function initialIngestionDays(
@@ -1037,18 +1095,52 @@ function gapSlice(
   zoneIds: string[],
   now: number,
   detail: string,
-  retentionDays: number,
+  _retentionDays: number,
 ): InitialIngestionSlicePlan {
-  const startsAt = historyStart(now, retentionDays);
+  return gapRange(collector, dataset, zoneIds, historyStart(now, HISTORY_DAYS), now, detail);
+}
+
+function gapRange(
+  collector: string,
+  dataset: string,
+  zoneIds: string[],
+  startsAt: number,
+  endsAt: number,
+  detail: string,
+  expected = false,
+): InitialIngestionSlicePlan {
   return {
     collector,
     startsAt,
-    endsAt: now,
-    scopeKey: serializeMetadata({ version: 2, dataset, zoneIds, maxPageSize: 10_000, units: calendarDays(startsAt, now) * Math.max(1, zoneIds.length), availability: "unavailable", terminalGap: true }),
-    status: "failed",
+    endsAt,
+    scopeKey: serializeMetadata({
+      version: 2, dataset, zoneIds, maxPageSize: 10_000,
+      units: calendarDays(startsAt, endsAt) * Math.max(1, zoneIds.length),
+      availability: "unavailable", terminalGap: !expected, expectedGap: expected,
+    }),
+    status: expected ? "complete" : "failed",
     coverageStatus: "missing",
     error: `${dataset}: ${detail}`,
   };
+}
+
+async function saveDatasetSliceCoverage(
+  env: Env,
+  slice: InitialSliceRow,
+  metadata: InitialIngestionSliceMetadata,
+  state: "measured" | "partial" | "unavailable",
+  reason: string | undefined,
+  budget: LedgerRunBudget,
+): Promise<void> {
+  await saveCoverageIntervals(env.DB, (metadata.zoneIds.length ? metadata.zoneIds : [""]).map(scopeKey => ({
+    accountId: env.BROLLY_ACCOUNT_ID,
+    dataset: metadata.dataset,
+    scopeKey,
+    startsAt: slice.starts_at,
+    endsAt: slice.ends_at,
+    state,
+    reason,
+  })), budget);
 }
 
 function parseSliceMetadata(value: string, startsAt: number, endsAt: number): InitialIngestionSliceMetadata {
@@ -1063,6 +1155,7 @@ function parseSliceMetadata(value: string, startsAt: number, endsAt: number): In
         units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt),
         availability: parsed.availability === "unavailable" ? "unavailable" : parsed.availability === "available" ? "available" : undefined,
         terminalGap: parsed.terminalGap === true,
+        expectedGap: parsed.expectedGap === true,
         persistenceRetry: parsed.persistenceRetry === true,
       };
     }
@@ -1104,6 +1197,7 @@ interface InitialGraphqlQuotaState {
   zoneUsed: Record<string, number>;
   accountLastAdmissionAt: number | null;
   zoneLastAdmissionAt: Record<string, number>;
+  pausedUntil: number | null;
 }
 
 class InitialGraphqlQuota implements HistoricalRateBudget {
@@ -1114,11 +1208,13 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   constructor(private readonly state: InitialGraphqlQuotaState) {}
 
   get physicalRemaining(): number {
+    this.rollover();
+    if (this.state.pausedUntil && Date.now() < this.state.pausedUntil) return 0;
     return Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
   }
 
   get resetAt(): number {
-    return this.state.windowStartedAt + GRAPHQL_WINDOW_MS;
+    return Math.max(this.state.windowStartedAt + GRAPHQL_WINDOW_MS, this.state.pausedUntil ?? 0);
   }
 
   canCharge(scope: HistoricalRateScope, logicalQueries: number): boolean {
@@ -1169,7 +1265,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     });
   }
 
-  async admit(scope: HistoricalRateScope): Promise<void> {
+  async admit(scope: HistoricalRateScope, logicalQueries: number): Promise<void> {
     const key = rateScopeKey(scope);
     const previous = this.admissionTails.get(key) ?? Promise.resolve();
     let release!: () => void;
@@ -1181,10 +1277,17 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       const delay = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS - Date.now();
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
       this.setLastAdmissionAt(scope, Date.now());
+      this.charge(scope, logicalQueries);
     } finally {
       release();
       if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
     }
+  }
+
+  pauseUntil(retryAt: number): void {
+    this.state.pausedUntil = Math.max(this.state.pausedUntil ?? 0, Date.now() + 1_000, retryAt);
+    for (const resolve of this.claimWaiters) resolve();
+    this.claimWaiters.clear();
   }
 
   charge(scope: HistoricalRateScope, logicalQueries: number): void {
@@ -1205,6 +1308,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       zoneUsed: { ...this.state.zoneUsed },
       accountLastAdmissionAt: this.state.accountLastAdmissionAt,
       zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
+      pausedUntil: this.state.pausedUntil,
     };
   }
 
@@ -1220,6 +1324,8 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   }
 
   private rollover(now = Date.now()): void {
+    if (this.state.pausedUntil && now < this.state.pausedUntil) return;
+    this.state.pausedUntil = null;
     if (now >= this.state.windowStartedAt && now - this.state.windowStartedAt < GRAPHQL_WINDOW_MS) return;
     this.state.windowStartedAt = now;
     this.state.physicalUsed = 0;
@@ -1247,6 +1353,7 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, now: n
     zoneUsed: {},
     accountLastAdmissionAt: null,
     zoneLastAdmissionAt: {},
+    pausedUntil: null,
   };
   if (row) {
     try {
@@ -1268,6 +1375,9 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, now: n
         const bounded = boundedAdmissionAt(admittedAt, now);
         return bounded === null ? [] : [[zoneId, bounded]];
       }));
+      state.pausedUntil = Number.isFinite(parsed.pausedUntil) && Number(parsed.pausedUntil) > now
+        ? Number(parsed.pausedUntil)
+        : null;
     } catch {
       // Corrupt quota state starts a fresh bounded window.
     }

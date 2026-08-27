@@ -117,6 +117,12 @@ export interface ProductUsageResult {
   complete: boolean;
   pages: number;
   watermarkAt: number;
+  datasetCoverage: Array<{
+    dataset: string;
+    scopeKeys: string[];
+    state: "measured" | "partial" | "unavailable";
+    reason?: string;
+  }>;
 }
 
 export class CloudflareClient {
@@ -560,14 +566,17 @@ export class CloudflareClient {
     const coverage: CoverageResult[] = [];
     let complete = true;
     let pages = 0;
+    const datasetCoverage: ProductUsageResult["datasetCoverage"] = [];
     for (const source of definition.datasets) {
+      let zoneIds: string[] = [];
       try {
-        const zoneIds = source.root === "zone" ? await this.zoneIds() : [];
+        zoneIds = source.root === "zone" ? await this.zoneIds() : [];
         if (source.root === "zone" && zoneIds.length === 0) {
           coverage.push(...source.metrics.map(item => ({
             family: definition.family, metric: item.metric, finestScope: "zone" as const,
             state: "healthy" as const, checkedAt: Date.now(), detail: "The connected account has no zones.",
           })));
+          datasetCoverage.push({ dataset: source.dataset, scopeKeys: ["__no_zones__"], state: "measured" });
           continue;
         }
         this.budget.charge("apiCalls");
@@ -601,6 +610,17 @@ export class CloudflareClient {
           checkedAt: Date.now(),
           detail: truncated ? `${source.dataset} reached its bounded 10,000-row daily limit; retained rows are marked partial` : undefined,
         })));
+        if (source.root === "zone") {
+          const returned = new Set(roots.flatMap(root => typeof root.zoneTag === "string" ? [root.zoneTag] : []));
+          for (const zoneId of zoneIds) datasetCoverage.push(returned.has(zoneId)
+            ? { dataset: source.dataset, scopeKeys: [zoneId], state: truncated ? "partial" : "measured", ...(truncated ? { reason: `${source.dataset} reached its bounded 10,000-row daily limit` } : {}) }
+            : { dataset: source.dataset, scopeKeys: [zoneId], state: "unavailable", reason: `${source.dataset} returned no node for this authorized zone.` });
+        } else datasetCoverage.push({
+          dataset: source.dataset,
+          scopeKeys: [""],
+          state: truncated ? "partial" : "measured",
+          ...(truncated ? { reason: `${source.dataset} reached its bounded 10,000-row daily limit` } : {}),
+        });
         pages += 1;
       } catch (error) {
         if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
@@ -614,6 +634,12 @@ export class CloudflareClient {
           checkedAt: Date.now(),
           detail: `${source.dataset}: ${error instanceof Error ? error.message : String(error)}`,
         })));
+        datasetCoverage.push({
+          dataset: source.dataset,
+          scopeKeys: source.root === "zone" ? zoneIds : [""],
+          state: "unavailable",
+          reason: error instanceof Error ? error.message : String(error),
+        });
       }
     }
     coverage.push(...definition.billingOnlyMetrics.map(item => ({
@@ -625,7 +651,7 @@ export class CloudflareClient {
       detail: "This metric is retained through authoritative billing because Cloudflare does not expose a supported usage field.",
     })));
     this.budget.charge("samples", samples.length);
-    return { samples, coverage, continuation: null, complete, pages, watermarkAt: until };
+    return { samples, coverage, continuation: null, complete, pages, watermarkAt: until, datasetCoverage };
   }
 
   async billingUsage(since: number, until: number): Promise<BillingUsageRecord[] | null> {

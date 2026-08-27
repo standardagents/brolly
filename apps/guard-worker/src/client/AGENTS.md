@@ -93,3 +93,8 @@ directory.
   compact coverage lists use `size="sm"` (18px).
 - Demo fixtures include every catalog family so icon and label coverage can be
   inspected in first-run and returning-operator views.
+- Limits charts consume explicit per-metric coverage spans. A missing usage row
+  is zero only inside a measured span. Pending and unavailable days render as
+  gaps and stay out of projections, defaults, scale inputs, and threshold
+  crossings. Partial spans render observed values with partial quality and
+  keep absent values as gaps.

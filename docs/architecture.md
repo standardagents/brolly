@@ -226,7 +226,12 @@ through 300%, Balanced spans 150% through 800%, and Growth spans 250% through
 board. The control uses a logarithmic percentage axis and the same ordering,
 minimum-gap, pointer, field, and keyboard behavior as a limits chart.
 
-Daily defaults use the median of nonzero days in the 90-day ledger window.
+Daily defaults use the median of measured nonzero days in the 90-day ledger
+window. Dataset coverage intervals remain independent from usage samples, so a
+successful empty response provides measured zero while retention, permission,
+and terminal collection gaps remain unavailable. The usage API resolves those
+intervals through each metric's required datasets, fallback alternatives, and
+zone partitions before chart math runs.
 Billing-cycle defaults use the median of at least two fully covered completed
 cycles. When fewer cycles exist, the cycle baseline is the daily median times
 the current cycle length. A p95 value appears only as the busiest-normal-day

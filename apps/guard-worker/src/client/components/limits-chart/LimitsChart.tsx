@@ -23,7 +23,7 @@ export interface LimitsChartProps {
   /** "USD" or a usage unit label such as "requests" or "GB-s". */
   unit: string;
   window: "day" | "cycle";
-  /** Per-day values, ascending by day. Gaps are rendered as zero. */
+  /** Per-day values, ascending by day. Unknown intervals are marked missing. */
   series: DayPoint[];
   /** Billing cycle bounds. When empty, UTC calendar months are used. */
   cycles?: CycleBounds[];
@@ -125,8 +125,8 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const billableCostDense = useMemo(() => (billableCostSeries ? denseSeries(billableCostSeries, window.fromDay, window.toDay) : undefined), [billableCostSeries, window]);
   const billableCostCumulative = useMemo(() => (billableCostDense ? cycleCumulative(billableCostDense, cycles, "sum") : undefined), [billableCostDense, cycles]);
   const projection = useMemo(() => projectCycle(dense, cycles, today, aggregationKind), [dense, cycles, today, aggregationKind]);
-  const observedMax = useMemo(() => Math.max(0, ...dense.map(point => point.value)), [dense]);
-  const seriesValues = useMemo(() => dense.map(point => point.value), [dense]);
+  const observedMax = useMemo(() => Math.max(0, ...dense.filter(point => !point.missing).map(point => point.value)), [dense]);
+  const seriesValues = useMemo(() => dense.filter(point => !point.missing).map(point => point.value), [dense]);
   const cycleMode = limitWindow === "cycle";
   // Allotments are cycle-scoped usage quantities. The cycle chart draws the
   // boundary; the day chart draws the free usage left as the cycle spends it.
@@ -450,7 +450,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const hovered = useMemo(() => {
     if (!hoverDay || dragging || hoverLevel) return null;
     const point = dense[hoverDay.index];
-    if (point) return { day: point.day, value: point.value, projected: false, index: hoverDay.index };
+    if (point) return { day: point.day, value: point.value, projected: false, index: hoverDay.index, missing: point.missing, coverage: point.coverage, coverageReason: point.coverageReason };
     const ahead = hoverDay.index - dense.length + 1;
     if (!projection || ahead < 1 || ahead > remainingDays) return null;
     return { day: dayOf(dayStart(today) + ahead * DAY_MS), value: projection.rate, projected: true, index: hoverDay.index, ahead };
@@ -473,6 +473,12 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
   const hoverRows = ((): Array<[string, string]> => {
     if (!hovered) return [];
     const rows: Array<[string, string]> = [];
+    if (hovered.missing) {
+      rows.push(["Coverage", hovered.coverage === "pending" ? "Importing" : "Unavailable"]);
+      if (hovered.coverageReason) rows.push(["Reason", hovered.coverageReason]);
+      return rows;
+    }
+    if (hovered.coverage === "partial") rows.push(["Coverage", "Partial"]);
     if (cycleMode) {
       if (!hovered.projected) {
         rows.push(["So far this cycle", compactLimitValue(cumulative[hovered.index]?.cumulative ?? 0, unit)]);
@@ -553,8 +559,9 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const base = PLOT.top + plotHeight;
     const { left, width: barPixels } = barEdges(index);
     const top = yFor(point.value);
+    if (point.missing) return <rect key={point.day} data-coverage-gap={point.coverage ?? "unavailable"} x={left} y={PLOT.top} width={barPixels} height={plotHeight} fill="currentColor" opacity=".035" shapeRendering="crispEdges" />;
     return (
-      <g key={point.day} pointerEvents="none" style={{ transition: dragging ? "none" : `opacity 120ms ${EASE}` }}>
+      <g key={point.day} data-coverage={point.coverage} pointerEvents="none" opacity={point.coverage === "partial" ? ".62" : undefined} style={{ transition: dragging ? "none" : `opacity 120ms ${EASE}` }}>
         {barSegments(point.value).map((segment, part) => {
           const segmentTop = yFor(segment.top);
           const bottom = part === 0 ? base : yFor(segment.bottom);
@@ -724,7 +731,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         {/* Bars (memoized) plus a lit overlay copy of the hovered day's bar. */}
         {barsLayer}
         {crossingAlarms && !cycleMode && <CrossingDim levels={activeLevels} values={shown} dense={dense} geometry={{ xFor, yFor, barSlot, baseline: PLOT.top + plotHeight }} />}
-        {hovered && !hovered.projected && !cycleMode && (() => {
+        {hovered && !hovered.projected && !hovered.missing && !cycleMode && (() => {
           const base = PLOT.top + plotHeight;
           const { left, width: barPixels } = barEdges(hovered.index);
           return <g pointerEvents="none">
@@ -783,7 +790,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
             </g>
           );
         })}
-        {crossingAlarms && <CrossingAlarms levels={activeLevels} values={shown} mode={cycleMode ? "cycle" : "day"} points={cycleMode ? cumulative.map(point => ({ day: point.day, value: point.cumulative, group: point.cycle })) : dense.map(point => ({ day: point.day, value: point.value, group: 0 }))} geometry={{ xFor, yFor, barSlot, baseline: PLOT.top + plotHeight }} />}
+        {crossingAlarms && <CrossingAlarms levels={activeLevels} values={shown} mode={cycleMode ? "cycle" : "day"} points={cycleMode ? cumulative.map(point => ({ day: point.day, value: point.cumulative, group: point.cycle, missing: point.missing || point.coverage === "partial" })) : dense.map(point => ({ day: point.day, value: point.value, group: 0, missing: point.missing || point.coverage === "partial" }))} geometry={{ xFor, yFor, barSlot, baseline: PLOT.top + plotHeight }} />}
         {/* The free-usage curve's outer edge (day) or the included total's
             outer edge (cycle), drawn above the level lines, with a one-sided
             panel-colored casing on the inner side so it separates from the
@@ -961,15 +968,18 @@ function cyclePolygons(
   baseline: number,
   slot: number,
 ): string[] {
-  const groups = new Map<number, string[]>();
+  const groups = new Map<string, { points: string[]; lastIndex: number }>();
+  let run = 0;
   points.forEach((point, index) => {
-    const list = groups.get(point.cycle) ?? [];
+    if (point.missing) { run += 1; return; }
+    const key = `${point.cycle}:${run}`;
+    const current = groups.get(key);
+    const list = current?.points ?? [];
     if (!list.length) list.push(`${xFor(index) - slot / 2},${baseline}`);
     list.push(`${xFor(index)},${yFor(point.cumulative)}`);
-    groups.set(point.cycle, list);
+    groups.set(key, { points: list, lastIndex: index });
   });
-  return [...groups.entries()].map(([cycle, list]) => {
-    const lastIndex = points.map(point => point.cycle).lastIndexOf(cycle);
+  return [...groups.values()].map(({ points: list, lastIndex }) => {
     const lastX = xFor(lastIndex) + slot / 2;
     const last = points[lastIndex]!;
     return [...list, `${lastX},${yFor(last.cumulative)}`, `${lastX},${baseline}`].join(" ");

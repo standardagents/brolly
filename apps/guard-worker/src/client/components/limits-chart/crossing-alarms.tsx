@@ -25,7 +25,7 @@ export function CrossingDim({ levels, values, dense, geometry }: { levels: Limit
   return (
     <g data-crossing-dim pointerEvents="none">
       {dense.map((point, index) => {
-        if (!(point.value > 0) || point.value >= lowest) return null;
+        if (point.missing || !(point.value > 0) || point.value >= lowest) return null;
         const left = Math.round(geometry.xFor(index) - geometry.barSlot / 2);
         const right = Math.round(geometry.xFor(index) + geometry.barSlot / 2);
         const top = geometry.yFor(point.value);
@@ -42,7 +42,7 @@ const BELL = <g transform="translate(-5.05, -5.5) scale(.42)" fill="none" stroke
 </g>;
 
 /** One point of the chart's primary mark: a day's value, or the running total with its cycle as the group. */
-export interface CrossingPoint { day: string; value: number; group: number }
+export interface CrossingPoint { day: string; value: number; group: number; missing?: boolean }
 
 /**
  * Alarm badges on the intersections with each active level's line. On a day
@@ -58,7 +58,7 @@ export function CrossingAlarms({ levels, values, points, mode, geometry }: { lev
         if (!(threshold > 0)) return [];
         let ordinal = -1;
         return points.map((point, index) => {
-          if (point.value < threshold) return null;
+          if (point.missing || point.value < threshold) return null;
           const previous = points[index - 1];
           const previousCrossed = !!previous && previous.group === point.group && previous.value >= threshold;
           if (mode === "cycle" && previousCrossed) return null;

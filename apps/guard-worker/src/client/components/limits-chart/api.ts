@@ -9,8 +9,11 @@ export interface UsageSeriesResponse {
   resourceId: string;
   found: boolean;
   today: string;
+  fromDay?: string;
   metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string }; aggregationKind?: AggregationKind }>;
   series: Array<{ day: string; costUsd: number; metrics: Record<string, number>; sealed: boolean }>;
+  coverage?: Record<string, CoverageSpan[]>;
+  costCoverage?: CoverageSpan[];
   estimatedBillableCostSeries?: Array<{ day: string; costUsd: number }>;
   estimatedBillableCostByMetric?: Record<string, Array<{ day: string; costUsd: number }>>;
   cycles: Array<CycleBounds & { approximate: boolean }>;
@@ -18,6 +21,9 @@ export interface UsageSeriesResponse {
   planTier?: PlanTier;
   planTierSource?: PlanTierSource;
 }
+
+export type CoverageState = "measured" | "partial" | "pending" | "unavailable";
+export interface CoverageSpan { fromDay: string; toDay: string; state: CoverageState; reason?: string }
 
 export interface UsageSeriesState {
   data: UsageSeriesResponse | null;
@@ -60,7 +66,11 @@ function cachedSeries(data: UsageSeriesResponse, key: string, build: () => DayPo
 }
 
 export function costSeries(data: UsageSeriesResponse): DayPoint[] {
-  return cachedSeries(data, "cost", () => data.series.map(point => ({ day: point.day, value: point.costUsd, sealed: point.sealed })));
+  return cachedSeries(data, "cost", () => coveredSeries(
+    data,
+    data.costCoverage,
+    point => point.costUsd,
+  ));
 }
 
 /** Daily list-rate cost attributable to one billed usage meter. */
@@ -72,7 +82,11 @@ export function metricBillableCostSeries(data: UsageSeriesResponse, metricId: st
 
 
 export function metricSeries(data: UsageSeriesResponse, metricId: string): DayPoint[] {
-  return cachedSeries(data, `metric:${metricId}`, () => data.series.map(point => ({ day: point.day, value: point.metrics[metricId] ?? 0, sealed: point.sealed })));
+  return cachedSeries(data, `metric:${metricId}`, () => coveredSeries(
+    data,
+    data.coverage?.[metricId],
+    point => point.metrics[metricId],
+  ));
 }
 
 /**
@@ -97,11 +111,18 @@ export function metricPool(data: UsageSeriesResponse, metricId: string): MetricP
     .map(([id, item]) => ({ id, perUnit: id === poolId ? 1 : 1 / item.billedVia!.ratio }));
   if (members.length < 2) return undefined;
   const selfPerUnit = members.find(member => member.id === metricId)!.perUnit;
-  const series = cachedSeries(data, `pool:${metricId}`, () => data.series.map(point => ({
-    day: point.day,
-    value: members.reduce((sum, member) => sum + (point.metrics[member.id] ?? 0) * member.perUnit, 0) / selfPerUnit,
-    sealed: point.sealed,
-  })));
+  const memberSeries = members.map(member => ({ ...member, series: metricSeries(data, member.id) }));
+  const series = cachedSeries(data, `pool:${metricId}`, () => memberSeries[0]!.series.map((point, index) => {
+    const points = memberSeries.map(member => ({ member, point: member.series[index] }));
+    const missing = points.some(item => item.point?.missing);
+    return {
+      day: point.day,
+      value: points.reduce((sum, item) => sum + (item.point?.value ?? 0) * item.member.perUnit, 0) / selfPerUnit,
+      sealed: points.every(item => item.point?.sealed),
+      missing,
+      coverage: missing ? weakestCoverage(points.map(item => item.point?.coverage)) : "measured",
+    };
+  }));
   return { includedPerCycle: included / selfPerUnit, series };
 }
 
@@ -121,7 +142,7 @@ export function metricComposition(data: UsageSeriesResponse, metricId: string): 
     ...sources.map(([id, metric]) => ({
       id,
       label: `${metric.label} ÷ ${metric.billedVia!.ratio}`,
-      series: cachedSeries(data, `part:${id}`, () => data.series.map(point => ({ day: point.day, value: (point.metrics[id] ?? 0) / metric.billedVia!.ratio, sealed: point.sealed }))),
+      series: cachedSeries(data, `part:${id}`, () => metricSeries(data, id).map(point => ({ ...point, value: point.value / metric.billedVia!.ratio }))),
     })),
   ];
 }
@@ -130,11 +151,52 @@ export function metricComposition(data: UsageSeriesResponse, metricId: string): 
 export function rowSeries(data: UsageSeriesResponse, metricId: string): DayPoint[] {
   const parts = metricComposition(data, metricId);
   if (!parts) return metricSeries(data, metricId);
-  return cachedSeries(data, `row:${metricId}`, () => data.series.map((point, index) => ({
-    day: point.day,
-    value: parts.reduce((sum, part) => sum + (part.series[index]?.value ?? 0), 0),
-    sealed: point.sealed,
-  })));
+  return cachedSeries(data, `row:${metricId}`, () => parts[0]!.series.map((point, index) => {
+    const values = parts.map(part => part.series[index]);
+    const missing = values.some(value => value?.missing);
+    return {
+      day: point.day,
+      value: values.reduce((sum, value) => sum + (value?.value ?? 0), 0),
+      sealed: values.every(value => value?.sealed),
+      missing,
+      coverage: missing ? weakestCoverage(values.map(value => value?.coverage)) : "measured",
+    };
+  }));
+}
+
+function coveredSeries(
+  data: UsageSeriesResponse,
+  spans: CoverageSpan[] | undefined,
+  read: (point: UsageSeriesResponse["series"][number]) => number | undefined,
+): DayPoint[] {
+  // Older fixtures remain sparse. Production responses carry an explicit
+  // range and evidence spans.
+  if (!data.fromDay || !spans) return data.series.map(point => ({ day: point.day, value: read(point) ?? 0, sealed: point.sealed }));
+  const rows = new Map(data.series.map(point => [point.day, point]));
+  const output: DayPoint[] = [];
+  for (let at = Date.parse(`${data.fromDay}T00:00:00Z`); at <= Date.parse(`${data.today}T00:00:00Z`); at += 86_400_000) {
+    const day = new Date(at).toISOString().slice(0, 10);
+    const row = rows.get(day);
+    const observed = row ? read(row) : undefined;
+    const span = spans.find(item => item.fromDay <= day && item.toDay >= day);
+    const coverage = span?.state ?? "unavailable";
+    output.push({
+      day,
+      value: observed ?? 0,
+      sealed: row?.sealed,
+      coverage,
+      coverageReason: span?.reason,
+      missing: coverage === "pending" || coverage === "unavailable" || coverage === "partial" && observed === undefined,
+    });
+  }
+  return output;
+}
+
+function weakestCoverage(values: Array<DayPoint["coverage"]>): DayPoint["coverage"] {
+  if (values.includes("unavailable")) return "unavailable";
+  if (values.includes("pending")) return "pending";
+  if (values.includes("partial")) return "partial";
+  return "measured";
 }
 
 /** Included allotment for a metric: its own, or its share of a pool in its units. */

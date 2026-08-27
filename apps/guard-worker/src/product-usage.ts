@@ -31,6 +31,8 @@ export interface ProductDatasetDefinition {
   resourceDimension?: string;
   parentDimension?: string;
   metrics: DatasetMetric[];
+  /** Used only when the preferred dataset is unavailable for a specific scope. */
+  fallbackFor?: string;
 }
 
 export interface ProductUsageDefinition {
@@ -174,9 +176,12 @@ export const PRODUCT_USAGE_DEFINITIONS: readonly ProductUsageDefinition[] = [
     }),
   ], ["queries", "storage_bytes"]),
   definition("zones", "Zones", 30, "zone", [
+    dataset("httpRequests1dGroups", "date", "date", [
+      metric("requests", "requests", "sum", ["requests"]), metric("bandwidth_bytes", "bytes", "sum", ["bytes"]),
+    ], { root: "zone" }),
     dataset("httpRequestsAdaptiveGroups", "time", "datetime", [
       metric("requests", "requests", "count"), metric("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"]),
-    ], { root: "zone" }),
+    ], { root: "zone", fallbackFor: "httpRequests1dGroups" }),
   ]),
   definition("email", "Email", 30, "zone", [
     dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric("sent", "count", "count")], { root: "zone" }),

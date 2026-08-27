@@ -15,6 +15,7 @@ import { configuredLedgerRunLimits } from "./ledger-settings.js";
 import { loadAlertLevels, resolveEffectiveEntries } from "./alert-levels.js";
 import { classifyPlanTier } from "./included-quota.js";
 import { saveDetectedPlan } from "./plan-tier.js";
+import { saveCoverageIntervals } from "./coverage-intervals.js";
 
 export interface CollectorWindowCursor<T> {
   startAt: number;
@@ -162,6 +163,10 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
       ...(workerCorrections.normalizedObservations ?? []), ...(workers.normalizedObservations ?? []),
     ];
     const ledgerChanges = await ledger.applyObservations(ledgerObservations, timeZone);
+    await saveCoverageIntervals(env.DB, [
+      ...durableObjects.coverageIntervals, ...durableCorrections.coverageIntervals,
+      ...workers.coverageIntervals, ...workerCorrections.coverageIntervals,
+    ], ledgerBudget);
     const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
     const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
       timeZone, billingCycleId: billingCycle.id,

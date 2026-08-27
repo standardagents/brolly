@@ -64,6 +64,24 @@ CREATE TABLE IF NOT EXISTS collector_capabilities (
   PRIMARY KEY(account_id,collector_key,dataset)
 );
 
+-- Historical evidence is independent from usage rows. A successful query can
+-- cover an interval while returning no groups, which is the only safe basis
+-- for interpreting an absent metric as measured zero.
+CREATE TABLE IF NOT EXISTS coverage_intervals (
+  account_id TEXT NOT NULL,
+  dataset TEXT NOT NULL,
+  scope_key TEXT NOT NULL DEFAULT '',
+  starts_at INTEGER NOT NULL,
+  ends_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('measured','partial','unavailable')),
+  reason TEXT,
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY(account_id,dataset,scope_key,starts_at),
+  CHECK(ends_at>starts_at)
+);
+CREATE INDEX IF NOT EXISTS idx_coverage_intervals_lookup
+  ON coverage_intervals(account_id,dataset,scope_key,starts_at,ends_at);
+
 CREATE TABLE IF NOT EXISTS collector_state (
   account_id TEXT NOT NULL,
   collector_key TEXT NOT NULL,

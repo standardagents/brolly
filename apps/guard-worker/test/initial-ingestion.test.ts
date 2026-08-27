@@ -39,10 +39,12 @@ describe("initial ingestion slice plan", () => {
     const slices = initialIngestionSlicePlan(NOW, false, [...accountCapabilities(), ...zoneCapabilities]);
     const zones = datasetSlices(slices, "httpRequestsAdaptiveGroups");
 
-    expect(zones).toHaveLength(12);
+    expect(zones).toHaveLength(24);
     expect(zones.every(slice => metadata(slice).zoneIds.length === 1)).toBe(true);
     expect(new Set(zones.flatMap(slice => metadata(slice).zoneIds))).toEqual(new Set(zoneIds));
-    expect(zones.reduce((sum, slice) => sum + metadata(slice).units, 0)).toBe(30 * zoneIds.length);
+    expect(zones.filter(slice => slice.status === "pending")).toHaveLength(12);
+    expect(zones.filter(slice => slice.status === "complete")).toHaveLength(12);
+    expect(zones.reduce((sum, slice) => sum + metadata(slice).units, 0)).toBe(90 * zoneIds.length);
   });
 
   it("makes inaccessible retention a terminal, accurately weighted coverage gap", () => {
@@ -57,7 +59,7 @@ describe("initial ingestion slice plan", () => {
 
     expect(gaps).toHaveLength(2);
     expect(gaps.every(gap => gap.status === "failed" && gap.coverageStatus === "missing")).toBe(true);
-    expect(gaps.reduce((sum, gap) => sum + metadata(gap).units, 0)).toBe(60);
+    expect(gaps.reduce((sum, gap) => sum + metadata(gap).units, 0)).toBe(180);
     expect(gaps[0]?.error).toContain("denied Analytics access");
   });
 
@@ -593,6 +595,38 @@ describe("initial ingestion progress", () => {
     expect(slice?.status).toBe("pending");
     expect(slice?.retry_count).toBe(0);
     expect(slice?.next_eligible_at).toBeGreaterThan(now);
+  });
+
+  it("persists a Retry-After pause longer than the normal five-minute window", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('long-pause-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,coverage_status,updated_at)
+         VALUES('long-pause-slice','long-pause-job','graphql:workers',?1,?2,?3,'pending',0,'missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+      }), now - DAY_MS, now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json(
+      { errors: [{ message: "too many requests" }] },
+      { status: 429, headers: { "retry-after": "600" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const env = { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env;
+
+    await runInitialIngestion(env, "long-pause-job");
+    await runInitialIngestion(env, "long-pause-job");
+    const stored = await testD1.db.prepare(`SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`)
+      .first<{ value: string }>();
+    const state = JSON.parse(stored!.value) as { pausedUntil?: number };
+
+    expect(state.pausedUntil).toBeGreaterThan(now + 9 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("continues zone work when the account query bucket is full", async () => {

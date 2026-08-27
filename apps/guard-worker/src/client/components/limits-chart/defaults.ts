@@ -28,8 +28,9 @@ function deriveSeriesImpl(series: DayPoint[], cyclesProp: CycleBounds[] | undefi
   const dense = denseSeries(series, window.fromDay, window.toDay);
   const cumulative = cycleCumulative(dense, cycles, aggregationKind);
   const projection = projectCycle(dense, cycles, today, aggregationKind);
-  const observedMax = Math.max(0, ...dense.map(point => point.value));
-  const heightValues = [...dense.map(point => point.value), ...cumulative.map(point => point.cumulative), projection?.projected ?? 0];
+  const measured = dense.filter(point => !point.missing);
+  const observedMax = Math.max(0, ...measured.map(point => point.value));
+  const heightValues = [...measured.map(point => point.value), ...cumulative.filter(point => !point.missing).map(point => point.cumulative), projection?.projected ?? 0];
   return { today, cycles, window, dense, cumulative, projection, observedMax, heightValues };
 }
 
@@ -76,7 +77,7 @@ export function toleranceDefaults(
   windowDays = 90,
 ): LevelValues {
   const cutoff = dayStart(today) - Math.max(0, windowDays - 1) * DAY_MS;
-  const inWindow = series.filter(point => dayStart(point.day) >= cutoff && dayStart(point.day) <= dayStart(today));
+  const inWindow = series.filter(point => !point.missing && point.coverage !== "partial" && dayStart(point.day) >= cutoff && dayStart(point.day) <= dayStart(today));
   const baseline = median(inWindow.map(point => point.value).filter(value => value > 0));
   if (!(baseline > 0)) return Object.fromEntries(order.map((id, index) => [id, niceLadder(0, order.length)[index]!])) as LevelValues;
   let values: LevelValues = Object.fromEntries(order.map(id => [id, snapToNice(baseline * Math.max(1, percent[id] ?? 100) / 100)]));
@@ -106,7 +107,7 @@ export function dailyMultiple(daily: LevelValues | undefined, order: readonly st
  */
 export function typicalCycleUsage(series: DayPoint[], cycles: CycleBounds[] | undefined, today: string, aggregationKind: AggregationKind = "sum", windowDays = 90): number {
   const cutoff = dayStart(today) - Math.max(0, windowDays - 1) * DAY_MS;
-  const inWindow = series.filter(point => dayStart(point.day) >= cutoff && dayStart(point.day) <= dayStart(today));
+  const inWindow = series.filter(point => !point.missing && point.coverage !== "partial" && dayStart(point.day) >= cutoff && dayStart(point.day) <= dayStart(today));
   const day = median(inWindow.map(point => point.value).filter(value => value > 0));
   return aggregationKind === "sum" ? day * cycleDaysFor(cycles, today) : day;
 }
@@ -150,7 +151,7 @@ export function displayPercent(value: number | undefined, baseline: number, tole
 function levelsFromBaseline(series: DayPoint[], order: readonly string[], percent: LevelValues, baseline: number): LevelValues {
   if (!(baseline > 0)) return Object.fromEntries(order.map((id, index) => [id, niceLadder(0, order.length)[index]!])) as LevelValues;
   let values: LevelValues = Object.fromEntries(order.map(id => [id, snapToNice(baseline * Math.max(1, percent[id] ?? 100) / 100)]));
-  const axis = chooseAxis(series.map(point => point.value), Object.values(values));
+  const axis = chooseAxis(series.filter(point => !point.missing).map(point => point.value), Object.values(values));
   for (const id of order) values = pushLevels(axis, order, values, id, values[id]!);
   return values;
 }

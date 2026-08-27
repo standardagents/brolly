@@ -686,7 +686,12 @@ function realUsageSeries(scope: string): UsageSeriesResponse | null {
     const date = new Date(now);
     return { startsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1), endsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset + 1, 1), approximate: false };
   });
-  const base = { resourceId: `real:${scope}`, found: true, today: realUsage.today, cycles, includedQuotaCatalogVersion: "2026-08", planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource };
+  const base = {
+    resourceId: `real:${scope}`, found: true, today: realUsage.today,
+    fromDay: Object.values(realUsage.families).flatMap(item => item.series).map(item => item.day).sort()[0] ?? realUsage.today,
+    coverage: {}, costCoverage: [], cycles, includedQuotaCatalogVersion: "2026-08",
+    planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource,
+  };
   if (scope === "account") {
     const families = Object.values(realUsage.families);
     const days = new Map<string, UsageSeriesResponse["series"][number]>();
@@ -743,6 +748,8 @@ function syntheticUsageSeries(scope: string): UsageSeriesResponse {
   });
   return {
     scope, resourceId: `demo:${scope}`, found: true, today,
+    fromDay: series[0]?.day ?? today, coverage: {},
+    costCoverage: [{ fromDay: series[0]?.day ?? today, toDay: today, state: "measured" }],
     includedQuotaCatalogVersion: "2026-08", planTier: demoPlan.planTier, planTierSource: demoPlan.planTierSource,
     metrics: withDemoQuota(scope === "family:durable_objects"
       ? {

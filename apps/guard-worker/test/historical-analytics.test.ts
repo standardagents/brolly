@@ -11,7 +11,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("historical Analytics collection", () => {
   it("uses exact-zone account-based requests and reports an absent zone node", async () => {
     let request: Request | undefined;
-    const rateBudget = { admit: vi.fn(async () => undefined), charge: vi.fn() };
+    const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       request = new Request(input, init);
       return Response.json({ data: { viewer: { zones: [] } } });
@@ -39,8 +39,7 @@ describe("historical Analytics collection", () => {
     expect(body.query).toContain("zoneTag: $zone");
     expect(body.query).not.toContain("zoneTag_in");
     expect(body.variables.zone).toBe(zoneId);
-    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "zone", zoneId });
-    expect(rateBudget.charge).toHaveBeenCalledWith({ kind: "zone", zoneId }, 1);
+    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "zone", zoneId }, 1);
     expect(result).toMatchObject({
       complete: false,
       rows: 0,
@@ -252,7 +251,7 @@ describe("historical Analytics capability discovery", () => {
     const zoneCapabilities = capabilities.filter(item => item.root === "zone");
 
     expect(requestedZoneBatches.every(batch => batch.length <= 10)).toBe(true);
-    expect(zoneCapabilities.filter(item => item.zoneId === unauthorized)).toHaveLength(3);
+    expect(zoneCapabilities.filter(item => item.zoneId === unauthorized)).toHaveLength(4);
     expect(new Set(zoneCapabilities.filter(item => item.zoneId === unauthorized).map(item => item.state))).toEqual(new Set(["permission_denied"]));
     expect(zoneCapabilities.filter(item => item.zoneId !== unauthorized && item.enabled)).toHaveLength(11 * 3);
   });

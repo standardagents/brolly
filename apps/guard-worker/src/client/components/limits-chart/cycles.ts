@@ -4,7 +4,14 @@
  * `[startsAt, endsAt)` epoch milliseconds.
  */
 
-export interface DayPoint { day: string; value: number; sealed?: boolean }
+export interface DayPoint {
+  day: string;
+  value: number;
+  sealed?: boolean;
+  missing?: boolean;
+  coverage?: "measured" | "partial" | "pending" | "unavailable";
+  coverageReason?: string;
+}
 export interface CycleBounds { startsAt: number; endsAt: number }
 export type AggregationKind = "sum" | "maximum" | "latest";
 
@@ -80,6 +87,7 @@ export function cycleCumulative(series: readonly DayPoint[], cycles: readonly Cy
   const totals = new Map<number, number>();
   return series.map(point => {
     const cycle = cycleIndexFor(cycles, point.day);
+    if (point.missing) return { ...point, cumulative: totals.get(cycle) ?? 0, cycle };
     const value = Math.max(0, point.value);
     const previous = totals.get(cycle) ?? 0;
     const cumulative = isNonAdditive(aggregationKind) ? Math.max(previous, value) : previous + value;
@@ -100,14 +108,15 @@ export function projectCycle(series: readonly DayPoint[], cycles: readonly Cycle
   const bounds = cycles[cycle]!;
   const todayAt = dayStart(today);
   const currentPoints = series
-    .filter(point => cycleIndexFor(cycles, point.day) === cycle && dayStart(point.day) <= todayAt)
+    .filter(point => !point.missing && cycleIndexFor(cycles, point.day) === cycle && dayStart(point.day) <= todayAt)
     .sort((left, right) => left.day.localeCompare(right.day));
   const toDate = isNonAdditive(aggregationKind)
     ? Math.max(0, ...currentPoints.map(point => Math.max(0, point.value)))
     : currentPoints.reduce((sum, point) => sum + Math.max(0, point.value), 0);
   const elapsedDays = daysBetween(bounds.startsAt, todayAt + DAY_MS);
   const totalDays = daysBetween(bounds.startsAt, bounds.endsAt);
-  const recent = currentPoints.slice(-PROJECTION_PACE_DAYS).map(point => Math.max(0, point.value)).sort((left, right) => left - right);
+  const recent = currentPoints.filter(point => point.coverage !== "partial").slice(-PROJECTION_PACE_DAYS)
+    .map(point => Math.max(0, point.value)).sort((left, right) => left - right);
   const rate = isNonAdditive(aggregationKind) || !recent.length ? 0 : recent.length % 2 ? recent[(recent.length - 1) / 2]! : (recent[recent.length / 2 - 1]! + recent[recent.length / 2]!) / 2;
   const remainingDays = Math.max(0, totalDays - elapsedDays);
   return { cycle, toDate, elapsedDays, totalDays, rate, projected: isNonAdditive(aggregationKind) ? toDate : toDate + rate * remainingDays };
@@ -155,6 +164,7 @@ export function freeRemainingSeries(series: readonly DayPoint[], cycles: readonl
   return series.map(point => {
     const cycle = cycleIndexFor(cycles, point.day);
     const usedBefore = used.get(cycle) ?? 0;
+    if (point.missing) return { ...point, cycle, before: Math.max(0, included - usedBefore), after: Math.max(0, included - usedBefore) };
     const value = Math.max(0, point.value);
     const usedAfter = isNonAdditive(aggregationKind) ? Math.max(usedBefore, value) : usedBefore + value;
     used.set(cycle, usedAfter);
@@ -189,13 +199,14 @@ export function visibleWindow(series: readonly DayPoint[], cycles: readonly Cycl
   return { fromDay: fromDay > today ? today : fromDay, toDay: today };
 }
 
-/** Every day from `fromDay` through `toDay`, filling gaps with zero. */
+/** Every day from `fromDay` through `toDay`, preserving unknown gaps. */
 export function denseSeries(series: readonly DayPoint[], fromDay: string, toDay: string): DayPoint[] {
-  const known = new Map(series.map(point => [point.day, point.value]));
+  const known = new Map(series.map(point => [point.day, point]));
   const output: DayPoint[] = [];
   for (let at = dayStart(fromDay); at <= dayStart(toDay); at += DAY_MS) {
     const day = dayOf(at);
-    output.push({ day, value: Math.max(0, known.get(day) ?? 0) });
+    const point = known.get(day);
+    output.push(point ? { ...point, value: Math.max(0, point.value) } : { day, value: 0, missing: true, coverage: "unavailable" });
   }
   return output;
 }

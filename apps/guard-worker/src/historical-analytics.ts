@@ -29,13 +29,24 @@ const SETTINGS_BATCH = 12;
 export type HistoricalRateScope = { kind: "account" } | { kind: "zone"; zoneId: string };
 
 export interface HistoricalRateBudget {
-  admit(scope: HistoricalRateScope): Promise<void>;
-  charge(scope: HistoricalRateScope, logicalQueries: number): void;
+  admit(scope: HistoricalRateScope, logicalQueries: number): Promise<void>;
+  pauseUntil(retryAt: number): void;
 }
 
 export interface HistoricalAnalyticsOptions {
   accountBasedRateLimit?: boolean;
   rateBudget?: HistoricalRateBudget;
+}
+
+export interface HistoricalRateLimitTelemetry {
+  occurredAt: number;
+  status: number;
+  scopeKind: HistoricalRateScope["kind"];
+  logicalQueries: number;
+  accountBasedRequested: boolean;
+  retryAfter: string | null;
+  rateLimit: string | null;
+  rateLimitPolicy: string | null;
 }
 
 type HistoricalDatasetKind = "workers" | "durable_invocations" | "durable_periodic" | "durable_sql_storage" | "durable_kv_storage" | "product";
@@ -51,6 +62,7 @@ export interface HistoricalDatasetSpec {
   kind: HistoricalDatasetKind;
   product?: ProductUsageDefinition;
   source?: ProductDatasetDefinition;
+  fallbackFor?: string;
 }
 
 export interface HistoricalDatasetCapability {
@@ -119,6 +131,7 @@ const PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap(product => product.da
   kind: "product" as const,
   product,
   source,
+  fallbackFor: source.fallbackFor,
 })));
 
 export const HISTORICAL_DATASETS: readonly HistoricalDatasetSpec[] = [...SPECIAL_DATASETS, ...PRODUCT_DATASETS];
@@ -138,12 +151,15 @@ export class HistoricalAnalyticsClient {
   ) {}
 
   async discoverCapabilities(): Promise<HistoricalDatasetCapability[]> {
-    const account = HISTORICAL_DATASETS.filter(item => item.root === "account");
-    const zones = HISTORICAL_DATASETS.filter(item => item.root === "zone");
+    const account = HISTORICAL_DATASETS.filter(item => item.root === "account" && !item.fallbackFor);
+    const zones = HISTORICAL_DATASETS.filter(item => item.root === "zone" && !item.fallbackFor);
+    const fallbacks = HISTORICAL_DATASETS.filter(item => item.root === "zone" && item.fallbackFor);
     const capabilities: HistoricalDatasetCapability[] = [];
     for (let offset = 0; offset < account.length; offset += SETTINGS_BATCH) {
-      const batch = account.slice(offset, offset + SETTINGS_BATCH);
-      capabilities.push(...await this.accountSettingsIsolated(batch));
+      const batch = account.slice(offset, offset + SETTINGS_BATCH).filter(spec => !hasCapability(capabilities, spec.dataset, null));
+      if (!batch.length) continue;
+      const discovered = await this.accountSettingsIsolated(batch);
+      capabilities.push(...discovered);
     }
 
     let zoneIds: string[];
@@ -167,53 +183,38 @@ export class HistoricalAnalyticsClient {
     );
     for (let offset = 0; offset < zoneBatches.length; offset += 6) {
       const discovered = await Promise.all(
-        zoneBatches.slice(offset, offset + 6).map(batch => this.zoneSettings(zones, batch)),
+        zoneBatches.slice(offset, offset + 6).map(batch => {
+          const missing = zones.filter(spec => batch.some(zoneId => !hasCapability(capabilities, spec.dataset, zoneId)));
+          return missing.length ? this.zoneSettings(missing, batch) : Promise.resolve([]);
+        }),
       );
-      capabilities.push(...discovered.flat());
+      const values = discovered.flat();
+      capabilities.push(...values);
+    }
+
+    for (const fallback of fallbacks) {
+      const missingZones = zoneIds.filter(zoneId => {
+        const preferred = capabilities.find(item => item.dataset === fallback.fallbackFor && item.zoneId === zoneId);
+        return preferred && !preferred.enabled && !hasCapability(capabilities, fallback.dataset, zoneId);
+      });
+      for (let offset = 0; offset < missingZones.length; offset += 6) {
+        const discovered = await Promise.all(
+          missingZones.slice(offset, offset + 6).map(zoneId => this.zoneSettings([fallback], [zoneId])),
+        );
+        const values = discovered.flat();
+        capabilities.push(...values);
+      }
     }
     return capabilities;
   }
 
   async collectorCapabilities(): Promise<CollectorCoverage[]> {
-    const checkedAt = Date.now();
     const discovered = await this.discoverCapabilities();
-    const rows = HISTORICAL_DATASETS.map(spec => {
-      const values = discovered.filter(item => item.dataset === spec.dataset);
-      const applicable = values.filter(item => item.applicable);
-      const enabled = applicable.filter(item => item.enabled);
-      const unavailable = applicable.filter(item => !item.enabled);
-      const noZones = spec.root === "zone" && applicable.length === 0;
-      const maxDuration = minimum(enabled.map(item => item.maxDurationSeconds));
-      const retention = minimum(enabled.map(item => item.notOlderThanSeconds));
-      const pageSize = minimum(enabled.map(item => item.maxPageSize));
-      const state: CollectorCoverage["state"] = noZones
-        ? "healthy"
-        : unavailable.some(item => item.state === "permission_denied")
-          ? "permission_denied"
-          : unavailable.length || enabled.length === 0 ? "unavailable" : "healthy";
-      const detail = noZones
-        ? "The connected account has no zones."
-        : unavailable.length
-          ? spec.root === "zone"
-            ? `${enabled.length} of ${applicable.length} zone partitions are available. ${unavailable[0]?.detail ?? ""}`.trim()
-            : unavailable[0]?.detail ?? "Cloudflare did not expose this Analytics dataset."
-          : `Available with page size ${pageSize ?? "unknown"} and duration limit ${maxDuration ?? "unknown"} seconds`;
-      return {
-        accountId: this.env.BROLLY_ACCOUNT_ID,
-        collectorKey: spec.collector,
-        dataset: spec.dataset,
-        available: noZones || enabled.length > 0,
-        retentionDays: retention === null ? null : Math.floor(retention / 86_400),
-        samplingBehavior: "Dataset sampling follows Cloudflare Analytics settings",
-        finestScope: spec.scope,
-        lastVerifiedAt: checkedAt,
-        errorCode: state === "healthy" ? null : state,
-        humanExplanation: detail,
-        state,
-        watermarkAt: null,
-      } satisfies CollectorCoverage;
-    });
-    return [...rows, ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(HISTORICAL_DATASETS.map(item => item.family)))];
+    return collectorCoverageFromCapabilities(this.env.BROLLY_ACCOUNT_ID, discovered, Date.now());
+  }
+
+  async zoneIds(): Promise<string[]> {
+    return this.zoneProvider ? this.zoneProvider() : this.listZoneIds();
   }
 
   async collect(request: HistoricalUsageRequest): Promise<HistoricalUsageResult> {
@@ -431,8 +432,7 @@ export class HistoricalAnalyticsClient {
     logicalQueries: number,
     scope: HistoricalRateScope,
   ): Promise<T> {
-    await this.options.rateBudget?.admit(scope);
-    this.options.rateBudget?.charge(scope, logicalQueries);
+    await this.options.rateBudget?.admit(scope, logicalQueries);
     this.budget.charge("apiCalls");
     this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
     const response = await fetch(`${API}/graphql`, {
@@ -447,7 +447,20 @@ export class HistoricalAnalyticsClient {
     });
     const payload = await response.json().catch(() => ({})) as GraphqlPayload<T>;
     if (response.status === 429 || isGraphqlRateLimit(payload.errors)) {
-      throw new HistoricalRateLimitError(response.status, rateLimitResetAt(response.headers), payload.errors?.map(item => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached");
+      const message = payload.errors?.map(item => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached";
+      const telemetry: HistoricalRateLimitTelemetry = {
+        occurredAt: Date.now(),
+        status: response.status,
+        scopeKind: scope.kind,
+        logicalQueries,
+        accountBasedRequested: this.options.accountBasedRateLimit === true,
+        retryAfter: response.headers.get("retry-after"),
+        rateLimit: response.headers.get("ratelimit"),
+        rateLimitPolicy: response.headers.get("ratelimit-policy"),
+      };
+      const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
+      this.options.rateBudget?.pauseUntil(retryAt);
+      throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
     }
     if (!response.ok || payload.errors?.length) {
       throw new HistoricalAnalyticsError(response.status, payload.errors?.map(item => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
@@ -462,6 +475,54 @@ export class HistoricalAnalyticsClient {
   }
 }
 
+/** Convert raw settings discovery into the monitor-owned coverage records. */
+export function collectorCoverageFromCapabilities(
+  accountId: string,
+  discovered: HistoricalDatasetCapability[],
+  checkedAt = Date.now(),
+): CollectorCoverage[] {
+  const rows = HISTORICAL_DATASETS.filter(spec => !spec.fallbackFor).map(spec => {
+    const values = discovered.filter(item => item.dataset === spec.dataset);
+    const fallback = HISTORICAL_DATASETS.find(item => item.fallbackFor === spec.dataset);
+    const fallbackValues = fallback ? discovered.filter(item => item.dataset === fallback.dataset) : [];
+    const applicable = values.filter(item => item.applicable).map(value => value.enabled ? value
+      : fallbackValues.find(candidate => candidate.zoneId === value.zoneId && candidate.enabled) ?? value);
+    const enabled = applicable.filter(item => item.enabled);
+    const unavailable = applicable.filter(item => !item.enabled);
+    const noZones = spec.root === "zone" && applicable.length === 0;
+    const maxDuration = minimum(enabled.map(item => item.maxDurationSeconds));
+    const retention = minimum(enabled.map(item => item.notOlderThanSeconds));
+    const pageSize = minimum(enabled.map(item => item.maxPageSize));
+    const state: CollectorCoverage["state"] = noZones
+      ? "healthy"
+      : unavailable.some(item => item.state === "permission_denied")
+        ? "permission_denied"
+        : unavailable.length || enabled.length === 0 ? "unavailable" : "healthy";
+    const detail = noZones
+      ? "The connected account has no zones."
+      : unavailable.length
+        ? spec.root === "zone"
+          ? `${enabled.length} of ${applicable.length} zone partitions are available. ${unavailable[0]?.detail ?? ""}`.trim()
+          : unavailable[0]?.detail ?? "Cloudflare did not expose this Analytics dataset."
+        : `Available with page size ${pageSize ?? "unknown"} and duration limit ${maxDuration ?? "unknown"} seconds`;
+    return {
+      accountId,
+      collectorKey: spec.collector,
+      dataset: spec.dataset,
+      available: noZones || enabled.length > 0,
+      retentionDays: retention === null ? null : Math.floor(retention / 86_400),
+      samplingBehavior: "Dataset sampling follows Cloudflare Analytics settings",
+      finestScope: spec.scope,
+      lastVerifiedAt: checkedAt,
+      errorCode: state === "healthy" ? null : state,
+      humanExplanation: detail,
+      state,
+      watermarkAt: null,
+    } satisfies CollectorCoverage;
+  });
+  return [...rows, ...catalogCapabilityGaps(accountId, checkedAt, new Set(HISTORICAL_DATASETS.map(item => item.family)))];
+}
+
 export class HistoricalAnalyticsError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -470,7 +531,13 @@ export class HistoricalAnalyticsError extends Error {
 }
 
 export class HistoricalRateLimitError extends HistoricalAnalyticsError {
-  constructor(status: number, readonly retryAt: number, message: string) {
+  constructor(
+    status: number,
+    readonly retryAt: number,
+    message: string,
+    readonly telemetry?: HistoricalRateLimitTelemetry,
+    readonly remote = false,
+  ) {
     super(status, message);
     this.name = "HistoricalRateLimitError";
   }
@@ -676,16 +743,30 @@ function isGraphqlRateLimit(errors: GraphqlPayload<unknown>["errors"]): boolean 
   return Boolean(errors?.some(error => error.extensions?.code?.toLowerCase() === "budget"
     || /rate.?limit|query budget|quota exceeded|too many requests/i.test(error.message ?? "")));
 }
-function rateLimitResetAt(headers: Headers, now = Date.now()): number {
+function rateLimitTelemetryDetail(value: HistoricalRateLimitTelemetry): string {
+  return [
+    `scope=${value.scopeKind}`,
+    `logicalQueries=${value.logicalQueries}`,
+    value.retryAfter ? `retry-after=${value.retryAfter}` : "",
+    value.rateLimit ? `ratelimit=${value.rateLimit}` : "",
+    value.rateLimitPolicy ? `ratelimit-policy=${value.rateLimitPolicy}` : "",
+  ].filter(Boolean).join(", ");
+}
+function rateLimitResetAt(headers: Headers, message: string, now = Date.now()): number {
+  const floor = /after\s+5\s+minutes|five\s+minutes/i.test(message) ? now + 5 * 60_000 : now;
   const retryAfter = headers.get("retry-after");
   if (retryAfter) {
     const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return now + seconds * 1_000;
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.max(floor, now + seconds * 1_000);
     const timestamp = Date.parse(retryAfter);
-    if (Number.isFinite(timestamp)) return Math.max(now, timestamp);
+    if (Number.isFinite(timestamp)) return Math.max(floor, timestamp);
   }
   const resetSeconds = headers.get("ratelimit")?.match(/(?:^|;)\s*t=(\d+)/i)?.[1];
-  return now + (resetSeconds ? Number(resetSeconds) * 1_000 : 5 * 60_000);
+  return Math.max(floor, now + (resetSeconds ? Number(resetSeconds) * 1_000 : 5 * 60_000));
+}
+
+function hasCapability(capabilities: HistoricalDatasetCapability[], dataset: string, zoneId: string | null): boolean {
+  return capabilities.some(item => item.dataset === dataset && item.zoneId === zoneId);
 }
 function unavailableState(error: unknown): CoverageResult["state"] {
   return /permission|unauthoriz|forbidden|access denied|not authorized/i.test(errorMessage(error)) ? "permission_denied" : "unavailable";

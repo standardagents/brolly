@@ -2,6 +2,7 @@ import { resourceHashBucket, resourceId } from "@standardagents/brolly-core";
 import { BILLED_VIA, INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
 import { estimatedBillableCostBreakdownSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
 import { readPlanState } from "./plan-tier.js";
+import { alternativeCoverageSpans, combineCoverageSpans, coverageSpansForMetrics, type CoverageSpan } from "./coverage-intervals.js";
 
 /**
  * Daily cost and usage series for one policy scope, read from the ledger the
@@ -28,6 +29,10 @@ export interface UsageSeriesResponse {
   /** Metric id → metadata for the metrics present in the series. */
   metrics: Record<string, { key: string; label: string; unit: string; aggregationKind: "sum" | "maximum" | "latest"; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string } }>;
   series: UsageSeriesPoint[];
+  /** Per-metric evidence for interpreting absent rows as zero or unavailable. */
+  coverage: Record<string, CoverageSpan[]>;
+  costCoverage: CoverageSpan[];
+  fromDay: string;
   estimatedBillableCostSeries?: EstimatedBillableCostPoint[];
   estimatedBillableCostByMetric?: Record<string, EstimatedBillableCostPoint[]>;
   cycles: Array<{ startsAt: number; endsAt: number; approximate: boolean }>;
@@ -110,8 +115,14 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const family = familyScope(scope);
   const familyAllotments = family ? includedAllotments.filter(item => metricFamily(item.metricId) === family) : [];
   const includedByMetric = new Map(familyAllotments.map(item => [item.metricId, item.includedPerCycle]));
-  const metrics = Object.fromEntries(definitions.results
-    .filter(definition => present.has(definition.id))
+  const scopeFamily = family ?? scope.match(/^asset:([^:]+):/)?.[1] ?? null;
+  const visibleDefinitions = definitions.results.filter(definition =>
+    present.has(definition.id) || scope === "account" || definition.id.startsWith(`${scopeFamily}:`));
+  const coverage = await coverageSpansForMetrics(db, accountId, visibleDefinitions.map(item => item.id), from, today, scope);
+  const billingCoverage = (await coverageSpansForMetrics(
+    db, accountId, ["billing:authoritative_usage"], from, today, scope,
+  ))["billing:authoritative_usage"] ?? [];
+  const metrics = Object.fromEntries(visibleDefinitions
     .map(definition => {
       const included = includedByMetric.get(definition.id);
       return [definition.id, {
@@ -130,8 +141,13 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const billableCost = scope === "account" || family
     ? estimatedBillableCostBreakdownSeries(series, cycleRows, billableCostAllotments, planState.planTier)
     : { total: [], byMetric: {} };
+  const billableMetricIds = visibleDefinitions.filter(item => Boolean(item.billing_mapping) || Boolean(BILLED_VIA[item.id])).map(item => item.id);
+  const estimatedCostCoverage = combineCoverageSpans(coverage, billableMetricIds, from, today);
+  const costCoverage = scope.startsWith("asset:")
+    ? estimatedCostCoverage
+    : alternativeCoverageSpans([billingCoverage, estimatedCostCoverage], from, today);
   const body: UsageSeriesResponse = {
-    scope, resourceId: id, found: Boolean(resource), today, metrics, series,
+    scope, resourceId: id, found: Boolean(resource), today, fromDay: from, metrics, series, coverage, costCoverage,
     estimatedBillableCostSeries: billableCost.total,
     estimatedBillableCostByMetric: billableCost.byMetric,
     cycles: cycleRows,

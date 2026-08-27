@@ -84,6 +84,28 @@ Brolly stores these quality states:
 
 Missing data remains missing throughout aggregation and alert evaluation.
 
+Dataset coverage is stored independently in `coverage_intervals`. Each row
+identifies an account dataset, an optional zone partition, a half-open time
+range, and one of three evidence states:
+
+| Interval state | Chart meaning |
+| --- | --- |
+| measured | Cloudflare completed the request. An absent usage row is zero. |
+| partial | Cloudflare returned some data without completing the interval. Observed values remain visible and carry partial quality. |
+| unavailable | Retention, permission, dataset support, or a terminal collection failure prevents a measurement. |
+
+`pending` is derived from active initial-ingestion slices. It is never stored
+as historical evidence. The usage-series API returns compact per-metric spans.
+Metric-to-dataset mappings preserve required multi-dataset meters and
+preferred/fallback alternatives. Zone metrics aggregate each applicable zone.
+A measured fallback satisfies its preferred source for the same zone.
+
+Charts draw unavailable and pending days as gaps. Partial days show an
+observed value when one exists. Projections, typical-usage baselines, default
+limits, and threshold-crossing annotations use measured observations. Partial
+values remain visible without setting those derived values. A completed query with no rows is the sole condition
+that converts an absent metric value to measured zero.
+
 ## Collection and storage
 
 The one-minute cron acts as a scheduler:
@@ -95,9 +117,9 @@ The one-minute cron acts as a scheduler:
 - retention maintenance is due hourly;
 - newest-first historical backfill drains up to the configured slice budget after active protection work.
 
-First-run setup creates a separate initial-ingestion job. It imports daily usage for Workers, Durable Objects, Workers AI, Queues, D1, R2, Workers KV, Pages Functions, Images, Stream, Vectorize, Hyperdrive, AI Gateway, Containers, Browser Rendering, Workflows, Worker Builds, Analytics Engine, Log Explorer, zones, and Email. Each collector stops at the earlier of 90 days or its documented Analytics retention. Billing Read uses contiguous windows of at most 31 days across the full 90-day request. Initial ingestion opts into Cloudflare's account-based Analytics limiter. Persisted five-minute state reserves 240 logical account queries, 240 logical queries for each zone, and 700 physical GraphQL requests. Persisted admission timestamps enforce one request per second for the account or exact zone across resumed invocations. Zone datasets use exact single-zone roots so each zone charges its own allowance. Six Analytics producers can fetch from distinct zones concurrently. A two-result queue feeds one serialized D1 consumer. One lease coordinates browser and cron starts. Each claim reserves bounded D1 capacity. A fresh per-slice D1 row-limit failure requeues the original range for a fresh-budget attempt before range splitting. Shared run and wall-time limits requeue unfinished slices unchanged. HTTP and GraphQL rate-limit responses defer the slice until reset without consuming a retry. Billing receives reserved REST capacity. Monitoring and initial ingestion run concurrently. A lease takeover returns interrupted running slices to the pending queue. Dataset and zone permission failures become terminal coverage partitions. Valid siblings continue without the unavailable partition. Transient failures retry after 30 seconds, two minutes, and eight minutes before recording missing coverage. Initial and manual ingestion write ledger history without evaluating alerts, sending notifications, or preparing controls.
+First-run setup creates a separate initial-ingestion job. It imports daily usage for Workers, Durable Objects, Workers AI, Queues, D1, R2, Workers KV, Pages Functions, Images, Stream, Vectorize, Hyperdrive, AI Gateway, Containers, Browser Rendering, Workflows, Worker Builds, Analytics Engine, Log Explorer, zones, and Email. The job always represents the requested 90-day interval. Dataset ranges before Cloudflare's account-specific retention boundary become unavailable coverage. Billing Read uses contiguous windows of at most 31 days across the full 90-day request. Initial ingestion opts into Cloudflare's account-based Analytics limiter. Persisted five-minute state reserves 240 logical account queries, 240 logical queries for each zone, and 700 physical GraphQL requests. Persisted admission timestamps enforce one request per second for the account or exact zone across resumed invocations. Zone datasets use exact single-zone roots so each zone charges its own allowance. Six Analytics producers can fetch from distinct zones concurrently. A two-result queue feeds one serialized D1 consumer. One lease coordinates browser and cron starts. Each claim reserves bounded D1 capacity. A fresh per-slice D1 row-limit failure requeues the original range for a fresh-budget attempt before range splitting. Shared run and wall-time limits requeue unfinished slices unchanged. HTTP and GraphQL rate-limit responses defer the slice until reset without consuming a retry. Billing receives reserved REST capacity. Monitoring and initial ingestion run concurrently. A lease takeover returns interrupted running slices to the pending queue. Dataset and zone permission failures become terminal coverage partitions. Valid siblings continue without the unavailable partition. Transient failures retry after 30 seconds, two minutes, and eight minutes before recording unavailable coverage. Initial and manual ingestion write ledger history without evaluating alerts, sending notifications, or preparing controls.
 
-The setup progress bar weights every planned dataset-day and zone-day partition. Completed and terminally unavailable partitions advance the bar. The error control reports unavailable partitions. Estimated remaining time uses completed weighted work and elapsed job time.
+The setup progress bar weights every planned dataset-day and zone-day partition. Completed and terminally unavailable partitions advance the bar. Expected pre-retention intervals count as completed planning work without increasing the error count. The error control reports permission and collection failures. Estimated remaining time uses completed weighted work and elapsed job time.
 
 Active collection reads one fixed completed five-minute window with a two-minute ingestion delay, plus the immediately preceding fixed window as a correction pass. Each continuation remains bound to its original start and end timestamps after a restart. Durable Object datasets and Worker scripts use stable identifier ordering and keyset cursors with pages of up to 10,000 rows. Other product backfill collectors use daily product or resource groups. A dataset that reaches its bounded 10,000-row daily limit records partial coverage. A partial result persists independent active and correction cursors and keeps its interval in partial quality.
 
