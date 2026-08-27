@@ -44,7 +44,7 @@ export function useBudgetEstimates(token: string, policy: Policy, setPolicy: Dis
     try {
       const result = estimates ?? await api<OnboardingBudgetEstimates>("/api/onboarding/estimates", token, { method: "POST" });
       setEstimates(result);
-      const suggestion = applySuggestions(policy, result, levels, planTier);
+      const suggestion = applySuggestions(policy, result, levels, result.planTier ?? planTier);
       setPolicy(suggestion.policy);
       setSuggestionNotice(suggestion.notice);
     } catch (cause) {

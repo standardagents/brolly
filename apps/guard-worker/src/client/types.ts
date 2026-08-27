@@ -111,6 +111,8 @@ export interface OnboardingBudgetEstimates {
   windowEndAt: number;
   cached: boolean;
   apiCalls: number;
+  planTier: PlanTier;
+  planTierSource: PlanTierSource;
   headroom: FixedSpendLimits;
   account: SuggestedBudget | null;
   families: Record<string, SuggestedBudget>;
@@ -127,6 +129,9 @@ export interface InitialIngestionJob {
   status: string;
   startedAt: number;
   updatedAt: number;
+  limiterMode?: "optimistic" | "shared-fallback";
+  resumeAt?: number | null;
+  sharedQueryLimit?: number;
 }
 
 export interface InitialIngestionCollector {

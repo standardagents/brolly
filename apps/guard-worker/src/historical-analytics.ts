@@ -30,7 +30,7 @@ export type HistoricalRateScope = { kind: "account" } | { kind: "zone"; zoneId: 
 
 export interface HistoricalRateBudget {
   admit(scope: HistoricalRateScope, logicalQueries: number): Promise<void>;
-  pauseUntil(retryAt: number): void;
+  pauseUntil(retryAt: number, scope: HistoricalRateScope | null): void;
 }
 
 export interface HistoricalAnalyticsOptions {
@@ -47,6 +47,8 @@ export interface HistoricalRateLimitTelemetry {
   retryAfter: string | null;
   rateLimit: string | null;
   rateLimitPolicy: string | null;
+  limiterScope: HistoricalRateScope["kind"] | "shared";
+  rayId: string | null;
 }
 
 type HistoricalDatasetKind = "workers" | "durable_invocations" | "durable_periodic" | "durable_sql_storage" | "durable_kv_storage" | "product";
@@ -457,9 +459,11 @@ export class HistoricalAnalyticsClient {
         retryAfter: response.headers.get("retry-after"),
         rateLimit: response.headers.get("ratelimit"),
         rateLimitPolicy: response.headers.get("ratelimit-policy"),
+        limiterScope: scopedRateLimit(message, scope) ? scope.kind : "shared",
+        rayId: response.headers.get("cf-ray"),
       };
       const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
-      this.options.rateBudget?.pauseUntil(retryAt);
+      this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : scope);
       throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
     }
     if (!response.ok || payload.errors?.length) {
@@ -747,10 +751,19 @@ function rateLimitTelemetryDetail(value: HistoricalRateLimitTelemetry): string {
   return [
     `scope=${value.scopeKind}`,
     `logicalQueries=${value.logicalQueries}`,
+    `status=${value.status}`,
+    `accountBased=${value.accountBasedRequested}`,
     value.retryAfter ? `retry-after=${value.retryAfter}` : "",
     value.rateLimit ? `ratelimit=${value.rateLimit}` : "",
     value.rateLimitPolicy ? `ratelimit-policy=${value.rateLimitPolicy}` : "",
+    `limiter=${value.limiterScope}`,
+    value.rayId ? `cf-ray=${value.rayId}` : "",
   ].filter(Boolean).join(", ");
+}
+function scopedRateLimit(message: string, scope: HistoricalRateScope): boolean {
+  return scope.kind === "account"
+    ? /\bAccount\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message)
+    : /\bZone\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message);
 }
 function rateLimitResetAt(headers: Headers, message: string, now = Date.now()): number {
   const floor = /after\s+5\s+minutes|five\s+minutes/i.test(message) ? now + 5 * 60_000 : now;

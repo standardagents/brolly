@@ -15,6 +15,8 @@ const result: OnboardingBudgetEstimates = {
   windowEndAt: 1,
   cached: true,
   apiCalls: 0,
+  planTier: "paid",
+  planTierSource: "api",
   headroom: { warning: 0.25, critical: 0.75, emergency: 1.5 },
   account: null,
   families: {},

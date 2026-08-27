@@ -59,7 +59,13 @@ serialized D1 consumer. Claimed work reserves D1 capacity. A fresh per-slice D1
 row-limit failure requeues the original range for one fresh-budget attempt before
 splitting it. Shared run and wall-time limits requeue unfinished slices unchanged.
 Cloudflare rate limits defer work without consuming an import retry. Billing receives reserved REST capacity.
-Monitoring and initial ingestion run concurrently from the cron scheduler.
+During first-run setup, scheduled passes serve the import exclusively. The
+minute monitor begins after setup records `onboarding_complete`. A generic
+credential-level budget response switches that import to a shared 280-query
+fallback lane after Cloudflare's retry deadline. A configured re-import uses a
+240-query fallback lane so live monitoring retains capacity. A named account or
+zone response pauses only that scope. Daily Analytics capability discovery is
+deferred until a configured re-import finishes.
 Setup can continue while the scheduler finishes eligible slices. One progress
 row combines weighted work across every planned source
 partition. It shows the completed percentage and an estimated remaining time.
@@ -270,7 +276,13 @@ The history import starts when Alert channels opens. The sidebar shows one
 weighted work across every planned source partition. The row shows an estimated
 remaining time after progress begins. The collapsed row opens to per-source
 progress. A counted warning control contains unavailable window details.
+During a Cloudflare rate-limit wait, the row shows the retry countdown and the
+fallback completion estimate.
 Channel and level edits remain available while ingestion runs.
+
+The first access check uses at most six Cloudflare requests for recent usage,
+billing access, and account-plan detection. The detected plan is persisted and
+used by the remaining setup steps before the minute monitor starts.
 
 Balanced is the default for existing installations. New values use the median
 nonzero daily history or the median of complete billing cycles. Saved chart

@@ -40,6 +40,7 @@ beforeEach(() => {
     if (path === "/api/onboarding/ingest") return json({ job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 }, collectors: [] });
     if (path === "/api/onboarding/estimates") return json({
       generatedAt: 1, windowStartAt: 1, windowEndAt: 1, cached: true, apiCalls: 0,
+      planTier: "paid", planTierSource: "api",
       headroom: { warning: 0.25, critical: 0.75, emergency: 1.5 }, account: null, families: {}, assets: {}, unchangedFamilies: [],
       access: {
         workers: { state: "connected", detail: "Connected" },

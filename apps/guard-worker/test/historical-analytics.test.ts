@@ -62,6 +62,51 @@ describe("historical Analytics collection", () => {
     })).rejects.toBeInstanceOf(HistoricalRateLimitError);
   });
 
+  it("keeps named account-based rate limits scoped to the affected zone", async () => {
+    const zoneId = "a".repeat(32);
+    const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{
+        message: `Zone ${zoneId} has exceeded its rate limit. Please try again after 5 minutes.`,
+        extensions: { code: "budget" },
+      }],
+    }, { status: 429 })));
+    const client = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", undefined,
+      { accountBasedRateLimit: true, rateBudget },
+    );
+
+    await expect(client.collect({
+      dataset: "httpRequestsAdaptiveGroups",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+      zoneIds: [zoneId],
+    })).rejects.toThrow("limiter=zone");
+
+    expect(rateBudget.pauseUntil).toHaveBeenCalledWith(expect.any(Number), { kind: "zone", zoneId });
+  });
+
+  it("classifies a generic budget response as a shared limiter", async () => {
+    const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    }, { status: 429 })));
+    const client = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", undefined,
+      { accountBasedRateLimit: true, rateBudget },
+    );
+
+    await expect(client.collect({
+      dataset: "workersInvocationsAdaptive",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+    })).rejects.toThrow("limiter=shared");
+
+    expect(rateBudget.pauseUntil).toHaveBeenCalledWith(expect.any(Number), null);
+  });
+
   it("normalizes a multi-day Worker response into distinct daily samples", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
       workersInvocationsAdaptive: [

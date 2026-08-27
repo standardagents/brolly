@@ -3,6 +3,7 @@ import {
   bisectInitialIngestionRange,
   ensureInitialIngestionJob,
   initialIngestionProgress,
+  initialIngestionSchedulingState,
   initialIngestionSlicePlan,
   runInitialIngestion,
   type InitialIngestionSlicePlan,
@@ -91,6 +92,59 @@ describe("initial ingestion slice plan", () => {
 
 describe("initial ingestion progress", () => {
   let testD1: TestD1 | undefined;
+
+  it("keeps the monitor gated until onboarding finishes and prioritizes an active first import", async () => {
+    testD1 = createTestD1();
+    expect(await initialIngestionSchedulingState(testD1.db, "account-1")).toEqual({
+      importActive: false,
+      onboardingComplete: false,
+    });
+
+    await testD1.db.prepare(
+      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+       VALUES('scheduler-job','account-1','initial_v2',?1,?2,'running',?2,?2)`,
+    ).bind(NOW - DAY_MS, NOW).run();
+    expect(await initialIngestionSchedulingState(testD1.db, "account-1")).toEqual({
+      importActive: true,
+      onboardingComplete: false,
+    });
+
+    await testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('onboarding_complete','true',?1)`).bind(NOW).run();
+    expect(await initialIngestionSchedulingState(testD1.db, "account-1")).toEqual({
+      importActive: true,
+      onboardingComplete: true,
+    });
+  });
+
+  it("resets shared fallback mode when progress belongs to a new import job", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('new-job','account-1','initial_v2',?1,?2,'running',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`).bind(
+        "initial_ingestion_quota:account-1",
+        JSON.stringify({
+          jobId: "old-job",
+          limiterMode: "shared-fallback",
+          windowStartedAt: now,
+          physicalUsed: 20,
+          sharedUsed: 20,
+          accountUsed: 20,
+          zoneUsed: {},
+        }),
+        now,
+      ),
+    ]);
+
+    expect((await initialIngestionProgress(testD1.db, "account-1")).job).toMatchObject({
+      id: "new-job",
+      limiterMode: "optimistic",
+    });
+  });
+
   afterEach(() => {
     testD1?.close();
     vi.unstubAllGlobals();
@@ -623,10 +677,135 @@ describe("initial ingestion progress", () => {
     await runInitialIngestion(env, "long-pause-job");
     const stored = await testD1.db.prepare(`SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`)
       .first<{ value: string }>();
-    const state = JSON.parse(stored!.value) as { pausedUntil?: number };
+    const state = JSON.parse(stored!.value) as { jobId?: string; limiterMode?: string; pausedUntil?: number; sharedUsed?: number };
 
     expect(state.pausedUntil).toBeGreaterThan(now + 9 * 60_000);
+    expect(state).toMatchObject({ jobId: "long-pause-job", limiterMode: "shared-fallback", sharedUsed: 280 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("paces resumed work through the persisted shared fallback lane", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 16);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.prepare(
+      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+       VALUES('fallback-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+    ).bind(now - 3 * DAY_MS, now).run();
+    await testD1.db.batch([0, 1, 2].map(index => testD1!.db.prepare(
+      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+       VALUES(?1,'fallback-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
+    ).bind(
+      `fallback-${index}`,
+      JSON.stringify({ version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1 }),
+      now - (index + 1) * DAY_MS,
+      now - index * DAY_MS,
+    )));
+    const limitedFetch = vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    }, { status: 429 }));
+    vi.stubGlobal("fetch", limitedFetch);
+    const env = { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env;
+
+    await runInitialIngestion(env, "fallback-job");
+    await runInitialIngestion(env, "fallback-job");
+    expect(limitedFetch).toHaveBeenCalledTimes(1);
+    expect((await initialIngestionProgress(testD1.db, "account-1")).job).toMatchObject({
+      limiterMode: "shared-fallback",
+      resumeAt: now + 5 * 60_000,
+      sharedQueryLimit: 280,
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    const admissions: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      admissions.push(Date.now());
+      return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } });
+    }));
+    const resumed = runInitialIngestion(env, "fallback-job");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await resumed;
+
+    expect(admissions).toHaveLength(3);
+    expect(admissions[1]! - admissions[0]!).toBeGreaterThanOrEqual(Math.ceil(5 * 60_000 / 280));
+    expect(admissions[2]! - admissions[1]!).toBeGreaterThanOrEqual(Math.ceil(5 * 60_000 / 280));
+    const stored = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
+    ).first<{ value: string }>();
+    expect(JSON.parse(stored!.value)).toMatchObject({
+      jobId: "fallback-job",
+      limiterMode: "shared-fallback",
+      sharedUsed: 3,
+    });
+  });
+
+  it("continues other zones after a named zone limiter pauses one scope", async () => {
+    vi.useFakeTimers();
+    testD1 = createTestD1();
+    const now = Date.UTC(2026, 7, 27, 16);
+    vi.setSystemTime(now);
+    const limitedZone = "a".repeat(32);
+    const healthyZone = "b".repeat(32);
+    await testD1.db.prepare(
+      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+       VALUES('named-limit-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+    ).bind(now - DAY_MS, now).run();
+    await testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`).bind(
+      "initial_ingestion_quota:account-1",
+      JSON.stringify({
+        jobId: "named-limit-job",
+        limiterMode: "optimistic",
+        windowStartedAt: now - 299_000,
+        physicalUsed: 0,
+        sharedUsed: 0,
+        accountUsed: 0,
+        zoneUsed: {},
+      }),
+      now,
+    ).run();
+    await testD1.db.batch([limitedZone, healthyZone].map(zoneId => testD1!.db.prepare(
+      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+       VALUES(?1,'named-limit-job','graphql:zones',?2,?3,?4,'pending','missing',?4)`,
+    ).bind(`slice-${zoneId}`, JSON.stringify({
+      version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [zoneId], maxPageSize: 10_000, units: 1,
+    }), now - DAY_MS, now)));
+    let limitedCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { variables?: { zone?: string } };
+      const zoneId = body.variables?.zone;
+      if (zoneId === limitedZone) {
+        limitedCalls += 1;
+        return Response.json({
+          errors: [{ message: `Zone ${limitedZone} has exceeded its rate limit. Please try again after 5 minutes.`, extensions: { code: "budget" } }],
+        }, { status: 429 });
+      }
+      return Response.json({ data: { viewer: { zones: [{ zoneTag: healthyZone, httpRequestsAdaptiveGroups: [] }] } } });
+    }));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "named-limit-job",
+    );
+    await vi.advanceTimersByTimeAsync(56_000);
+    await run;
+
+    const slices = await testD1.db.prepare(
+      `SELECT id,status FROM backfill_slices WHERE backfill_job_id='named-limit-job' ORDER BY id`,
+    ).all<{ id: string; status: string }>();
+    expect(slices.results).toEqual([
+      { id: `slice-${limitedZone}`, status: "pending" },
+      { id: `slice-${healthyZone}`, status: "complete" },
+    ]);
+    expect(limitedCalls).toBe(1);
+    const quota = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
+    ).first<{ value: string }>();
+    expect(JSON.parse(quota!.value)).toMatchObject({
+      jobId: "named-limit-job",
+      limiterMode: "optimistic",
+      zonePausedUntil: { [limitedZone]: expect.any(Number) },
+    });
   });
 
   it("continues zone work when the account query bucket is full", async () => {

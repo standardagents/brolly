@@ -80,9 +80,16 @@ usage and billing history. Its progress indicator combines planned work across
 collectors and shows an estimated remaining time. Its collapsed summary opens
 to show progress for each Cloudflare data source. Setup can continue while that
 bounded job runs in the background. Risk tolerance uses the imported history
-to seed daily and billing-cycle limits. An operator may continue
+to seed daily and billing-cycle limits. A Cloudflare budget wait appears with
+its retry countdown and updated completion estimate. Scheduled monitoring begins
+after first-run setup finishes, which gives the history import exclusive account
+access during setup. An operator may continue
 supplying `CLOUDFLARE_BILLING_TOKEN` as a Worker secret, which takes precedence
 over the D1 credential.
+
+The initial access check also detects and stores the account plan. Plan-aware
+limits are available during setup even though recurring monitoring remains
+paused until setup finishes.
 
 The setup wizard has seven steps:
 

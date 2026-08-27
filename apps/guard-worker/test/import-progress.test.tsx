@@ -77,6 +77,29 @@ describe("initial import progress", () => {
     expect(document.body.querySelector("[role='dialog']")).not.toBeNull();
   });
 
+  it("shows the Cloudflare retry countdown and fallback ETA while rate limited", async () => {
+    const now = 1_000_000;
+    const ingestion: InitialIngestionResponse = {
+      job: {
+        id: "job",
+        status: "running",
+        startedAt: now - 60_000,
+        updatedAt: now,
+        limiterMode: "shared-fallback",
+        resumeAt: now + 4 * 60_000,
+        sharedQueryLimit: 280,
+      },
+      days: { total: 90, complete: 45, pending: 45, gaps: 0, failedWindows: 0, errors: [] },
+      collectors: [collector(100, 50)],
+    };
+    const container = await render({ ingestion, running: true, error: "", billingConnected: true, now });
+    const panel = container.querySelector<HTMLElement>("[data-import-state='rate_limited']");
+
+    expect(panel?.dataset).toMatchObject({ importLimiterMode: "shared-fallback", importResumeAt: String(now + 4 * 60_000) });
+    expect(panel?.textContent).toContain("Cloudflare wait ~4 min · ~5 min total");
+    expect(panel?.querySelector("[aria-label='Import paused']")).not.toBeNull();
+  });
+
   it("keeps terminal coverage gaps visible and hides a fully successful import", async () => {
     const withGap: InitialIngestionResponse = {
       job: { id: "job", status: "complete_with_gaps", startedAt: 1, updatedAt: 2 },

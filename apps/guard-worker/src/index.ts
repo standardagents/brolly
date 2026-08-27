@@ -10,7 +10,7 @@ import { releaseStatus, saveUpdateRepository } from "./updates.js";
 import { ledgerApiRoute } from "./ledger-api.js";
 import { LedgerStore } from "./ledger-store.js";
 import { migrateLegacyPolicyRules } from "./policy-migration.js";
-import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, resumeInitialIngestion, runInitialIngestion } from "./initial-ingestion.js";
+import { billingIngestionAvailable, ensureInitialIngestionJob, initialIngestionProgress, initialIngestionSchedulingState, resumeInitialIngestion, runInitialIngestion } from "./initial-ingestion.js";
 import { configuredLedgerRunLimits } from "./ledger-settings.js";
 import { notificationApiRoute } from "./notification-api.js";
 import { alertLevelsApiRoute, loadAlertLevels } from "./alert-levels.js";
@@ -25,10 +25,20 @@ export default {
     ctx.waitUntil((async () => {
       const activeEnv = await configuredEnv(env);
       if (!activeEnv) return;
-      await Promise.all([
-        runMonitor(activeEnv).catch(error => console.error("[Brolly] monitor failed", error)),
-        resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error)),
-      ]);
+      const state = await initialIngestionSchedulingState(activeEnv.DB, activeEnv.BROLLY_ACCOUNT_ID);
+      if (state.importActive && !state.onboardingComplete) {
+        await resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error));
+        return;
+      }
+      if (state.onboardingComplete) {
+        await Promise.all([
+          runMonitor(activeEnv, { deferCapabilityDiscovery: state.importActive })
+            .catch(error => console.error("[Brolly] monitor failed", error)),
+          state.importActive
+            ? resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error))
+            : Promise.resolve(),
+        ]);
+      }
     })());
   },
 

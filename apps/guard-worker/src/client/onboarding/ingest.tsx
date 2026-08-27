@@ -96,10 +96,13 @@ export function ImportProgressView({
   const hasGaps = (ingestion?.days?.gaps ?? 0) > 0;
   if (!ingestion && !running && !error) return null;
   if (ingestion && !running && !error && !hasGaps) return null;
-  const paused = isStoragePaused(ingestion?.job?.status);
+  const storagePaused = isStoragePaused(ingestion?.job?.status);
+  const resumeAt = ingestion?.job?.resumeAt ?? null;
+  const rateLimited = running && resumeAt !== null && resumeAt > now;
+  const paused = storagePaused || rateLimited;
   const days = ingestion?.days ?? null;
   const planning = running && (!ingestion?.job || ingestion.job.status === "planning" || !days);
-  const state = error ? "error" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
+  const state = error ? "error" : rateLimited ? "rate_limited" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
   const overall = ingestion && days ? initialIngestionOverallProgress(ingestion, now) : null;
 
   return (
@@ -108,6 +111,8 @@ export function ImportProgressView({
       aria-label="Import progress"
       aria-live="polite"
       data-import-state={state}
+      data-import-limiter-mode={ingestion?.job?.limiterMode}
+      data-import-resume-at={resumeAt ?? undefined}
     >
       <div className="flex items-center justify-between gap-2">
         <button
@@ -118,9 +123,12 @@ export function ImportProgressView({
           onClick={() => setDetailsOpen(value => !value)}
         >
           <Icon name="chevron" className={`size-3.5 transition-transform ${detailsOpen ? "rotate-180" : "-rotate-90"}`} />
-          {(planning || running && !paused) && <Spinner />}
+          {(planning || running) && !paused && <Spinner />}
           <span>{planning ? "Preparing 90-day history import" : "90-day history import"}</span>
-          {overall?.estimatedRemainingMs !== null && overall?.estimatedRemainingMs !== undefined && (
+          {rateLimited && (
+            <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">Cloudflare wait {formatRemainingTime(resumeAt - now)} · {overall?.estimatedRemainingMs ? formatRemainingTime(overall.estimatedRemainingMs) : formatRemainingTime(resumeAt - now)} total</span>
+          )}
+          {!rateLimited && overall?.estimatedRemainingMs !== null && overall?.estimatedRemainingMs !== undefined && (
             <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">{formatRemainingTime(overall.estimatedRemainingMs)} remaining</span>
           )}
         </button>
@@ -191,9 +199,15 @@ export function initialIngestionOverallProgress(
   const startedAt = ingestion.job?.startedAt ?? now;
   const elapsedMs = Math.max(0, now - startedAt);
   const active = ingestion.job?.status === "pending" || ingestion.job?.status === "running";
-  const estimatedRemainingMs = active && elapsedMs >= 10_000 && processedUnits > 0 && remainingUnits > 0
-    ? Math.max(60_000, Math.min(24 * 60 * 60_000, elapsedMs * remainingUnits / processedUnits))
-    : null;
+  const fallback = ingestion.job?.limiterMode === "shared-fallback";
+  const fallbackPending = ingestion.collectors.reduce((total, collector) => total + collector.pending, 0);
+  const fallbackLimit = Math.max(1, ingestion.job?.sharedQueryLimit ?? 240);
+  const waitMs = Math.max(0, (ingestion.job?.resumeAt ?? now) - now);
+  const estimatedRemainingMs = fallback && active && fallbackPending > 0
+    ? waitMs + fallbackPending * Math.ceil(5 * 60_000 / fallbackLimit)
+    : active && elapsedMs >= 10_000 && processedUnits > 0 && remainingUnits > 0
+      ? Math.max(60_000, Math.min(24 * 60 * 60_000, elapsedMs * remainingUnits / processedUnits))
+      : null;
   return { percentage, estimatedRemainingMs, processedUnits, totalUnits };
 }
 

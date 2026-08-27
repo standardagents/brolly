@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MetricSample } from "@standardagents/brolly-core";
-import { billingAccessConfiguration, billingTokenValidationError, buildOnboardingBudgetEstimates, configureOnboardingBillingAccess, validBillingToken } from "../src/budget-estimates.js";
+import { billingAccessConfiguration, billingTokenValidationError, buildOnboardingBudgetEstimates, configureOnboardingBillingAccess, onboardingBudgetEstimates, validBillingToken } from "../src/budget-estimates.js";
+import { CloudflareClient } from "../src/cloudflare.js";
 import { openJson } from "../src/credentials.js";
 import type { Env } from "../src/env.js";
+import { readPlanState } from "../src/plan-tier.js";
 import { createTestD1 } from "./d1.js";
 
 const start = Date.UTC(2026, 7, 11);
 const end = start + 86_400_000;
 const credentialKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function sample(family: string, id: string, cost: number, options: { parentId?: string; scope?: MetricSample["asset"]["scope"]; sampled?: boolean } = {}): MetricSample {
   return {
@@ -87,6 +92,37 @@ describe("billing access configuration", () => {
 });
 
 describe("onboarding budget estimates", () => {
+  it("detects and persists the account plan during the initial access check", async () => {
+    const testD1 = createTestD1();
+    vi.spyOn(CloudflareClient.prototype, "durableObjectUsage").mockResolvedValue({
+      samples: [], coverage: [], continuation: null, complete: true, pages: 1, watermarkAt: end,
+    });
+    vi.spyOn(CloudflareClient.prototype, "workerUsage").mockResolvedValue({
+      samples: [], coverage: [], continuation: null, complete: true, pages: 1, watermarkAt: end,
+    });
+    vi.spyOn(CloudflareClient.prototype, "billingUsage").mockResolvedValue(null);
+    vi.spyOn(CloudflareClient.prototype, "subscriptions").mockResolvedValue([
+      { state: "Paid", rate_plan: { id: "workers_paid" } },
+    ]);
+
+    try {
+      const result = await onboardingBudgetEstimates({
+        DB: testD1.db,
+        BROLLY_ACCOUNT_ID: "account-1",
+        CLOUDFLARE_OAUTH_TOKEN: "oauth-token",
+      } as Env);
+
+      expect(result).toMatchObject({ planTier: "paid", planTierSource: "api" });
+      await expect(readPlanState(testD1.db)).resolves.toMatchObject({
+        detectedTier: "paid",
+        planTier: "paid",
+        planTierSource: "api",
+      });
+    } finally {
+      testD1.close();
+    }
+  });
+
   it("accepts bounded API-token values without accepting whitespace or empty secrets", () => {
     expect(validBillingToken(`cfat_${"a".repeat(40)}`)).toBe(true);
     expect(validBillingToken("short")).toBe(false);

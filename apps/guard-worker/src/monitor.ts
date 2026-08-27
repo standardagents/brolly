@@ -23,7 +23,7 @@ export interface CollectorWindowCursor<T> {
   cursor?: T;
 }
 
-export async function runMonitor(env: Env, options: { force?: boolean } = {}): Promise<void> {
+export async function runMonitor(env: Env, options: { force?: boolean; deferCapabilityDiscovery?: boolean } = {}): Promise<void> {
   const ledgerBudget = new LedgerRunBudget(await configuredLedgerRunLimits(env.DB));
   const budget = new RunBudget({
     apiCalls: ledgerBudget.limits.graphqlQueries + ledgerBudget.limits.restRequests,
@@ -85,7 +85,9 @@ export async function runMonitor(env: Env, options: { force?: boolean } = {}): P
     const utcMinute = new Date(now).getUTCMinutes();
     const since = collectionEnd - 5 * 60_000;
     const inventoryDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "resource-inventory", 60 * 60_000, now, options.force === true);
-    const capabilityDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "capability-discovery", 24 * 60 * 60_000, now, options.force === true);
+    const capabilityDue = options.deferCapabilityDiscovery
+      ? false
+      : await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "capability-discovery", 24 * 60 * 60_000, now, options.force === true);
     const billingDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", 60 * 60_000, now, options.force === true);
     const retentionDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "retention-maintenance", 60 * 60_000, now, options.force === true);
     if (capabilityDue) await ledger.syncMetricCatalog();

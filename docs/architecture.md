@@ -108,14 +108,21 @@ reserves 240 logical queries for the account and 240 for each zone. A
 700-request physical ceiling leaves global API capacity for monitoring and
 operator actions. A persisted admission timestamp enforces one request per
 second for the account or exact zone across discovery, collection, and resumed
-invocations. Exact-zone slices use each zone's independent allowance. Six
+invocations. Scheduled passes dedicate themselves to the import until first-run
+setup completes. Generic credential-budget errors persist a shared-limiter mode
+and retry deadline. The shared lane allows 280 queries during first-run setup and
+240 during a configured re-import. Named account and zone errors pause their
+individual scope.
+Exact-zone slices use each zone's independent allowance. Six
 producers can fetch from distinct zones concurrently. One lease coordinates
 browser and cron starts. A two-result queue feeds one serialized D1 consumer.
 Each claimed slice reserves D1 capacity until persistence starts. Rate limits
 keep work pending until the reported reset. A fresh per-slice D1 row-limit
 failure requeues the range for a fresh-budget attempt before range splitting.
 Shared run limits requeue unfinished work without changing its range. Reserved REST capacity runs Billing Read before Analytics.
-The cron runs monitoring and initial ingestion concurrently. A lease takeover
+A configured re-import runs beside the minute monitor. Daily Analytics
+capability discovery waits until the re-import finishes so its larger query
+burst does not compete with history collection. A lease takeover
 returns interrupted running slices to the pending queue before work resumes.
 
 Active telemetry uses one fixed completed five-minute window and a fixed pass
@@ -176,10 +183,15 @@ shows one 90-day account-history row. Its bar combines completed work across
 every planned source partition. The row shows a percentage and an estimated
 remaining time. The collapsed row opens to show per-source progress and window
 counts. Unavailable windows appear as a count on a warning control. The control
-opens their details. The import writes ledger
+opens their details. A Cloudflare budget wait replaces the spinner with its retry
+countdown and fallback completion estimate. The import writes ledger
 history and coverage state without creating alert instances, notifications, or
 control actions. Risk tolerance and both limit steps remain editable while the
 import continues.
+
+The onboarding access check reads recent usage, billing access, and the account
+subscription within six bounded Cloudflare requests. It persists the detected
+plan tier before scheduled monitoring begins.
 
 Each installation has one ordered alert-level board. Warning, Critical, and
 Emergency are seeded as empty levels. A level has a case-insensitive unique

@@ -9,6 +9,8 @@ import {
 import { CloudflareClient, type BillingUsageRecord } from "./cloudflare.js";
 import { sealJson } from "./credentials.js";
 import type { Env } from "./env.js";
+import { classifyPlanTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
+import { saveDetectedPlan } from "./plan-tier.js";
 
 const DAY_MS = 86_400_000;
 const CACHE_MS = 15 * 60_000;
@@ -30,6 +32,8 @@ export interface OnboardingBudgetEstimates {
   windowEndAt: number;
   cached: boolean;
   apiCalls: number;
+  planTier: PlanTier;
+  planTierSource: PlanTierSource;
   headroom: typeof ESTIMATE_HEADROOM;
   account: SuggestedBudget | null;
   families: Record<string, SuggestedBudget>;
@@ -133,13 +137,24 @@ export async function onboardingBudgetEstimates(env: Env): Promise<OnboardingBud
     const windowEndAt = Date.now();
     const windowStartAt = windowEndAt - DAY_MS;
     const budget = new RunBudget({ apiCalls: 4, databaseRows: 100, samples: 20_000, wallMs: 20_000 });
+    const planBudget = new RunBudget({ apiCalls: 2, databaseRows: 10, samples: 1, wallMs: 10_000 });
     const client = new CloudflareClient(env, budget);
-    const [durableObjects, workers, billingResult] = await Promise.all([
+    const planClient = new CloudflareClient(env, planBudget);
+    const planStatePromise = planClient.subscriptions()
+      .then(payload => saveDetectedPlan(env.DB, classifyPlanTier(payload), windowEndAt))
+      .catch(error => saveDetectedPlan(
+        env.DB,
+        "unknown",
+        windowEndAt,
+        error instanceof Error ? error.message : String(error),
+      ));
+    const [durableObjects, workers, billingResult, planState] = await Promise.all([
       client.durableObjectUsage(windowStartAt, windowEndAt),
       client.workerUsage(windowStartAt, windowEndAt),
       client.billingUsage(windowStartAt - DAY_MS, windowEndAt)
         .then(records => ({ records, error: null as string | null }))
         .catch(error => ({ records: null, error: error instanceof Error ? error.message : String(error) })),
+      planStatePromise,
     ]);
     const result = buildOnboardingBudgetEstimates({
       generatedAt: Date.now(),
@@ -153,7 +168,9 @@ export async function onboardingBudgetEstimates(env: Env): Promise<OnboardingBud
         : billingResult.records
           ? { state: "connected", detail: "Brolly can compare its fast usage estimates with Cloudflare's daily billed charges for this account." }
           : { state: "not_configured", detail: "Brolly can monitor live activity, but it cannot yet compare those estimates with the charges on your Cloudflare bill. Add the read-only Billing token below." },
-      apiCalls: budget.usage.apiCalls,
+      apiCalls: budget.usage.apiCalls + planBudget.usage.apiCalls,
+      planTier: planState.planTier,
+      planTierSource: planState.planTierSource,
     });
     await env.DB.prepare(
       `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
@@ -174,6 +191,8 @@ export function buildOnboardingBudgetEstimates(input: {
   coverage?: CoverageResult[];
   billingAccess?: UsageAccess;
   apiCalls?: number;
+  planTier?: PlanTier;
+  planTierSource?: PlanTierSource;
 }): OnboardingBudgetEstimates {
   const analyticsFamilies = costBy(input.samples, sample => sample.asset.family);
   const analyticsAssets = costBy(input.samples, sample => {
@@ -224,6 +243,8 @@ export function buildOnboardingBudgetEstimates(input: {
     windowEndAt: input.windowEndAt,
     cached: false,
     apiCalls: input.apiCalls ?? 0,
+    planTier: input.planTier ?? "unknown",
+    planTierSource: input.planTierSource ?? "api",
     headroom: ESTIMATE_HEADROOM,
     account,
     families,

@@ -195,7 +195,7 @@ export function RecentUsageEstimator({ busy, result, notice, onSuggest, disabled
         <div>
           <div className="flex items-center gap-2">
             <strong id="recent-usage-estimator-title" className="text-sm">Fill limits from this account&apos;s recent usage</strong>
-            <InfoTip label="How recent-usage suggestions work">Brolly makes at most two bounded Cloudflare Analytics requests for the previous rolling 24 hours, plus one billing request only when a Billing Read token is configured. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.</InfoTip>
+            <InfoTip label="How recent-usage suggestions work">Brolly makes at most six bounded Cloudflare API requests to check recent usage, billing access, and your account plan. Results are cached for 15 minutes. Suggestions add 25% warning, 75% critical, and 150% emergency headroom. Nothing is saved until you finish setup.</InfoTip>
           </div>
           <p className="mt-1 max-w-[62ch] text-xs leading-5 text-muted">Use the previous 24 hours, add safety headroom, and fill every account, product, Worker, and namespace limit Brolly can estimate. You can edit every value before saving.</p>
           {disabled ? <p className="mt-2 text-xs text-muted" role="status">{ENTERPRISE_COST_NOTICE}</p> : notice && <p className="mt-2 text-xs font-semibold text-good" role="status">{notice}</p>}
@@ -245,7 +245,7 @@ function capabilityStatus(key: (typeof ACCESS_CAPABILITIES)[number]["key"], resu
 
 /**
  * The first access check runs as soon as step 1 mounts. It is read-only,
- * cached for 15 minutes, and bounded to three Cloudflare requests, so there
+ * cached for 15 minutes, and bounded to six Cloudflare requests, so there
  * is nothing for the operator to decide before it runs. Re-runs happen on
  * their own: a reconnect reloads the page, a token paste re-verifies, and an
  * error offers a retry.

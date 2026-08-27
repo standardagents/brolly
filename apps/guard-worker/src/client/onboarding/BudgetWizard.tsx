@@ -81,7 +81,14 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
   const billingConnected = estimates.estimates?.access.billing.state === "connected";
   const billingState = estimates.estimates ? billingConnected : undefined;
-  const planTier = effectivePlanTier(data);
+  const currentData = estimates.estimates
+    ? {
+        ...data,
+        planTier: estimates.estimates.planTier ?? data.planTier,
+        planTierSource: estimates.estimates.planTierSource ?? data.planTierSource,
+      }
+    : data;
+  const planTier = effectivePlanTier(currentData);
   const billingRequired = planTier !== "free" && planTier !== "enterprise";
   const billingFlow = useBillingSuccessFlow(billingState, billingRequired && !editing && navigation.unlocked === 0, navigation.advance);
 
@@ -91,7 +98,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
 
   const bodies: ReactNode[] = [
     <AccessStep
-      data={data}
+      data={currentData}
       token={token}
       busy={estimates.busy}
       result={estimates.estimates}
@@ -109,8 +116,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     importRunning && !editing
       ? <ImportHoldStep />
       : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
-    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={data.planTier} />,
-    <ProductLimitsStep token={token} data={data} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={currentData.planTier} />,
+    <ProductLimitsStep token={token} data={currentData} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
     <RuntimeStep assets={data.scopedAssets} />,
     <VerifyStep assets={data.scopedAssets} token={token} integrations={integrations} onChange={setIntegrations} autoRun={breakerClaimed && !editing} />,
   ];
