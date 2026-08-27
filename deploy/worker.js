@@ -1594,10 +1594,12 @@ var HistoricalAnalyticsClient = class {
 				accountBasedRequested: this.options.accountBasedRateLimit === true,
 				retryAfter: response.headers.get("retry-after"),
 				rateLimit: response.headers.get("ratelimit"),
-				rateLimitPolicy: response.headers.get("ratelimit-policy")
+				rateLimitPolicy: response.headers.get("ratelimit-policy"),
+				limiterScope: scopedRateLimit(message, scope) ? scope.kind : "shared",
+				rayId: response.headers.get("cf-ray")
 			};
 			const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
-			this.options.rateBudget?.pauseUntil(retryAt);
+			this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : scope);
 			throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
 		}
 		if (!response.ok || payload.errors?.length) throw new HistoricalAnalyticsError(response.status, payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
@@ -1901,10 +1903,17 @@ function rateLimitTelemetryDetail(value) {
 	return [
 		`scope=${value.scopeKind}`,
 		`logicalQueries=${value.logicalQueries}`,
+		`status=${value.status}`,
+		`accountBased=${value.accountBasedRequested}`,
 		value.retryAfter ? `retry-after=${value.retryAfter}` : "",
 		value.rateLimit ? `ratelimit=${value.rateLimit}` : "",
-		value.rateLimitPolicy ? `ratelimit-policy=${value.rateLimitPolicy}` : ""
+		value.rateLimitPolicy ? `ratelimit-policy=${value.rateLimitPolicy}` : "",
+		`limiter=${value.limiterScope}`,
+		value.rayId ? `cf-ray=${value.rayId}` : ""
 	].filter(Boolean).join(", ");
+}
+function scopedRateLimit(message, scope) {
+	return scope.kind === "account" ? /\bAccount\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message) : /\bZone\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message);
 }
 function rateLimitResetAt(headers, message, now = Date.now()) {
 	const floor = /after\s+5\s+minutes|five\s+minutes/i.test(message) ? now + 3e5 : now;
@@ -6792,7 +6801,7 @@ async function runMonitor(env, options = {}) {
 		const utcMinute = new Date(now).getUTCMinutes();
 		const since = collectionEnd - 3e5;
 		const inventoryDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "resource-inventory", 36e5, now, options.force === true);
-		const capabilityDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "capability-discovery", 864e5, now, options.force === true);
+		const capabilityDue = options.deferCapabilityDiscovery ? false : await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "capability-discovery", 864e5, now, options.force === true);
 		const billingDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "billing-reconciliation", 36e5, now, options.force === true);
 		const retentionDue = await ledger.claimDueCollector(env.BROLLY_ACCOUNT_ID, "retention-maintenance", 36e5, now, options.force === true);
 		if (capabilityDue) await ledger.syncMetricCatalog();
@@ -8445,8 +8454,15 @@ async function onboardingBudgetEstimates(env) {
 			samples: 2e4,
 			wallMs: 2e4
 		});
+		const planBudget = new RunBudget({
+			apiCalls: 2,
+			databaseRows: 10,
+			samples: 1,
+			wallMs: 1e4
+		});
 		const client = new CloudflareClient(env, budget);
-		const [durableObjects, workers, billingResult] = await Promise.all([
+		const planStatePromise = new CloudflareClient(env, planBudget).subscriptions().then((payload) => saveDetectedPlan(env.DB, classifyPlanTier(payload), windowEndAt)).catch((error) => saveDetectedPlan(env.DB, "unknown", windowEndAt, error instanceof Error ? error.message : String(error)));
+		const [durableObjects, workers, billingResult, planState] = await Promise.all([
 			client.durableObjectUsage(windowStartAt, windowEndAt),
 			client.workerUsage(windowStartAt, windowEndAt),
 			client.billingUsage(windowStartAt - DAY_MS$1, windowEndAt).then((records) => ({
@@ -8455,7 +8471,8 @@ async function onboardingBudgetEstimates(env) {
 			})).catch((error) => ({
 				records: null,
 				error: error instanceof Error ? error.message : String(error)
-			}))
+			})),
+			planStatePromise
 		]);
 		const result = buildOnboardingBudgetEstimates({
 			generatedAt: Date.now(),
@@ -8474,7 +8491,9 @@ async function onboardingBudgetEstimates(env) {
 				state: "not_configured",
 				detail: "Brolly can monitor live activity, but it cannot yet compare those estimates with the charges on your Cloudflare bill. Add the read-only Billing token below."
 			},
-			apiCalls: budget.usage.apiCalls
+			apiCalls: budget.usage.apiCalls + planBudget.usage.apiCalls,
+			planTier: planState.planTier,
+			planTierSource: planState.planTierSource
 		});
 		await env.DB.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(CACHE_KEY$1, JSON.stringify(result), result.generatedAt).run();
@@ -8528,6 +8547,8 @@ function buildOnboardingBudgetEstimates(input) {
 		windowEndAt: input.windowEndAt,
 		cached: false,
 		apiCalls: input.apiCalls ?? 0,
+		planTier: input.planTier ?? "unknown",
+		planTierSource: input.planTierSource ?? "api",
 		headroom: ESTIMATE_HEADROOM,
 		account,
 		families,
@@ -8629,7 +8650,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "48f252f7b48b24f4f771c19150aeaffedd86136d";
+var BROLLY_RELEASE = "ecb66388d995887f283dc0afd8083eb5d937aee3";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -9667,6 +9688,8 @@ var GRAPHQL_SCOPE_INTERVAL_MS = 1e3;
 var INITIAL_ACCOUNT_QUERY_QUOTA = 240;
 var INITIAL_ZONE_QUERY_QUOTA = 240;
 var INITIAL_PHYSICAL_GRAPHQL_QUOTA = 700;
+var INITIAL_SHARED_QUERY_QUOTA = 280;
+var CONFIGURED_SHARED_QUERY_QUOTA = 240;
 var GRAPHQL_WINDOW_MS = 3e5;
 var INITIAL_LEASE_TTL_MS = 12e4;
 var INITIAL_LEASE_NAME = "initial-ingestion";
@@ -9721,7 +9744,7 @@ async function ensureInitialIngestionJob(env, options = {}) {
 		status: "planning"
 	}, false, await sliceCount(env.DB, jobId));
 	try {
-		const discoveryQuota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, now);
+		const discoveryQuota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, jobId, now);
 		if (!discoveryQuota.canCharge({ kind: "account" }, 1)) {
 			await env.DB.prepare(`UPDATE backfill_jobs SET status='planning',updated_at=?2 WHERE id=?1`).bind(jobId, now).run();
 			return {
@@ -9835,6 +9858,7 @@ async function initialIngestionProgress(db, accountId) {
 	const rows = await db.prepare(`SELECT collector_key,scope_key,starts_at,ends_at,status,error
      FROM backfill_slices WHERE backfill_job_id=?1 AND status!='superseded'
      ORDER BY collector_key,ends_at DESC`).bind(job.id).all();
+	const quota = await loadInitialGraphqlQuota(db, accountId, job.id, Date.now());
 	const grouped = /* @__PURE__ */ new Map();
 	for (const row of rows.results) {
 		const units = sliceUnits(row.scope_key, row.starts_at, row.ends_at);
@@ -9869,7 +9893,10 @@ async function initialIngestionProgress(db, accountId) {
 			id: job.id,
 			status: job.status,
 			startedAt: job.created_at,
-			updatedAt: job.updated_at
+			updatedAt: job.updated_at,
+			limiterMode: quota.mode,
+			resumeAt: quota.resumeAt,
+			sharedQueryLimit: quota.fallbackLimit
 		},
 		collectors: [...grouped.values()].sort((left, right) => left.collector === "billing" ? 1 : right.collector === "billing" ? -1 : left.label.localeCompare(right.label)),
 		days: initialIngestionDays(job, rows.results)
@@ -9882,7 +9909,7 @@ async function runInitialIngestion(env, jobId) {
 	let quota;
 	try {
 		await requeueRunningInitialSlices(env.DB, jobId);
-		quota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, Date.now());
+		quota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, jobId, Date.now());
 	} catch (error) {
 		await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
 		throw error;
@@ -10011,6 +10038,17 @@ async function resumeInitialIngestion(env) {
 		return;
 	}
 	await runInitialIngestion(env, job.id);
+}
+/** Choose cron work without starting the monitor before first-run protection is configured. */
+async function initialIngestionSchedulingState(db, accountId) {
+	const row = await db.prepare(`SELECT
+       EXISTS(SELECT 1 FROM backfill_jobs
+         WHERE account_id=?1 AND kind=?2 AND status IN ('planning','planning_failed','pending','running')) AS import_active,
+       EXISTS(SELECT 1 FROM settings WHERE key='onboarding_complete' AND value='true') AS onboarding_complete`).bind(accountId, INITIAL_KIND).first();
+	return {
+		importActive: Number(row?.import_active ?? 0) === 1,
+		onboardingComplete: Number(row?.onboarding_complete ?? 0) === 1
+	};
 }
 var InitialFetchQueue = class {
 	capacity;
@@ -10543,16 +10581,20 @@ function chargeMeta(budget, meta) {
 }
 var InitialGraphqlQuota = class {
 	state;
+	sharedLimit;
 	inFlightClaims = /* @__PURE__ */ new Set();
 	admissionTails = /* @__PURE__ */ new Map();
 	claimWaiters = /* @__PURE__ */ new Set();
-	constructor(state) {
+	constructor(state, sharedLimit) {
 		this.state = state;
+		this.sharedLimit = sharedLimit;
 	}
 	get physicalRemaining() {
 		this.rollover();
 		if (this.state.pausedUntil && Date.now() < this.state.pausedUntil) return 0;
-		return Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
+		const physical = Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
+		if (this.state.limiterMode !== "shared-fallback") return physical;
+		return this.state.sharedUsed < this.sharedLimit ? physical : 0;
 	}
 	get resetAt() {
 		return Math.max(this.state.windowStartedAt + GRAPHQL_WINDOW_MS, this.state.pausedUntil ?? 0);
@@ -10561,26 +10603,34 @@ var InitialGraphqlQuota = class {
 		this.rollover();
 		if (this.physicalRemaining < 1) return false;
 		const amount = Math.max(1, Math.floor(logicalQueries));
+		if (this.state.limiterMode === "shared-fallback" && this.state.sharedUsed + amount > this.sharedLimit) return false;
 		return scope.kind === "account" ? this.state.accountUsed + amount <= INITIAL_ACCOUNT_QUERY_QUOTA : (this.state.zoneUsed[scope.zoneId] ?? 0) + amount <= INITIAL_ZONE_QUERY_QUOTA;
 	}
 	claimAdmission(scope, logicalQueries) {
+		this.rollover();
+		const scopePause = this.scopePausedUntil(scope);
+		if (scopePause && scopePause > Date.now()) return {
+			kind: "paced",
+			waitUntil: scopePause
+		};
 		if (!this.canCharge(scope, logicalQueries)) return { kind: "quota" };
-		const key = rateScopeKey(scope);
+		const key = this.admissionKey(scope);
 		if (this.inFlightClaims.has(key)) return {
 			kind: "paced",
 			waitUntil: null
 		};
-		const waitUntil = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS;
+		const waitUntil = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS, this.state.limiterMode === "shared-fallback" ? this.state.sharedNextAdmissionAt ?? 0 : 0);
 		return waitUntil > Date.now() ? {
 			kind: "paced",
 			waitUntil
 		} : { kind: "ready" };
 	}
 	reserveClaim(scope) {
-		this.inFlightClaims.add(rateScopeKey(scope));
+		this.inFlightClaims.add(this.admissionKey(scope));
 	}
 	releaseClaim(scope) {
 		this.inFlightClaims.delete(rateScopeKey(scope));
+		this.inFlightClaims.delete("shared");
 		for (const resolve of this.claimWaiters) resolve();
 		this.claimWaiters.clear();
 	}
@@ -10602,7 +10652,7 @@ var InitialGraphqlQuota = class {
 		});
 	}
 	async admit(scope, logicalQueries) {
-		const key = rateScopeKey(scope);
+		const key = this.admissionKey(scope);
 		const previous = this.admissionTails.get(key) ?? Promise.resolve();
 		let release;
 		const gate = new Promise((resolve) => {
@@ -10612,7 +10662,7 @@ var InitialGraphqlQuota = class {
 		this.admissionTails.set(key, queued);
 		await previous;
 		try {
-			const delay = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS - Date.now();
+			const delay = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS, this.state.limiterMode === "shared-fallback" ? this.state.sharedNextAdmissionAt ?? 0 : 0) - Date.now();
 			if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 			this.setLastAdmissionAt(scope, Date.now());
 			this.charge(scope, logicalQueries);
@@ -10621,8 +10671,19 @@ var InitialGraphqlQuota = class {
 			if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
 		}
 	}
-	pauseUntil(retryAt) {
-		this.state.pausedUntil = Math.max(this.state.pausedUntil ?? 0, Date.now() + 1e3, retryAt);
+	pauseUntil(retryAt, scope) {
+		const until = Math.max(Date.now() + 1e3, retryAt);
+		if (scope?.kind === "account") {
+			this.state.accountPausedUntil = Math.max(this.state.accountPausedUntil ?? 0, until);
+			this.state.accountUsed = INITIAL_ACCOUNT_QUERY_QUOTA;
+		} else if (scope?.kind === "zone") {
+			this.state.zonePausedUntil[scope.zoneId] = Math.max(this.state.zonePausedUntil[scope.zoneId] ?? 0, until);
+			this.state.zoneUsed[scope.zoneId] = INITIAL_ZONE_QUERY_QUOTA;
+		} else {
+			this.state.pausedUntil = Math.max(this.state.pausedUntil ?? 0, until);
+			this.state.limiterMode = "shared-fallback";
+			this.state.sharedUsed = this.sharedLimit;
+		}
 		for (const resolve of this.claimWaiters) resolve();
 		this.claimWaiters.clear();
 	}
@@ -10630,19 +10691,41 @@ var InitialGraphqlQuota = class {
 		if (!this.canCharge(scope, logicalQueries)) throw new HistoricalRateLimitError(429, Math.max(Date.now() + 1e3, this.resetAt), "Initial Analytics quota is reserved until the next Cloudflare window");
 		const amount = Math.max(1, Math.floor(logicalQueries));
 		this.state.physicalUsed += 1;
+		if (this.state.limiterMode === "shared-fallback") {
+			this.state.sharedUsed += amount;
+			this.state.sharedNextAdmissionAt = Date.now() + amount * Math.ceil(GRAPHQL_WINDOW_MS / this.sharedLimit);
+		}
 		if (scope.kind === "account") this.state.accountUsed += amount;
 		else this.state.zoneUsed[scope.zoneId] = (this.state.zoneUsed[scope.zoneId] ?? 0) + amount;
 	}
 	snapshot() {
 		return {
+			jobId: this.state.jobId,
+			limiterMode: this.state.limiterMode,
 			windowStartedAt: this.state.windowStartedAt,
 			physicalUsed: this.state.physicalUsed,
+			sharedUsed: this.state.sharedUsed,
 			accountUsed: this.state.accountUsed,
 			zoneUsed: { ...this.state.zoneUsed },
 			accountLastAdmissionAt: this.state.accountLastAdmissionAt,
 			zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
-			pausedUntil: this.state.pausedUntil
+			sharedNextAdmissionAt: this.state.sharedNextAdmissionAt,
+			pausedUntil: this.state.pausedUntil,
+			accountPausedUntil: this.state.accountPausedUntil,
+			zonePausedUntil: { ...this.state.zonePausedUntil }
 		};
+	}
+	get mode() {
+		return this.state.limiterMode;
+	}
+	get fallbackLimit() {
+		return this.sharedLimit;
+	}
+	get resumeAt() {
+		this.rollover();
+		if (this.state.pausedUntil && this.state.pausedUntil > Date.now()) return this.state.pausedUntil;
+		if (this.state.limiterMode === "shared-fallback" && this.state.sharedUsed >= this.sharedLimit) return this.state.windowStartedAt + GRAPHQL_WINDOW_MS;
+		return null;
 	}
 	lastAdmissionAt(scope) {
 		return scope.kind === "account" ? this.state.accountLastAdmissionAt ?? 0 : this.state.zoneLastAdmissionAt[scope.zoneId] ?? 0;
@@ -10651,14 +10734,22 @@ var InitialGraphqlQuota = class {
 		if (scope.kind === "account") this.state.accountLastAdmissionAt = admittedAt;
 		else this.state.zoneLastAdmissionAt[scope.zoneId] = admittedAt;
 	}
+	admissionKey(scope) {
+		return this.state.limiterMode === "shared-fallback" ? "shared" : rateScopeKey(scope);
+	}
+	scopePausedUntil(scope) {
+		return scope.kind === "account" ? this.state.accountPausedUntil : this.state.zonePausedUntil[scope.zoneId] ?? null;
+	}
 	rollover(now = Date.now()) {
 		if (this.state.pausedUntil && now < this.state.pausedUntil) return;
 		this.state.pausedUntil = null;
 		if (now >= this.state.windowStartedAt && now - this.state.windowStartedAt < GRAPHQL_WINDOW_MS) return;
 		this.state.windowStartedAt = now;
 		this.state.physicalUsed = 0;
+		this.state.sharedUsed = 0;
 		this.state.accountUsed = 0;
 		this.state.zoneUsed = {};
+		this.state.sharedNextAdmissionAt = null;
 	}
 };
 function rateScopeKey(scope) {
@@ -10671,23 +10762,33 @@ function rateScope(metadata) {
 		zoneId
 	} : { kind: "account" };
 }
-async function loadInitialGraphqlQuota(db, accountId, now) {
-	const row = await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(`${INITIAL_QUOTA_KEY_PREFIX}${accountId}`).first();
+async function loadInitialGraphqlQuota(db, accountId, jobId, now) {
+	const [row, onboarding] = await Promise.all([db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(`${INITIAL_QUOTA_KEY_PREFIX}${accountId}`).first(), db.prepare(`SELECT value FROM settings WHERE key='onboarding_complete' LIMIT 1`).first()]);
+	const sharedLimit = onboarding?.value === "true" ? CONFIGURED_SHARED_QUERY_QUOTA : INITIAL_SHARED_QUERY_QUOTA;
 	let state = {
+		jobId,
+		limiterMode: "optimistic",
 		windowStartedAt: now,
 		physicalUsed: 0,
+		sharedUsed: 0,
 		accountUsed: 0,
 		zoneUsed: {},
 		accountLastAdmissionAt: null,
 		zoneLastAdmissionAt: {},
-		pausedUntil: null
+		sharedNextAdmissionAt: null,
+		pausedUntil: null,
+		accountPausedUntil: null,
+		zonePausedUntil: {}
 	};
 	if (row) try {
 		const parsed = JSON.parse(row.value);
+		const sameJob = parsed.jobId === jobId;
+		state.limiterMode = sameJob && parsed.limiterMode === "shared-fallback" ? "shared-fallback" : "optimistic";
 		if (Number.isFinite(parsed.windowStartedAt) && now - Number(parsed.windowStartedAt) < GRAPHQL_WINDOW_MS && now >= Number(parsed.windowStartedAt)) {
 			const legacyUsed = Number.isFinite(parsed.used) ? Number(parsed.used) : 0;
 			state.windowStartedAt = Number(parsed.windowStartedAt);
 			state.physicalUsed = boundedUsage(parsed.physicalUsed ?? legacyUsed, INITIAL_PHYSICAL_GRAPHQL_QUOTA);
+			state.sharedUsed = sameJob ? boundedUsage(parsed.sharedUsed, sharedLimit) : 0;
 			state.accountUsed = boundedUsage(parsed.accountUsed ?? legacyUsed, INITIAL_ACCOUNT_QUERY_QUOTA);
 			state.zoneUsed = Object.fromEntries(Object.entries(parsed.zoneUsed ?? {}).map(([zoneId, used]) => [zoneId, boundedUsage(used, INITIAL_ZONE_QUERY_QUOTA)]));
 		}
@@ -10697,8 +10798,14 @@ async function loadInitialGraphqlQuota(db, accountId, now) {
 			return bounded === null ? [] : [[zoneId, bounded]];
 		}));
 		state.pausedUntil = Number.isFinite(parsed.pausedUntil) && Number(parsed.pausedUntil) > now ? Number(parsed.pausedUntil) : null;
+		state.accountPausedUntil = boundedPauseAt(parsed.accountPausedUntil, now);
+		state.zonePausedUntil = Object.fromEntries(Object.entries(parsed.zonePausedUntil ?? {}).flatMap(([zoneId, until]) => {
+			const bounded = boundedPauseAt(until, now);
+			return bounded === null ? [] : [[zoneId, bounded]];
+		}));
+		state.sharedNextAdmissionAt = boundedFutureAdmissionAt(parsed.sharedNextAdmissionAt, now);
 	} catch {}
-	return new InitialGraphqlQuota(state);
+	return new InitialGraphqlQuota(state, sharedLimit);
 }
 async function saveInitialGraphqlQuota(db, accountId, quota) {
 	const now = Date.now();
@@ -10712,6 +10819,14 @@ function boundedUsage(value, limit) {
 function boundedAdmissionAt(value, now) {
 	const parsed = Number(value);
 	return Number.isFinite(parsed) && parsed <= now && parsed > now - GRAPHQL_SCOPE_INTERVAL_MS ? parsed : null;
+}
+function boundedFutureAdmissionAt(value, now) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > now - GRAPHQL_SCOPE_INTERVAL_MS && parsed < now + GRAPHQL_WINDOW_MS ? parsed : null;
+}
+function boundedPauseAt(value, now) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed > now ? parsed : null;
 }
 async function acquireInitialIngestionLease(db, accountId, holder) {
 	const now = Date.now();
@@ -11065,7 +11180,12 @@ var src_default = {
 		ctx.waitUntil((async () => {
 			const activeEnv = await configuredEnv(env);
 			if (!activeEnv) return;
-			await Promise.all([runMonitor(activeEnv).catch((error) => console.error("[Brolly] monitor failed", error)), resumeInitialIngestion(activeEnv).catch((error) => console.error("[Brolly] initial import failed", error))]);
+			const state = await initialIngestionSchedulingState(activeEnv.DB, activeEnv.BROLLY_ACCOUNT_ID);
+			if (state.importActive && !state.onboardingComplete) {
+				await resumeInitialIngestion(activeEnv).catch((error) => console.error("[Brolly] initial import failed", error));
+				return;
+			}
+			if (state.onboardingComplete) await Promise.all([runMonitor(activeEnv, { deferCapabilityDiscovery: state.importActive }).catch((error) => console.error("[Brolly] monitor failed", error)), state.importActive ? resumeInitialIngestion(activeEnv).catch((error) => console.error("[Brolly] initial import failed", error)) : Promise.resolve()]);
 		})());
 	},
 	async fetch(request, env, ctx) {
