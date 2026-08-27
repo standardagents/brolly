@@ -1140,7 +1140,10 @@ var PRODUCT_USAGE_DEFINITIONS = [
 		resourceDimension: "dataset",
 		parentDimension: "zoneTag"
 	})], ["queries", "storage_bytes"]),
-	definition("zones", "Zones", 30, "zone", [dataset("httpRequestsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "count"), metric$1("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"])], { root: "zone" })]),
+	definition("zones", "Zones", 30, "zone", [dataset("httpRequests1dGroups", "date", "date", [metric$1("requests", "requests", "sum", ["requests"]), metric$1("bandwidth_bytes", "bytes", "sum", ["bytes"])], { root: "zone" }), dataset("httpRequestsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "count"), metric$1("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"])], {
+		root: "zone",
+		fallbackFor: "httpRequests1dGroups"
+	})]),
 	definition("email", "Email", 30, "zone", [dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric$1("sent", "count", "count")], { root: "zone" }), dataset("emailRoutingAdaptiveGroups", "time", "datetime", [metric$1("routed", "count", "count")], { root: "zone" })])
 ];
 var BY_COLLECTOR = new Map(PRODUCT_USAGE_DEFINITIONS.map((item) => [item.collector, item]));
@@ -1306,7 +1309,8 @@ var PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap((product) => product.da
 	retentionDays: product.retentionDays,
 	kind: "product",
 	product,
-	source
+	source,
+	fallbackFor: source.fallbackFor
 })));
 var HISTORICAL_DATASETS = [...SPECIAL_DATASETS, ...PRODUCT_DATASETS];
 var DATASET_BY_NAME = new Map(HISTORICAL_DATASETS.map((item) => [item.dataset, item]));
@@ -1328,12 +1332,15 @@ var HistoricalAnalyticsClient = class {
 		this.options = options;
 	}
 	async discoverCapabilities() {
-		const account = HISTORICAL_DATASETS.filter((item) => item.root === "account");
-		const zones = HISTORICAL_DATASETS.filter((item) => item.root === "zone");
+		const account = HISTORICAL_DATASETS.filter((item) => item.root === "account" && !item.fallbackFor);
+		const zones = HISTORICAL_DATASETS.filter((item) => item.root === "zone" && !item.fallbackFor);
+		const fallbacks = HISTORICAL_DATASETS.filter((item) => item.root === "zone" && item.fallbackFor);
 		const capabilities = [];
 		for (let offset = 0; offset < account.length; offset += SETTINGS_BATCH) {
-			const batch = account.slice(offset, offset + SETTINGS_BATCH);
-			capabilities.push(...await this.accountSettingsIsolated(batch));
+			const batch = account.slice(offset, offset + SETTINGS_BATCH).filter((spec) => !hasCapability(capabilities, spec.dataset, null));
+			if (!batch.length) continue;
+			const discovered = await this.accountSettingsIsolated(batch);
+			capabilities.push(...discovered);
 		}
 		let zoneIds;
 		try {
@@ -1350,39 +1357,30 @@ var HistoricalAnalyticsClient = class {
 		const settingsBatchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
 		const zoneBatches = Array.from({ length: Math.ceil(zoneIds.length / settingsBatchSize) }, (_, index) => zoneIds.slice(index * settingsBatchSize, (index + 1) * settingsBatchSize));
 		for (let offset = 0; offset < zoneBatches.length; offset += 6) {
-			const discovered = await Promise.all(zoneBatches.slice(offset, offset + 6).map((batch) => this.zoneSettings(zones, batch)));
-			capabilities.push(...discovered.flat());
+			const values = (await Promise.all(zoneBatches.slice(offset, offset + 6).map((batch) => {
+				const missing = zones.filter((spec) => batch.some((zoneId) => !hasCapability(capabilities, spec.dataset, zoneId)));
+				return missing.length ? this.zoneSettings(missing, batch) : Promise.resolve([]);
+			}))).flat();
+			capabilities.push(...values);
+		}
+		for (const fallback of fallbacks) {
+			const missingZones = zoneIds.filter((zoneId) => {
+				const preferred = capabilities.find((item) => item.dataset === fallback.fallbackFor && item.zoneId === zoneId);
+				return preferred && !preferred.enabled && !hasCapability(capabilities, fallback.dataset, zoneId);
+			});
+			for (let offset = 0; offset < missingZones.length; offset += 6) {
+				const values = (await Promise.all(missingZones.slice(offset, offset + 6).map((zoneId) => this.zoneSettings([fallback], [zoneId])))).flat();
+				capabilities.push(...values);
+			}
 		}
 		return capabilities;
 	}
 	async collectorCapabilities() {
-		const checkedAt = Date.now();
 		const discovered = await this.discoverCapabilities();
-		return [...HISTORICAL_DATASETS.map((spec) => {
-			const applicable = discovered.filter((item) => item.dataset === spec.dataset).filter((item) => item.applicable);
-			const enabled = applicable.filter((item) => item.enabled);
-			const unavailable = applicable.filter((item) => !item.enabled);
-			const noZones = spec.root === "zone" && applicable.length === 0;
-			const maxDuration = minimum(enabled.map((item) => item.maxDurationSeconds));
-			const retention = minimum(enabled.map((item) => item.notOlderThanSeconds));
-			const pageSize = minimum(enabled.map((item) => item.maxPageSize));
-			const state = noZones ? "healthy" : unavailable.some((item) => item.state === "permission_denied") ? "permission_denied" : unavailable.length || enabled.length === 0 ? "unavailable" : "healthy";
-			const detail = noZones ? "The connected account has no zones." : unavailable.length ? spec.root === "zone" ? `${enabled.length} of ${applicable.length} zone partitions are available. ${unavailable[0]?.detail ?? ""}`.trim() : unavailable[0]?.detail ?? "Cloudflare did not expose this Analytics dataset." : `Available with page size ${pageSize ?? "unknown"} and duration limit ${maxDuration ?? "unknown"} seconds`;
-			return {
-				accountId: this.env.BROLLY_ACCOUNT_ID,
-				collectorKey: spec.collector,
-				dataset: spec.dataset,
-				available: noZones || enabled.length > 0,
-				retentionDays: retention === null ? null : Math.floor(retention / 86400),
-				samplingBehavior: "Dataset sampling follows Cloudflare Analytics settings",
-				finestScope: spec.scope,
-				lastVerifiedAt: checkedAt,
-				errorCode: state === "healthy" ? null : state,
-				humanExplanation: detail,
-				state,
-				watermarkAt: null
-			};
-		}), ...catalogCapabilityGaps(this.env.BROLLY_ACCOUNT_ID, checkedAt, new Set(HISTORICAL_DATASETS.map((item) => item.family)))];
+		return collectorCoverageFromCapabilities(this.env.BROLLY_ACCOUNT_ID, discovered, Date.now());
+	}
+	async zoneIds() {
+		return this.zoneProvider ? this.zoneProvider() : this.listZoneIds();
 	}
 	async collect(request) {
 		const spec = DATASET_BY_NAME.get(request.dataset);
@@ -1569,8 +1567,7 @@ var HistoricalAnalyticsClient = class {
 		return zoneIds;
 	}
 	async graphql(query, variables, logicalQueries, scope) {
-		await this.options.rateBudget?.admit(scope);
-		this.options.rateBudget?.charge(scope, logicalQueries);
+		await this.options.rateBudget?.admit(scope, logicalQueries);
 		this.budget.charge("apiCalls");
 		this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
 		const response = await fetch(`${API$3}/graphql`, {
@@ -1587,7 +1584,22 @@ var HistoricalAnalyticsClient = class {
 			signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS$1)])
 		});
 		const payload = await response.json().catch(() => ({}));
-		if (response.status === 429 || isGraphqlRateLimit(payload.errors)) throw new HistoricalRateLimitError(response.status, rateLimitResetAt(response.headers), payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached");
+		if (response.status === 429 || isGraphqlRateLimit(payload.errors)) {
+			const message = payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached";
+			const telemetry = {
+				occurredAt: Date.now(),
+				status: response.status,
+				scopeKind: scope.kind,
+				logicalQueries,
+				accountBasedRequested: this.options.accountBasedRateLimit === true,
+				retryAfter: response.headers.get("retry-after"),
+				rateLimit: response.headers.get("ratelimit"),
+				rateLimitPolicy: response.headers.get("ratelimit-policy")
+			};
+			const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
+			this.options.rateBudget?.pauseUntil(retryAt);
+			throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
+		}
 		if (!response.ok || payload.errors?.length) throw new HistoricalAnalyticsError(response.status, payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
 		if (!payload.data) throw new HistoricalAnalyticsError(response.status, "Cloudflare Analytics returned no data");
 		return payload.data;
@@ -1597,6 +1609,37 @@ var HistoricalAnalyticsClient = class {
 		return this.tokenPromise;
 	}
 };
+/** Convert raw settings discovery into the monitor-owned coverage records. */
+function collectorCoverageFromCapabilities(accountId, discovered, checkedAt = Date.now()) {
+	return [...HISTORICAL_DATASETS.filter((spec) => !spec.fallbackFor).map((spec) => {
+		const values = discovered.filter((item) => item.dataset === spec.dataset);
+		const fallback = HISTORICAL_DATASETS.find((item) => item.fallbackFor === spec.dataset);
+		const fallbackValues = fallback ? discovered.filter((item) => item.dataset === fallback.dataset) : [];
+		const applicable = values.filter((item) => item.applicable).map((value) => value.enabled ? value : fallbackValues.find((candidate) => candidate.zoneId === value.zoneId && candidate.enabled) ?? value);
+		const enabled = applicable.filter((item) => item.enabled);
+		const unavailable = applicable.filter((item) => !item.enabled);
+		const noZones = spec.root === "zone" && applicable.length === 0;
+		const maxDuration = minimum(enabled.map((item) => item.maxDurationSeconds));
+		const retention = minimum(enabled.map((item) => item.notOlderThanSeconds));
+		const pageSize = minimum(enabled.map((item) => item.maxPageSize));
+		const state = noZones ? "healthy" : unavailable.some((item) => item.state === "permission_denied") ? "permission_denied" : unavailable.length || enabled.length === 0 ? "unavailable" : "healthy";
+		const detail = noZones ? "The connected account has no zones." : unavailable.length ? spec.root === "zone" ? `${enabled.length} of ${applicable.length} zone partitions are available. ${unavailable[0]?.detail ?? ""}`.trim() : unavailable[0]?.detail ?? "Cloudflare did not expose this Analytics dataset." : `Available with page size ${pageSize ?? "unknown"} and duration limit ${maxDuration ?? "unknown"} seconds`;
+		return {
+			accountId,
+			collectorKey: spec.collector,
+			dataset: spec.dataset,
+			available: noZones || enabled.length > 0,
+			retentionDays: retention === null ? null : Math.floor(retention / 86400),
+			samplingBehavior: "Dataset sampling follows Cloudflare Analytics settings",
+			finestScope: spec.scope,
+			lastVerifiedAt: checkedAt,
+			errorCode: state === "healthy" ? null : state,
+			humanExplanation: detail,
+			state,
+			watermarkAt: null
+		};
+	}), ...catalogCapabilityGaps(accountId, checkedAt, new Set(HISTORICAL_DATASETS.map((item) => item.family)))];
+}
 var HistoricalAnalyticsError = class extends Error {
 	status;
 	constructor(status, message) {
@@ -1607,9 +1650,13 @@ var HistoricalAnalyticsError = class extends Error {
 };
 var HistoricalRateLimitError = class extends HistoricalAnalyticsError {
 	retryAt;
-	constructor(status, retryAt, message) {
+	telemetry;
+	remote;
+	constructor(status, retryAt, message, telemetry, remote = false) {
 		super(status, message);
 		this.retryAt = retryAt;
+		this.telemetry = telemetry;
+		this.remote = remote;
 		this.name = "HistoricalRateLimitError";
 	}
 };
@@ -1850,16 +1897,29 @@ function isBudgetError(error) {
 function isGraphqlRateLimit(errors) {
 	return Boolean(errors?.some((error) => error.extensions?.code?.toLowerCase() === "budget" || /rate.?limit|query budget|quota exceeded|too many requests/i.test(error.message ?? "")));
 }
-function rateLimitResetAt(headers, now = Date.now()) {
+function rateLimitTelemetryDetail(value) {
+	return [
+		`scope=${value.scopeKind}`,
+		`logicalQueries=${value.logicalQueries}`,
+		value.retryAfter ? `retry-after=${value.retryAfter}` : "",
+		value.rateLimit ? `ratelimit=${value.rateLimit}` : "",
+		value.rateLimitPolicy ? `ratelimit-policy=${value.rateLimitPolicy}` : ""
+	].filter(Boolean).join(", ");
+}
+function rateLimitResetAt(headers, message, now = Date.now()) {
+	const floor = /after\s+5\s+minutes|five\s+minutes/i.test(message) ? now + 3e5 : now;
 	const retryAfter = headers.get("retry-after");
 	if (retryAfter) {
 		const seconds = Number(retryAfter);
-		if (Number.isFinite(seconds) && seconds >= 0) return now + seconds * 1e3;
+		if (Number.isFinite(seconds) && seconds >= 0) return Math.max(floor, now + seconds * 1e3);
 		const timestamp = Date.parse(retryAfter);
-		if (Number.isFinite(timestamp)) return Math.max(now, timestamp);
+		if (Number.isFinite(timestamp)) return Math.max(floor, timestamp);
 	}
 	const resetSeconds = headers.get("ratelimit")?.match(/(?:^|;)\s*t=(\d+)/i)?.[1];
-	return now + (resetSeconds ? Number(resetSeconds) * 1e3 : 3e5);
+	return Math.max(floor, now + (resetSeconds ? Number(resetSeconds) * 1e3 : 3e5));
+}
+function hasCapability(capabilities, dataset, zoneId) {
+	return capabilities.some((item) => item.dataset === dataset && item.zoneId === zoneId);
 }
 function unavailableState(error) {
 	return /permission|unauthoriz|forbidden|access denied|not authorized/i.test(errorMessage$2(error)) ? "permission_denied" : "unavailable";
@@ -2398,58 +2458,92 @@ var CloudflareClient = class {
 		const coverage = [];
 		let complete = true;
 		let pages = 0;
-		for (const source of definition.datasets) try {
-			const zoneIds = source.root === "zone" ? await this.zoneIds() : [];
-			if (source.root === "zone" && zoneIds.length === 0) {
+		const datasetCoverage = [];
+		for (const source of definition.datasets) {
+			let zoneIds = [];
+			try {
+				zoneIds = source.root === "zone" ? await this.zoneIds() : [];
+				if (source.root === "zone" && zoneIds.length === 0) {
+					coverage.push(...source.metrics.map((item) => ({
+						family: definition.family,
+						metric: item.metric,
+						finestScope: "zone",
+						state: "healthy",
+						checkedAt: Date.now(),
+						detail: "The connected account has no zones."
+					})));
+					datasetCoverage.push({
+						dataset: source.dataset,
+						scopeKeys: ["__no_zones__"],
+						state: "measured"
+					});
+					continue;
+				}
+				this.budget.charge("apiCalls");
+				this.ledgerBudget?.charge("pagesPerDataset");
+				this.ledgerBudget?.charge("graphqlQueries");
+				const response = await fetch(`${API$2}/graphql`, {
+					method: "POST",
+					headers: authHeaders(await this.token()),
+					body: JSON.stringify({
+						query: buildProductDatasetQuery(definition, source),
+						variables: productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, since, until, zoneIds)
+					}),
+					signal: this.budget.signal
+				});
+				if (!response.ok) throw await cloudflareApiError(response);
+				const payload = await response.json();
+				if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
+				const roots = (source.root ?? "account") === "zone" ? payload.data?.viewer?.zones ?? [] : payload.data?.viewer?.accounts ?? [];
+				samples.push(...normalizeProductDataset(definition, source, roots, this.env.BROLLY_ACCOUNT_ID, since, until));
+				const truncated = roots.some((root) => Array.isArray(root[source.alias]) && root[source.alias].length >= 1e4);
 				coverage.push(...source.metrics.map((item) => ({
 					family: definition.family,
 					metric: item.metric,
-					finestScope: "zone",
-					state: "healthy",
+					finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+					state: truncated ? "delayed" : "healthy",
 					checkedAt: Date.now(),
-					detail: "The connected account has no zones."
+					detail: truncated ? `${source.dataset} reached its bounded 10,000-row daily limit; retained rows are marked partial` : void 0
 				})));
-				continue;
+				if (source.root === "zone") {
+					const returned = new Set(roots.flatMap((root) => typeof root.zoneTag === "string" ? [root.zoneTag] : []));
+					for (const zoneId of zoneIds) datasetCoverage.push(returned.has(zoneId) ? {
+						dataset: source.dataset,
+						scopeKeys: [zoneId],
+						state: truncated ? "partial" : "measured",
+						...truncated ? { reason: `${source.dataset} reached its bounded 10,000-row daily limit` } : {}
+					} : {
+						dataset: source.dataset,
+						scopeKeys: [zoneId],
+						state: "unavailable",
+						reason: `${source.dataset} returned no node for this authorized zone.`
+					});
+				} else datasetCoverage.push({
+					dataset: source.dataset,
+					scopeKeys: [""],
+					state: truncated ? "partial" : "measured",
+					...truncated ? { reason: `${source.dataset} reached its bounded 10,000-row daily limit` } : {}
+				});
+				pages += 1;
+			} catch (error) {
+				if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
+				complete = false;
+				const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
+				coverage.push(...source.metrics.map((item) => ({
+					family: definition.family,
+					metric: item.metric,
+					finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
+					state,
+					checkedAt: Date.now(),
+					detail: `${source.dataset}: ${error instanceof Error ? error.message : String(error)}`
+				})));
+				datasetCoverage.push({
+					dataset: source.dataset,
+					scopeKeys: source.root === "zone" ? zoneIds : [""],
+					state: "unavailable",
+					reason: error instanceof Error ? error.message : String(error)
+				});
 			}
-			this.budget.charge("apiCalls");
-			this.ledgerBudget?.charge("pagesPerDataset");
-			this.ledgerBudget?.charge("graphqlQueries");
-			const response = await fetch(`${API$2}/graphql`, {
-				method: "POST",
-				headers: authHeaders(await this.token()),
-				body: JSON.stringify({
-					query: buildProductDatasetQuery(definition, source),
-					variables: productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, since, until, zoneIds)
-				}),
-				signal: this.budget.signal
-			});
-			if (!response.ok) throw await cloudflareApiError(response);
-			const payload = await response.json();
-			if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join("; "));
-			const roots = (source.root ?? "account") === "zone" ? payload.data?.viewer?.zones ?? [] : payload.data?.viewer?.accounts ?? [];
-			samples.push(...normalizeProductDataset(definition, source, roots, this.env.BROLLY_ACCOUNT_ID, since, until));
-			const truncated = roots.some((root) => Array.isArray(root[source.alias]) && root[source.alias].length >= 1e4);
-			coverage.push(...source.metrics.map((item) => ({
-				family: definition.family,
-				metric: item.metric,
-				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
-				state: truncated ? "delayed" : "healthy",
-				checkedAt: Date.now(),
-				detail: truncated ? `${source.dataset} reached its bounded 10,000-row daily limit; retained rows are marked partial` : void 0
-			})));
-			pages += 1;
-		} catch (error) {
-			if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
-			complete = false;
-			const state = error instanceof CloudflareApiError && error.status === 403 ? "permission_denied" : "unavailable";
-			coverage.push(...source.metrics.map((item) => ({
-				family: definition.family,
-				metric: item.metric,
-				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? definition.scope : "account",
-				state,
-				checkedAt: Date.now(),
-				detail: `${source.dataset}: ${error instanceof Error ? error.message : String(error)}`
-			})));
 		}
 		coverage.push(...definition.billingOnlyMetrics.map((item) => ({
 			family: definition.family,
@@ -2466,7 +2560,8 @@ var CloudflareClient = class {
 			continuation: null,
 			complete,
 			pages,
-			watermarkAt: until
+			watermarkAt: until,
+			datasetCoverage
 		};
 	}
 	async billingUsage(since, until) {
@@ -4351,7 +4446,7 @@ async function reconcileBilling(env, client, budget, now = Date.now(), window) {
 	const effectiveStart = effectiveBillingStart(boundedRecords, startsAt);
 	const missingRanges = window?.recordGaps ? billingMissingRanges(boundedRecords, effectiveStart, endsAt) : [];
 	const gapDetail = missingRanges.length ? `Billing data is missing for ${missingRanges.map((range) => `${range.from} through ${range.to}`).join(", ")}` : void 0;
-	if (gapDetail) chargeMeta$3(budget, (await env.DB.prepare(`INSERT INTO metric_coverage(family,metric,finest_scope,state,detail,checked_at)
+	if (gapDetail) chargeMeta$4(budget, (await env.DB.prepare(`INSERT INTO metric_coverage(family,metric,finest_scope,state,detail,checked_at)
        VALUES('billing','initial_import_gaps','account','delayed',?1,?2)
        ON CONFLICT(family,metric) DO NOTHING`).bind(gapDetail, nowValue).run()).meta);
 	const authoritativeCostUsd = [...cycles.values()].reduce((total, cycle) => total + cycle.cost, 0);
@@ -4515,7 +4610,7 @@ async function allocateAuthoritativeCosts(db, accountId, records, timeZone, budg
          AND r.resource_type NOT IN ('account','product')
          AND NOT EXISTS (SELECT 1 FROM resources child WHERE child.parent_resource_id=r.id)
          AND u.estimated_cost_usd>0 LIMIT 5000`).bind(accountId, item.family, item.day).all();
-		chargeMeta$3(budget, rows.meta);
+		chargeMeta$4(budget, rows.meta);
 		const estimate = rows.results.reduce((total, row) => total + row.estimated_cost_usd, 0);
 		if (estimate <= 0) continue;
 		await runBatches$3(db, rows.results.map((row) => db.prepare(`UPDATE usage_daily SET authoritative_allocated_cost_usd=?3,revision=revision+1,revised_at=?4
@@ -4525,10 +4620,10 @@ async function allocateAuthoritativeCosts(db, accountId, records, timeZone, budg
 async function runBatches$3(db, statements, budget) {
 	for (let offset = 0; offset < statements.length; offset += MAX_BATCH$2) {
 		const results = await db.batch(statements.slice(offset, offset + MAX_BATCH$2));
-		for (const result of results) chargeMeta$3(budget, result.meta);
+		for (const result of results) chargeMeta$4(budget, result.meta);
 	}
 }
-function chargeMeta$3(budget, meta) {
+function chargeMeta$4(budget, meta) {
 	budget?.charge("d1RowsRead", meta.rows_read ?? 0);
 	budget?.charge("d1RowsWritten", meta.rows_written ?? meta.changes ?? 0);
 }
@@ -4572,6 +4667,278 @@ function safeDate(value, fallback) {
 	return Number.isFinite(parsed) ? parsed : fallback;
 }
 //#endregion
+//#region src/coverage-intervals.ts
+var SPECIAL_METRIC_SOURCES = {
+	"billing:authoritative_usage": [{
+		alternatives: ["billable-usage"],
+		root: "account"
+	}],
+	"workers:requests": [{
+		alternatives: ["workersInvocationsAdaptive"],
+		root: "account"
+	}],
+	"workers:cpu_ms": [{
+		alternatives: ["workersInvocationsAdaptive"],
+		root: "account"
+	}],
+	"workers:cache_requests": [{
+		alternatives: ["billable-usage"],
+		root: "account"
+	}],
+	"durable_objects:requests": [{
+		alternatives: ["durableObjectsInvocationsAdaptiveGroups"],
+		root: "account"
+	}],
+	"durable_objects:duration_gb_seconds": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:incoming_websocket_messages": [{
+		alternatives: ["durableObjectsInvocationsAdaptiveGroups"],
+		root: "account"
+	}, {
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:rows_read": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:rows_written": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:kv_read_units": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:kv_write_units": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:kv_delete_requests": [{
+		alternatives: ["durableObjectsPeriodicGroups"],
+		root: "account"
+	}],
+	"durable_objects:sql_storage_bytes": [{
+		alternatives: ["durableObjectsSqlStorageGroups"],
+		root: "account"
+	}],
+	"durable_objects:kv_storage_bytes": [{
+		alternatives: ["durableObjectsStorageGroups"],
+		root: "account"
+	}]
+};
+var PRODUCT_METRIC_SOURCES = /* @__PURE__ */ new Map();
+for (const product of PRODUCT_USAGE_DEFINITIONS) {
+	for (const source of product.datasets) for (const metric of source.metrics) {
+		const id = `${product.family}:${metric.metric}`;
+		const groups = PRODUCT_METRIC_SOURCES.get(id) ?? [];
+		if (source.fallbackFor) {
+			const group = groups.find((item) => item.alternatives.includes(source.fallbackFor));
+			if (group) group.alternatives.push(source.dataset);
+			else groups.push({
+				alternatives: [source.fallbackFor, source.dataset],
+				root: source.root ?? "account"
+			});
+		} else if (!groups.some((item) => item.alternatives.includes(source.dataset))) groups.push({
+			alternatives: [source.dataset],
+			root: source.root ?? "account"
+		});
+		PRODUCT_METRIC_SOURCES.set(id, groups);
+	}
+	for (const metric of product.billingOnlyMetrics) PRODUCT_METRIC_SOURCES.set(`${product.family}:${metric}`, [{
+		alternatives: ["billable-usage"],
+		root: "account"
+	}]);
+}
+function metricDatasetGroups(metricId) {
+	return SPECIAL_METRIC_SOURCES[metricId] ?? PRODUCT_METRIC_SOURCES.get(metricId) ?? [];
+}
+async function coverageSpansForMetrics(db, accountId, metricIds, fromDay, toDay, scope) {
+	const startsAt = Date.parse(`${fromDay}T00:00:00Z`);
+	const endsAt = Date.parse(`${toDay}T00:00:00Z`) + 864e5;
+	const intervals = await db.prepare(`SELECT dataset,scope_key,starts_at,ends_at,state,reason,recorded_at
+     FROM coverage_intervals WHERE account_id=?1 AND starts_at<?3 AND ends_at>?2
+     ORDER BY recorded_at DESC`).bind(accountId, startsAt, endsAt).all();
+	const pending = (await db.prepare(`SELECT scope_key,starts_at,ends_at FROM backfill_slices
+     WHERE status IN ('pending','running') AND starts_at<?3 AND ends_at>?2
+       AND backfill_job_id IN (SELECT id FROM backfill_jobs WHERE account_id=?1)`).bind(accountId, startsAt, endsAt).all()).results.flatMap((row) => {
+		try {
+			const parsed = JSON.parse(row.scope_key);
+			if (typeof parsed.dataset !== "string") return [];
+			const zoneIds = Array.isArray(parsed.zoneIds) ? parsed.zoneIds.filter((item) => typeof item === "string") : [];
+			return [{
+				dataset: parsed.dataset,
+				scopeKeys: zoneIds.length ? zoneIds : [""],
+				startsAt: row.starts_at,
+				endsAt: row.ends_at
+			}];
+		} catch {
+			return [];
+		}
+	});
+	const requestedZone = zoneIdFromScope(scope);
+	return Object.fromEntries(metricIds.map((metricId) => {
+		const groups = metricDatasetGroups(metricId);
+		const days = [];
+		for (let at = startsAt; at < endsAt; at += 864e5) {
+			const day = new Date(at).toISOString().slice(0, 10);
+			const groupStates = groups.map((group) => groupState(group, at, at + 864e5, intervals.results, pending, requestedZone));
+			days.push({
+				day,
+				...combineRequired(groupStates)
+			});
+		}
+		return [metricId, compactCoverage(days)];
+	}));
+}
+function combineCoverageSpans(coverage, metricIds, fromDay, toDay) {
+	const days = [];
+	for (let at = Date.parse(`${fromDay}T00:00:00Z`); at <= Date.parse(`${toDay}T00:00:00Z`); at += 864e5) {
+		const day = new Date(at).toISOString().slice(0, 10);
+		const values = metricIds.map((metricId) => {
+			const span = coverage[metricId]?.find((item) => item.fromDay <= day && item.toDay >= day);
+			return span ? {
+				state: span.state,
+				reason: span.reason
+			} : { state: "unavailable" };
+		});
+		days.push({
+			day,
+			...combineRequired(values)
+		});
+	}
+	return compactCoverage(days);
+}
+function alternativeCoverageSpans(alternatives, fromDay, toDay) {
+	const days = [];
+	for (let at = Date.parse(`${fromDay}T00:00:00Z`); at <= Date.parse(`${toDay}T00:00:00Z`); at += 864e5) {
+		const day = new Date(at).toISOString().slice(0, 10);
+		const values = alternatives.map((spans) => spans.find((item) => item.fromDay <= day && item.toDay >= day)).filter((item) => Boolean(item));
+		const measured = values.find((item) => item.state === "measured");
+		const partial = values.find((item) => item.state === "partial");
+		const pending = values.find((item) => item.state === "pending");
+		const unavailable = values.find((item) => item.state === "unavailable");
+		const selected = measured ?? partial ?? pending ?? unavailable ?? {
+			state: "unavailable",
+			reason: "No cost evidence was recorded for this interval."
+		};
+		days.push({
+			day,
+			state: selected.state,
+			...selected.reason ? { reason: selected.reason } : {}
+		});
+	}
+	return compactCoverage(days);
+}
+function coverageStateFromResults(results) {
+	if (!results.length) return "unavailable";
+	if (results.every((item) => item.state === "healthy")) return "measured";
+	if (results.some((item) => item.state === "healthy" || item.state === "delayed")) return "partial";
+	return "unavailable";
+}
+/** Persist positive or negative dataset evidence independently from samples. */
+async function saveCoverageInterval(db, value, budget) {
+	if (!(value.endsAt > value.startsAt)) return;
+	const scopeKey = value.scopeKey ?? "";
+	const reason = value.reason?.slice(0, 2e3) ?? null;
+	const recordedAt = value.recordedAt ?? Date.now();
+	const extended = await db.prepare(`UPDATE coverage_intervals SET ends_at=?6,recorded_at=?7
+     WHERE account_id=?1 AND dataset=?2 AND scope_key=?3 AND ends_at=?4
+       AND state=?5 AND COALESCE(reason,'')=COALESCE(?8,'')`).bind(value.accountId, value.dataset, scopeKey, value.startsAt, value.state, value.endsAt, recordedAt, reason).run();
+	chargeMeta$3(budget, extended.meta);
+	if (Number(extended.meta.changes ?? 0) > 0) return;
+	chargeMeta$3(budget, (await db.prepare(`INSERT INTO coverage_intervals(
+       account_id,dataset,scope_key,starts_at,ends_at,state,reason,recorded_at
+     ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+     ON CONFLICT(account_id,dataset,scope_key,starts_at) DO UPDATE SET
+       ends_at=excluded.ends_at,state=excluded.state,reason=excluded.reason,recorded_at=excluded.recorded_at`).bind(value.accountId, value.dataset, scopeKey, value.startsAt, value.endsAt, value.state, reason, recordedAt).run()).meta);
+}
+async function saveCoverageIntervals(db, values, budget) {
+	for (const value of values) await saveCoverageInterval(db, value, budget);
+}
+function chargeMeta$3(budget, meta) {
+	if (!budget) return;
+	budget.charge("d1RowsRead", Number(meta.rows_read ?? 0));
+	budget.charge("d1RowsWritten", Number(meta.rows_written ?? meta.changes ?? 0));
+}
+function groupState(group, startsAt, endsAt, intervals, pending, requestedZone) {
+	const scopes = group.root === "account" ? [""] : requestedZone ? [requestedZone] : [.../* @__PURE__ */ new Set([...intervals.filter((row) => group.alternatives.includes(row.dataset) && row.scope_key).map((row) => row.scope_key), ...pending.filter((row) => group.alternatives.includes(row.dataset)).flatMap((row) => row.scopeKeys).filter(Boolean)])];
+	if (!scopes.length) return {
+		state: "unavailable",
+		reason: "Cloudflare did not expose coverage for this dataset."
+	};
+	return combinePartitions(scopes.map((scopeKey) => {
+		const candidates = intervals.filter((row) => group.alternatives.includes(row.dataset) && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
+		const active = pending.some((row) => group.alternatives.includes(row.dataset) && row.scopeKeys.includes(scopeKey) && row.startsAt < endsAt && row.endsAt > startsAt);
+		if (candidates.find((row) => row.state === "measured")) return { state: "measured" };
+		const partial = candidates.find((row) => row.state === "partial");
+		if (partial) return {
+			state: "partial",
+			reason: partial.reason ?? void 0
+		};
+		if (active) return { state: "pending" };
+		const unavailable = candidates.find((row) => row.state === "unavailable");
+		return unavailable ? {
+			state: "unavailable",
+			reason: unavailable.reason ?? void 0
+		} : {
+			state: "unavailable",
+			reason: "No collection evidence was recorded for this interval."
+		};
+	}));
+}
+function combinePartitions(values) {
+	if (values.every((value) => value.state === "measured")) return { state: "measured" };
+	if (values.some((value) => value.state === "pending")) return { state: "pending" };
+	if (values.some((value) => value.state === "measured" || value.state === "partial")) return {
+		state: "partial",
+		reason: firstReason(values)
+	};
+	return {
+		state: "unavailable",
+		reason: firstReason(values)
+	};
+}
+function combineRequired(values) {
+	if (!values.length) return {
+		state: "unavailable",
+		reason: "This metric has no collection source."
+	};
+	if (values.every((value) => value.state === "measured")) return { state: "measured" };
+	if (values.some((value) => value.state === "pending")) return { state: "pending" };
+	if (values.some((value) => value.state === "partial") || values.some((value) => value.state === "measured") && values.some((value) => value.state === "unavailable")) return {
+		state: "partial",
+		reason: firstReason(values)
+	};
+	return {
+		state: "unavailable",
+		reason: firstReason(values)
+	};
+}
+function compactCoverage(days) {
+	const spans = [];
+	for (const day of days) {
+		const previous = spans.at(-1);
+		if (previous && previous.state === day.state && previous.reason === day.reason) previous.toDay = day.day;
+		else spans.push({
+			fromDay: day.day,
+			toDay: day.day,
+			state: day.state,
+			...day.reason ? { reason: day.reason } : {}
+		});
+	}
+	return spans;
+}
+function firstReason(values) {
+	return values.find((value) => value.reason)?.reason;
+}
+function zoneIdFromScope(scope) {
+	const match = scope.match(/^asset:[^:]+:zone:(.+)$/);
+	return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+//#endregion
 //#region src/ingest.ts
 /** Collects, normalizes, and persists one bounded usage or billing window. */
 async function ingestWindow(options) {
@@ -4582,19 +4949,23 @@ async function ingestWindow(options) {
 			recordGaps: options.historical === true
 		});
 		const state = !result.available ? "permission_denied" : result.error && options.historical ? "delayed" : result.complete ? "healthy" : "delayed";
+		const coverage = [{
+			family: "billing",
+			metric: options.historical ? "initial_import_gaps" : "authoritative_usage",
+			finestScope: "account",
+			state,
+			checkedAt: options.endsAt,
+			detail: result.error ?? (result.available ? void 0 : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries")
+		}];
+		const coverageIntervals = [interval(options, "billable-usage", coverage)];
+		if (options.persist !== false && (!options.historical || result.complete)) await saveCoverageIntervals(options.env.DB, coverageIntervals, options.budget);
 		return {
 			observations: result.records,
 			complete: result.complete,
 			continuation: null,
 			samples: [],
-			coverage: [{
-				family: "billing",
-				metric: options.historical ? "initial_import_gaps" : "authoritative_usage",
-				finestScope: "account",
-				state,
-				checkedAt: options.endsAt,
-				detail: result.error ?? (result.available ? void 0 : "Add Billing Read access to reconcile authoritative usage and billing-cycle boundaries")
-			}],
+			coverage,
+			coverageIntervals,
 			changes: result.alertChanges,
 			watermarkAt: options.endsAt
 		};
@@ -4609,6 +4980,8 @@ async function ingestWindow(options) {
 		historical: options.historical ?? false
 	});
 	const changes = options.persist === false ? [] : await options.ledger.applyObservations(observations, options.timeZone);
+	const coverageIntervals = collectorCoverageIntervals(options, result, definition);
+	if (options.persist !== false) await saveCoverageIntervals(options.env.DB, coverageIntervals, options.budget);
 	return {
 		observations: observations.length,
 		complete: result.complete,
@@ -4617,7 +4990,47 @@ async function ingestWindow(options) {
 		coverage: result.coverage,
 		changes,
 		watermarkAt: result.watermarkAt,
-		normalizedObservations: observations
+		normalizedObservations: observations,
+		coverageIntervals
+	};
+}
+function collectorCoverageIntervals(options, result, definition) {
+	const coverage = result.coverage;
+	if (options.collector === "graphql:workers") return [interval(options, "workersInvocationsAdaptive", coverage.filter((item) => item.metric !== "cache_requests"))];
+	if (options.collector === "graphql:durable-objects") return [
+		["durableObjectsInvocationsAdaptiveGroups", ["requests", "incoming_websocket_messages"]],
+		["durableObjectsPeriodicGroups", [
+			"duration_gb_seconds",
+			"incoming_websocket_messages",
+			"rows_read",
+			"rows_written",
+			"kv_read_units",
+			"kv_write_units",
+			"kv_delete_requests"
+		]],
+		["durableObjectsSqlStorageGroups", ["sql_storage_bytes"]],
+		["durableObjectsStorageGroups", ["kv_storage_bytes"]]
+	].map(([dataset, metrics]) => interval(options, dataset, coverage.filter((item) => metrics.includes(item.metric))));
+	if (!definition) return [];
+	if ("datasetCoverage" in result) return result.datasetCoverage.flatMap((item) => item.scopeKeys.map((scopeKey) => ({
+		accountId: options.env.BROLLY_ACCOUNT_ID,
+		dataset: item.dataset,
+		scopeKey,
+		startsAt: options.startsAt,
+		endsAt: options.endsAt,
+		state: item.state,
+		reason: item.reason
+	})));
+	return definition.datasets.map((source) => interval(options, source.dataset, coverage.filter((item) => source.metrics.some((metric) => metric.metric === item.metric))));
+}
+function interval(options, dataset, coverage) {
+	return {
+		accountId: options.env.BROLLY_ACCOUNT_ID,
+		dataset,
+		startsAt: options.startsAt,
+		endsAt: options.endsAt,
+		state: coverageStateFromResults(coverage),
+		reason: coverage.find((item) => item.state !== "healthy")?.detail
 	};
 }
 async function boundedDurableObjectUsage(client, startsAt, endsAt) {
@@ -6484,6 +6897,12 @@ async function runMonitor(env, options = {}) {
 			...workers.normalizedObservations ?? []
 		];
 		const ledgerChanges = await ledger.applyObservations(ledgerObservations, timeZone);
+		await saveCoverageIntervals(env.DB, [
+			...durableObjects.coverageIntervals,
+			...durableCorrections.coverageIntervals,
+			...workers.coverageIntervals,
+			...workerCorrections.coverageIntervals
+		], ledgerBudget);
 		const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
 		const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
 			timeZone,
@@ -8210,7 +8629,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "fd9233276777ab184999a26f4995ccb892ece14d";
+var BROLLY_RELEASE = "48f252f7b48b24f4f771c19150aeaffedd86136d";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -8535,7 +8954,11 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const family = familyScope(scope);
 	const familyAllotments = family ? includedAllotments.filter((item) => metricFamily(item.metricId) === family) : [];
 	const includedByMetric = new Map(familyAllotments.map((item) => [item.metricId, item.includedPerCycle]));
-	const metrics = Object.fromEntries(definitions.results.filter((definition) => present.has(definition.id)).map((definition) => {
+	const scopeFamily = family ?? scope.match(/^asset:([^:]+):/)?.[1] ?? null;
+	const visibleDefinitions = definitions.results.filter((definition) => present.has(definition.id) || scope === "account" || definition.id.startsWith(`${scopeFamily}:`));
+	const coverage = await coverageSpansForMetrics(db, accountId, visibleDefinitions.map((item) => item.id), from, today, scope);
+	const billingCoverage = (await coverageSpansForMetrics(db, accountId, ["billing:authoritative_usage"], from, today, scope))["billing:authoritative_usage"] ?? [];
+	const metrics = Object.fromEntries(visibleDefinitions.map((definition) => {
 		const included = includedByMetric.get(definition.id);
 		return [definition.id, {
 			key: definition.metric_key,
@@ -8556,13 +8979,18 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		total: [],
 		byMetric: {}
 	};
+	const estimatedCostCoverage = combineCoverageSpans(coverage, visibleDefinitions.filter((item) => Boolean(item.billing_mapping) || Boolean(BILLED_VIA[item.id])).map((item) => item.id), from, today);
+	const costCoverage = scope.startsWith("asset:") ? estimatedCostCoverage : alternativeCoverageSpans([billingCoverage, estimatedCostCoverage], from, today);
 	const body = {
 		scope,
 		resourceId: id,
 		found: Boolean(resource),
 		today,
+		fromDay: from,
 		metrics,
 		series,
+		coverage,
+		costCoverage,
 		estimatedBillableCostSeries: billableCost.total,
 		estimatedBillableCostByMetric: billableCost.byMetric,
 		cycles: cycleRows,
@@ -9322,11 +9750,36 @@ async function ensureInitialIngestionJob(env, options = {}) {
 				accountBasedRateLimit: true,
 				rateBudget: discoveryQuota
 			}).historicalCapabilities();
-			const slices = initialIngestionSlicePlan(now, options.billingAvailable ?? await billingIngestionAvailable(env), capabilities);
+			const billingAvailable = options.billingAvailable ?? await billingIngestionAvailable(env);
+			const slices = initialIngestionSlicePlan(now, billingAvailable, capabilities);
 			for (let offset = 0; offset < slices.length; offset += 100) await env.DB.batch(slices.slice(offset, offset + 100).map((slice) => env.DB.prepare(`INSERT OR IGNORE INTO backfill_slices(
              id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,
              retry_count,next_eligible_at,coverage_status,error,updated_at
            ) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,?9,?10,?8)`).bind(crypto.randomUUID(), jobId, slice.collector, slice.scopeKey, slice.startsAt, slice.endsAt, slice.status, now, slice.coverageStatus, slice.error)));
+			await saveCoverageIntervals(env.DB, slices.filter((slice) => {
+				return parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt).availability === "unavailable";
+			}).map((slice) => {
+				const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
+				return {
+					accountId: env.BROLLY_ACCOUNT_ID,
+					dataset: metadata.dataset,
+					scopeKey: metadata.zoneIds[0] ?? "",
+					startsAt: slice.startsAt,
+					endsAt: slice.endsAt,
+					state: "unavailable",
+					reason: slice.error ?? void 0,
+					recordedAt: now
+				};
+			}));
+			if (!billingAvailable) await saveCoverageInterval(env.DB, {
+				accountId: env.BROLLY_ACCOUNT_ID,
+				dataset: "billable-usage",
+				startsAt: historyStart(now),
+				endsAt: now,
+				state: "unavailable",
+				reason: "Billing Read access is unavailable.",
+				recordedAt: now
+			});
 			await updateInitialJobStatus(env.DB, jobId);
 		} finally {
 			await saveInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, discoveryQuota);
@@ -9722,12 +10175,19 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 	try {
 		if (slice.collector_key === "billing") {
 			if (fetched.error) throw fetched.error;
+			await saveCoverageInterval(env.DB, {
+				accountId: env.BROLLY_ACCOUNT_ID,
+				dataset: "billable-usage",
+				startsAt: slice.starts_at,
+				endsAt: slice.ends_at,
+				state: "measured"
+			}, budget);
 		} else {
 			if (fetched.error) throw fetched.error;
 			const result = fetched.usage;
 			if (!result) throw new Error("Historical Analytics returned no result");
 			if (result.zoneGaps?.length && metadata.zoneIds.length) {
-				await splitZoneGapSlice(env.DB, slice, metadata, result.zoneGaps, budget);
+				await splitZoneGapSlice(env.DB, env.BROLLY_ACCOUNT_ID, slice, metadata, result.zoneGaps, budget);
 				await updateInitialJobStatus(env.DB, jobId, budget);
 				return true;
 			}
@@ -9743,11 +10203,13 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 			await ledger.applyObservations(observations, timeZone);
 			if (!result.complete) {
 				const detail = "Cloudflare's row limit was reached for a single day; retained rows are marked partial";
+				await saveDatasetSliceCoverage(env, slice, metadata, "partial", detail, budget);
 				await markSliceTerminalGap(env.DB, slice, metadata, detail, budget);
 				await finishSlice(env.DB, budget, slice.id, "failed", detail, "partial");
 				await updateInitialJobStatus(env.DB, jobId, budget);
 				return true;
 			}
+			await saveDatasetSliceCoverage(env, slice, metadata, "measured", void 0, budget);
 		}
 		await finishSlice(env.DB, budget, slice.id, "complete", null, "complete");
 		await updateInitialJobStatus(env.DB, jobId, budget);
@@ -9786,7 +10248,10 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 			const previous = Math.min(3, Number(slice.retry_count ?? 0));
 			const failed = previous >= 3;
 			const retryCount = failed ? 3 : previous + 1;
-			if (failed) await markSliceTerminalGap(env.DB, slice, metadata, error.message);
+			if (failed) {
+				await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", error.message, budget);
+				await markSliceTerminalGap(env.DB, slice, metadata, error.message);
+			}
 			await env.DB.prepare(`UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,
            coverage_status=?6,updated_at=?7 WHERE id=?1`).bind(slice.id, failed ? "failed" : "pending", `${failed ? "Single-day import could not fit within" : "Deferred after reaching"} a bounded run limit: ${error.message}`, retryCount, failed ? null : Date.now() + 6e4, failed ? "partial" : "missing", Date.now()).run();
 			await updateInitialJobStatus(env.DB, jobId);
@@ -9800,13 +10265,16 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 			12e4,
 			48e4
 		][retryCount - 1];
-		if (failed) await markSliceTerminalGap(env.DB, slice, metadata, errorMessage$1(error), budget);
+		if (failed) {
+			await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", errorMessage$1(error), budget);
+			await markSliceTerminalGap(env.DB, slice, metadata, errorMessage$1(error), budget);
+		}
 		chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,coverage_status='missing',updated_at=?6 WHERE id=?1`).bind(slice.id, failed ? "failed" : "pending", errorMessage$1(error).slice(0, 2e3), retryCount, nextEligibleAt, Date.now()).run()).meta);
 		await updateInitialJobStatus(env.DB, jobId, budget);
 		return true;
 	}
 }
-async function splitZoneGapSlice(db, slice, metadata, gaps, budget) {
+async function splitZoneGapSlice(db, accountId, slice, metadata, gaps, budget) {
 	const gapByZone = new Map(gaps.map((gap) => [gap.zoneId, gap]));
 	const availableZoneIds = metadata.zoneIds.filter((zoneId) => !gapByZone.has(zoneId));
 	const now = Date.now();
@@ -9830,6 +10298,16 @@ async function splitZoneGapSlice(db, slice, metadata, gaps, budget) {
 	}), slice.starts_at, slice.ends_at, `${metadata.dataset}: ${gap.detail}`, now));
 	const results = await db.batch(statements);
 	if (budget) for (const result of results) chargeMeta(budget, result.meta);
+	for (const gap of gaps) await saveCoverageInterval(db, {
+		accountId,
+		dataset: metadata.dataset,
+		scopeKey: gap.zoneId,
+		startsAt: slice.starts_at,
+		endsAt: slice.ends_at,
+		state: "unavailable",
+		reason: gap.detail,
+		recordedAt: now
+	}, budget);
 }
 async function migrateLegacyZoneSlice(db, slice, metadata, budget) {
 	const now = Date.now();
@@ -9896,7 +10374,10 @@ async function updateInitialJobStatus(db, jobId, budget) {
 	if (budget) chargeMeta(budget, result.meta);
 }
 function rangeSlices(collector, dataset, zoneIds, now, setting) {
-	return boundedRanges(collector, dataset, zoneIds, now, Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86400))), Math.max(1, Math.floor(setting.maxDurationSeconds / 86400)), setting.maxPageSize);
+	const retentionDays = Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86400)));
+	const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, Math.max(1, Math.floor(setting.maxDurationSeconds / 86400)), setting.maxPageSize);
+	if (retentionDays >= HISTORY_DAYS) return ranges;
+	return [gapRange(collector, dataset, zoneIds, historyStart(now, HISTORY_DAYS), historyStart(now, retentionDays), `Cloudflare retains ${retentionDays} days for this dataset.`, true), ...ranges];
 }
 function initialIngestionDays(job, rows) {
 	const end = job.requested_end_at;
@@ -9968,25 +10449,39 @@ function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays,
 	}
 	return slices;
 }
-function gapSlice(collector, dataset, zoneIds, now, detail, retentionDays) {
-	const startsAt = historyStart(now, retentionDays);
+function gapSlice(collector, dataset, zoneIds, now, detail, _retentionDays) {
+	return gapRange(collector, dataset, zoneIds, historyStart(now, HISTORY_DAYS), now, detail);
+}
+function gapRange(collector, dataset, zoneIds, startsAt, endsAt, detail, expected = false) {
 	return {
 		collector,
 		startsAt,
-		endsAt: now,
+		endsAt,
 		scopeKey: serializeMetadata({
 			version: 2,
 			dataset,
 			zoneIds,
 			maxPageSize: 1e4,
-			units: calendarDays(startsAt, now) * Math.max(1, zoneIds.length),
+			units: calendarDays(startsAt, endsAt) * Math.max(1, zoneIds.length),
 			availability: "unavailable",
-			terminalGap: true
+			terminalGap: !expected,
+			expectedGap: expected
 		}),
-		status: "failed",
+		status: expected ? "complete" : "failed",
 		coverageStatus: "missing",
 		error: `${dataset}: ${detail}`
 	};
+}
+async function saveDatasetSliceCoverage(env, slice, metadata, state, reason, budget) {
+	await saveCoverageIntervals(env.DB, (metadata.zoneIds.length ? metadata.zoneIds : [""]).map((scopeKey) => ({
+		accountId: env.BROLLY_ACCOUNT_ID,
+		dataset: metadata.dataset,
+		scopeKey,
+		startsAt: slice.starts_at,
+		endsAt: slice.ends_at,
+		state,
+		reason
+	})), budget);
 }
 function parseSliceMetadata(value, startsAt, endsAt) {
 	try {
@@ -9999,6 +10494,7 @@ function parseSliceMetadata(value, startsAt, endsAt) {
 			units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt),
 			availability: parsed.availability === "unavailable" ? "unavailable" : parsed.availability === "available" ? "available" : void 0,
 			terminalGap: parsed.terminalGap === true,
+			expectedGap: parsed.expectedGap === true,
 			persistenceRetry: parsed.persistenceRetry === true
 		};
 	} catch {}
@@ -10054,10 +10550,12 @@ var InitialGraphqlQuota = class {
 		this.state = state;
 	}
 	get physicalRemaining() {
+		this.rollover();
+		if (this.state.pausedUntil && Date.now() < this.state.pausedUntil) return 0;
 		return Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
 	}
 	get resetAt() {
-		return this.state.windowStartedAt + GRAPHQL_WINDOW_MS;
+		return Math.max(this.state.windowStartedAt + GRAPHQL_WINDOW_MS, this.state.pausedUntil ?? 0);
 	}
 	canCharge(scope, logicalQueries) {
 		this.rollover();
@@ -10103,7 +10601,7 @@ var InitialGraphqlQuota = class {
 			} else timer = setTimeout(done, Math.max(1, waitUntil - Date.now()));
 		});
 	}
-	async admit(scope) {
+	async admit(scope, logicalQueries) {
 		const key = rateScopeKey(scope);
 		const previous = this.admissionTails.get(key) ?? Promise.resolve();
 		let release;
@@ -10117,10 +10615,16 @@ var InitialGraphqlQuota = class {
 			const delay = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS - Date.now();
 			if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 			this.setLastAdmissionAt(scope, Date.now());
+			this.charge(scope, logicalQueries);
 		} finally {
 			release();
 			if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
 		}
+	}
+	pauseUntil(retryAt) {
+		this.state.pausedUntil = Math.max(this.state.pausedUntil ?? 0, Date.now() + 1e3, retryAt);
+		for (const resolve of this.claimWaiters) resolve();
+		this.claimWaiters.clear();
 	}
 	charge(scope, logicalQueries) {
 		if (!this.canCharge(scope, logicalQueries)) throw new HistoricalRateLimitError(429, Math.max(Date.now() + 1e3, this.resetAt), "Initial Analytics quota is reserved until the next Cloudflare window");
@@ -10136,7 +10640,8 @@ var InitialGraphqlQuota = class {
 			accountUsed: this.state.accountUsed,
 			zoneUsed: { ...this.state.zoneUsed },
 			accountLastAdmissionAt: this.state.accountLastAdmissionAt,
-			zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt }
+			zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
+			pausedUntil: this.state.pausedUntil
 		};
 	}
 	lastAdmissionAt(scope) {
@@ -10147,6 +10652,8 @@ var InitialGraphqlQuota = class {
 		else this.state.zoneLastAdmissionAt[scope.zoneId] = admittedAt;
 	}
 	rollover(now = Date.now()) {
+		if (this.state.pausedUntil && now < this.state.pausedUntil) return;
+		this.state.pausedUntil = null;
 		if (now >= this.state.windowStartedAt && now - this.state.windowStartedAt < GRAPHQL_WINDOW_MS) return;
 		this.state.windowStartedAt = now;
 		this.state.physicalUsed = 0;
@@ -10172,7 +10679,8 @@ async function loadInitialGraphqlQuota(db, accountId, now) {
 		accountUsed: 0,
 		zoneUsed: {},
 		accountLastAdmissionAt: null,
-		zoneLastAdmissionAt: {}
+		zoneLastAdmissionAt: {},
+		pausedUntil: null
 	};
 	if (row) try {
 		const parsed = JSON.parse(row.value);
@@ -10188,6 +10696,7 @@ async function loadInitialGraphqlQuota(db, accountId, now) {
 			const bounded = boundedAdmissionAt(admittedAt, now);
 			return bounded === null ? [] : [[zoneId, bounded]];
 		}));
+		state.pausedUntil = Number.isFinite(parsed.pausedUntil) && Number(parsed.pausedUntil) > now ? Number(parsed.pausedUntil) : null;
 	} catch {}
 	return new InitialGraphqlQuota(state);
 }
