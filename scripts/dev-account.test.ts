@@ -23,7 +23,11 @@ describe("real-account local development", () => {
   });
 
   it("drives the production scheduled handler on a minute cadence", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{}"));
+    let now = 61_000;
+    const fetchImpl = vi.fn(async () => {
+      now += 55_000;
+      return new Response("{}");
+    });
     const timers: Array<() => Promise<void>> = [];
     const setTimer = vi.fn((callback: () => Promise<void>) => {
       timers.push(callback);
@@ -32,7 +36,7 @@ describe("real-account local development", () => {
     const clearTimer = vi.fn();
     const scheduler = scheduleMinuteCron("http://100.64.0.1:5173", {
       fetchImpl,
-      now: () => 61_000,
+      now: () => now,
       setTimer,
       clearTimer,
       log: vi.fn(),
@@ -42,7 +46,7 @@ describe("real-account local development", () => {
     expect(setTimer).toHaveBeenNthCalledWith(1, expect.any(Function), 59_000);
     await timers[0]!();
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("http://100.64.0.1:5173/cdn-cgi/handler/scheduled?cron=*+*+*+*+*&format=json");
-    expect(setTimer).toHaveBeenNthCalledWith(2, expect.any(Function), 60_000);
+    expect(setTimer).toHaveBeenNthCalledWith(2, expect.any(Function), 4_000);
 
     scheduler.stop();
     expect(clearTimer).toHaveBeenCalledWith(2);

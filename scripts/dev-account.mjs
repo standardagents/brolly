@@ -154,7 +154,7 @@ export function scheduleMinuteCron(origin, { fetchImpl = fetch, now = Date.now, 
       if (!failing) warn(`Local minute scheduler paused: ${error instanceof Error ? error.message : error}`);
       failing = true;
     } finally {
-      if (!stopped) timer = setTimer(run, 60_000);
+      if (!stopped) timer = setTimer(run, Math.max(250, 60_000 - now() % 60_000));
     }
   };
   const untilNextMinute = Math.max(250, 60_000 - now() % 60_000);

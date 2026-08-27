@@ -25,6 +25,8 @@ const BILLING_MAX_DAYS = 31;
 const INITIAL_KIND = "initial_v2";
 const LEGACY_INITIAL_KIND = "initial";
 const INITIAL_FETCH_CONCURRENCY = 6;
+const INITIAL_FETCH_QUEUE_CAPACITY = 2;
+const GRAPHQL_SCOPE_INTERVAL_MS = 1_000;
 const INITIAL_ACCOUNT_QUERY_QUOTA = 240;
 const INITIAL_ZONE_QUERY_QUOTA = 240;
 const INITIAL_PHYSICAL_GRAPHQL_QUOTA = 700;
@@ -336,11 +338,11 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
     return;
   }
   const ledgerBudget = new LedgerRunBudget(
-    { ...INITIAL_INGESTION_LIMITS, graphqlQueries: quota.physicalRemaining },
+    { ...INITIAL_INGESTION_LIMITS, graphqlQueries: INITIAL_PHYSICAL_GRAPHQL_QUOTA },
     "initial_ingestion",
   );
   const budget = new RunBudget({
-    apiCalls: quota.physicalRemaining + INITIAL_INGESTION_LIMITS.restRequests,
+    apiCalls: INITIAL_PHYSICAL_GRAPHQL_QUOTA + INITIAL_INGESTION_LIMITS.restRequests,
     databaseRows: INITIAL_INGESTION_LIMITS.d1RowsRead + INITIAL_INGESTION_LIMITS.d1RowsWritten,
     samples: 100_000,
     wallMs: INITIAL_INGESTION_LIMITS.wallMs,
@@ -351,17 +353,28 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
   });
   const ledger = new LedgerStore(env.DB, ledgerBudget);
   const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
+  const claimSlice = serializedInitialSliceClaimer(env, ledgerBudget, quota, jobId);
+  const claimReadySlice = async (
+    mode: "analytics" | "billing" | "persistence_retry",
+  ): Promise<ClaimedInitialSlice | null> => {
+    while (canStartInitialSlice(ledgerBudget)) {
+      const result = await claimSlice(mode);
+      if (!isInitialClaimWait(result)) return result;
+      await quota.waitForClaim(result.waitUntil, ledgerBudget.signal);
+    }
+    return null;
+  };
 
   try {
     // Give one persistence-retry slice the first D1 work of this invocation.
     // Other marked slices wait for later invocations so each split decision is
     // based on a fresh run budget.
     if (canStartInitialSlice(ledgerBudget)) {
-      const persistenceProbe = await claimInitialSlice(env, ledgerBudget, quota, jobId, "persistence_retry");
+      const persistenceProbe = await claimReadySlice("persistence_retry");
       if (persistenceProbe) {
         await finalizeInitialSlice(
           env, ledger, ledgerBudget, jobId, timeZone, persistenceProbe,
-          await fetchInitialSlice(env, client, ledgerBudget, persistenceProbe, timeZone),
+          await fetchInitialSlice(env, client, ledgerBudget, quota, persistenceProbe, timeZone),
         );
         if (ledgerBudget.signal.aborted) return;
       }
@@ -370,11 +383,11 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
     // Billing reconciliation performs D1 writes during collection. Finish its
     // due slices before starting the parallel Analytics producer pool.
     while (canStartInitialSlice(ledgerBudget)) {
-      const claimed = await claimInitialSlice(env, ledgerBudget, quota, jobId, "billing");
+      const claimed = await claimReadySlice("billing");
       if (!claimed) break;
       await finalizeInitialSlice(
         env, ledger, ledgerBudget, jobId, timeZone, claimed,
-        await fetchInitialSlice(env, client, ledgerBudget, claimed, timeZone),
+        await fetchInitialSlice(env, client, ledgerBudget, quota, claimed, timeZone),
       );
     }
 
@@ -382,7 +395,7 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
     // consumer owns all normalization and D1 read-modify-write persistence.
     // A new wave handles range and zone partitions created by finalization.
     while (canStartInitialSlice(ledgerBudget)) {
-      const ready = new InitialFetchQueue(INITIAL_FETCH_CONCURRENCY);
+      const ready = new InitialFetchQueue(INITIAL_FETCH_QUEUE_CAPACITY);
       let claimedInWave = 0;
       let producerError: unknown;
       let producerBudgetExhausted = false;
@@ -390,7 +403,7 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
         while (producerError === undefined && !producerBudgetExhausted && canStartInitialSlice(ledgerBudget)) {
           let claimed: ClaimedInitialSlice | null;
           try {
-            claimed = await claimInitialSlice(env, ledgerBudget, quota, jobId, "analytics");
+            claimed = await claimReadySlice("analytics");
           } catch (error) {
             if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) {
               producerBudgetExhausted = true;
@@ -401,7 +414,7 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
           }
           if (!claimed) return;
           claimedInWave += 1;
-          if (!await ready.push(await fetchInitialSlice(env, client, ledgerBudget, claimed, timeZone))) return;
+          if (!await ready.push(await fetchInitialSlice(env, client, ledgerBudget, quota, claimed, timeZone))) return;
         }
       };
       const producerCompletion = Promise.all(
@@ -413,6 +426,10 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
           const fetched = await ready.next();
           if (!fetched) break;
           await finalizeInitialSlice(env, ledger, ledgerBudget, jobId, timeZone, fetched.claimed, fetched);
+          if (ledgerBudget.signal.aborted) {
+            ready.close();
+            break;
+          }
         }
       } catch (error) {
         consumerError = error;
@@ -421,7 +438,13 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
       await producerCompletion;
       if (consumerError !== undefined) throw consumerError;
       if (producerError !== undefined) throw producerError;
+      if (ledgerBudget.signal.aborted) {
+        await requeueRunningInitialSlices(env.DB, jobId);
+        await updateInitialJobStatus(env.DB, jobId);
+        return;
+      }
       if (producerBudgetExhausted) {
+        await requeueRunningInitialSlices(env.DB, jobId);
         await updateInitialJobStatus(env.DB, jobId);
         return;
       }
@@ -465,7 +488,14 @@ interface ClaimedInitialSlice {
   slice: InitialSliceRow;
   metadata: InitialIngestionSliceMetadata;
   persistenceReservation: { reads: number; writes: number } | null;
+  rateScope: HistoricalRateScope | null;
 }
+
+interface InitialClaimWait {
+  waitUntil: number | null;
+}
+
+type InitialClaimResult = ClaimedInitialSlice | InitialClaimWait | null;
 
 interface InitialSliceFetch {
   claimed: ClaimedInitialSlice;
@@ -514,13 +544,38 @@ function canStartInitialSlice(budget: LedgerRunBudget): boolean {
   return budget.remaining("backfillSlices") > 0 && budget.remaining("wallMs") >= 8_000;
 }
 
+function serializedInitialSliceClaimer(
+  env: Env,
+  budget: LedgerRunBudget,
+  quota: InitialGraphqlQuota,
+  jobId: string,
+): (mode: "analytics" | "billing" | "persistence_retry") => Promise<InitialClaimResult> {
+  let previous = Promise.resolve();
+  return async mode => {
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    const turn = previous;
+    previous = current;
+    await turn;
+    try {
+      return await claimInitialSlice(env, budget, quota, jobId, mode);
+    } finally {
+      release();
+    }
+  };
+}
+
+function isInitialClaimWait(result: InitialClaimResult): result is InitialClaimWait {
+  return result !== null && "waitUntil" in result;
+}
+
 async function claimInitialSlice(
   env: Env,
   budget: LedgerRunBudget,
   quota: InitialGraphqlQuota,
   jobId: string,
   mode: "analytics" | "billing" | "persistence_retry",
-): Promise<ClaimedInitialSlice | null> {
+): Promise<InitialClaimResult> {
   const modeCode = mode === "billing" ? 1 : mode === "persistence_retry" ? 2 : 0;
   const candidates = await env.DB.prepare(
     `SELECT * FROM backfill_slices
@@ -534,18 +589,29 @@ async function claimInitialSlice(
   budget.charge("d1RowsRead", candidates.results.length);
   let slice: InitialSliceRow | undefined;
   let metadata: InitialIngestionSliceMetadata | undefined;
+  let earliestAdmission: number | null | undefined;
   for (const candidate of candidates.results) {
     const parsed = parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at);
     if (mode !== "billing" && parsed.zoneIds.length > 1) {
       await migrateLegacyZoneSlice(env.DB, candidate, parsed, budget);
       return claimInitialSlice(env, budget, quota, jobId, mode);
     }
-    if (mode !== "billing" && !quota.canCharge(rateScope(parsed), 1)) continue;
+    if (mode !== "billing") {
+      const admission = quota.claimAdmission(rateScope(parsed), 1);
+      if (admission.kind === "quota") continue;
+      if (admission.kind === "paced") {
+        if (admission.waitUntil === null) earliestAdmission ??= null;
+        else if (earliestAdmission !== null) {
+          earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, admission.waitUntil);
+        }
+        continue;
+      }
+    }
     slice = candidate;
     metadata = parsed;
     break;
   }
-  if (!slice || !metadata) return null;
+  if (!slice || !metadata) return earliestAdmission === undefined ? null : { waitUntil: earliestAdmission };
   const requiredQueries = slice.collector_key === "billing" ? 0 : 1;
   if (budget.remaining("backfillSlices") < 1
     || budget.remaining("d1RowsWritten") < INITIAL_D1_WRITE_RESERVATION + 1
@@ -575,13 +641,16 @@ async function claimInitialSlice(
     budget.charge("d1RowsRead", persistenceReservation.reads);
     budget.charge("d1RowsWritten", persistenceReservation.writes);
   }
-  return { slice, metadata, persistenceReservation };
+  const claimedRateScope = mode === "billing" ? null : rateScope(metadata);
+  if (claimedRateScope) quota.reserveClaim(claimedRateScope);
+  return { slice, metadata, persistenceReservation, rateScope: claimedRateScope };
 }
 
 async function fetchInitialSlice(
   env: Env,
   client: CloudflareClient,
   budget: LedgerRunBudget,
+  quota: InitialGraphqlQuota,
   claimed: ClaimedInitialSlice,
   timeZone: string,
 ): Promise<InitialSliceFetch> {
@@ -607,6 +676,8 @@ async function fetchInitialSlice(
     };
   } catch (error) {
     return { claimed, error };
+  } finally {
+    if (claimed.rateScope) quota.releaseClaim(claimed.rateScope);
   }
 }
 
@@ -621,6 +692,7 @@ async function finalizeInitialSlice(
 ): Promise<boolean> {
   const slice = claimed.slice;
   const metadata = claimed.metadata;
+  const budgetAbortedAtEntry = budget.signal.aborted;
   releasePersistenceReservation(budget, claimed);
   try {
     if (slice.collector_key === "billing") {
@@ -669,6 +741,23 @@ async function finalizeInitialSlice(
       return false;
     }
     if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) {
+      const densityFailure = !budgetAbortedAtEntry
+        && error instanceof LedgerBudgetExceededError
+        && (error.kind === "d1RowsRead" || error.kind === "d1RowsWritten");
+      if (!densityFailure) {
+        const now = Date.now();
+        await env.DB.prepare(
+          `UPDATE backfill_slices SET status='pending',error=?2,next_eligible_at=?3,
+             coverage_status='missing',updated_at=?4 WHERE id=?1`,
+        ).bind(
+          slice.id,
+          `Deferred after the import run reached its bounded limit: ${error.message}`,
+          now + 60_000,
+          now,
+        ).run();
+        await updateInitialJobStatus(env.DB, jobId);
+        return false;
+      }
       if (metadata.persistenceRetry && calendarDays(slice.starts_at, slice.ends_at) > 1) {
         await splitSlice(env.DB, slice, metadata, "bounded persistence budget");
         await updateInitialJobStatus(env.DB, jobId);
@@ -1013,9 +1102,15 @@ interface InitialGraphqlQuotaState {
   physicalUsed: number;
   accountUsed: number;
   zoneUsed: Record<string, number>;
+  accountLastAdmissionAt: number | null;
+  zoneLastAdmissionAt: Record<string, number>;
 }
 
 class InitialGraphqlQuota implements HistoricalRateBudget {
+  private readonly inFlightClaims = new Set<string>();
+  private readonly admissionTails = new Map<string, Promise<void>>();
+  private readonly claimWaiters = new Set<() => void>();
+
   constructor(private readonly state: InitialGraphqlQuotaState) {}
 
   get physicalRemaining(): number {
@@ -1035,6 +1130,63 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       : (this.state.zoneUsed[scope.zoneId] ?? 0) + amount <= INITIAL_ZONE_QUERY_QUOTA;
   }
 
+  claimAdmission(scope: HistoricalRateScope, logicalQueries: number):
+    | { kind: "ready" }
+    | { kind: "paced"; waitUntil: number | null }
+    | { kind: "quota" } {
+    if (!this.canCharge(scope, logicalQueries)) return { kind: "quota" };
+    const key = rateScopeKey(scope);
+    if (this.inFlightClaims.has(key)) return { kind: "paced", waitUntil: null };
+    const waitUntil = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS;
+    return waitUntil > Date.now() ? { kind: "paced", waitUntil } : { kind: "ready" };
+  }
+
+  reserveClaim(scope: HistoricalRateScope): void {
+    this.inFlightClaims.add(rateScopeKey(scope));
+  }
+
+  releaseClaim(scope: HistoricalRateScope): void {
+    this.inFlightClaims.delete(rateScopeKey(scope));
+    for (const resolve of this.claimWaiters) resolve();
+    this.claimWaiters.clear();
+  }
+
+  async waitForClaim(waitUntil: number | null, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    await new Promise<void>(resolve => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        this.claimWaiters.delete(done);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      signal.addEventListener("abort", done, { once: true });
+      if (waitUntil === null) {
+        this.claimWaiters.add(done);
+        timer = setTimeout(done, GRAPHQL_SCOPE_INTERVAL_MS);
+      } else timer = setTimeout(done, Math.max(1, waitUntil - Date.now()));
+    });
+  }
+
+  async admit(scope: HistoricalRateScope): Promise<void> {
+    const key = rateScopeKey(scope);
+    const previous = this.admissionTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const queued = previous.then(() => gate);
+    this.admissionTails.set(key, queued);
+    await previous;
+    try {
+      const delay = this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS - Date.now();
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      this.setLastAdmissionAt(scope, Date.now());
+    } finally {
+      release();
+      if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
+    }
+  }
+
   charge(scope: HistoricalRateScope, logicalQueries: number): void {
     if (!this.canCharge(scope, logicalQueries)) {
       throw new HistoricalRateLimitError(429, Math.max(Date.now() + 1_000, this.resetAt), "Initial Analytics quota is reserved until the next Cloudflare window");
@@ -1051,7 +1203,20 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       physicalUsed: this.state.physicalUsed,
       accountUsed: this.state.accountUsed,
       zoneUsed: { ...this.state.zoneUsed },
+      accountLastAdmissionAt: this.state.accountLastAdmissionAt,
+      zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
     };
+  }
+
+  private lastAdmissionAt(scope: HistoricalRateScope): number {
+    return scope.kind === "account"
+      ? this.state.accountLastAdmissionAt ?? 0
+      : this.state.zoneLastAdmissionAt[scope.zoneId] ?? 0;
+  }
+
+  private setLastAdmissionAt(scope: HistoricalRateScope, admittedAt: number): void {
+    if (scope.kind === "account") this.state.accountLastAdmissionAt = admittedAt;
+    else this.state.zoneLastAdmissionAt[scope.zoneId] = admittedAt;
   }
 
   private rollover(now = Date.now()): void {
@@ -1063,6 +1228,10 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   }
 }
 
+function rateScopeKey(scope: HistoricalRateScope): string {
+  return scope.kind === "account" ? "account" : `zone:${scope.zoneId}`;
+}
+
 function rateScope(metadata: InitialIngestionSliceMetadata): HistoricalRateScope {
   const zoneId = metadata.zoneIds[0];
   return zoneId ? { kind: "zone", zoneId } : { kind: "account" };
@@ -1071,23 +1240,34 @@ function rateScope(metadata: InitialIngestionSliceMetadata): HistoricalRateScope
 async function loadInitialGraphqlQuota(db: D1Database, accountId: string, now: number): Promise<InitialGraphqlQuota> {
   const row = await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`)
     .bind(`${INITIAL_QUOTA_KEY_PREFIX}${accountId}`).first<{ value: string }>();
-  let state: InitialGraphqlQuotaState = { windowStartedAt: now, physicalUsed: 0, accountUsed: 0, zoneUsed: {} };
+  let state: InitialGraphqlQuotaState = {
+    windowStartedAt: now,
+    physicalUsed: 0,
+    accountUsed: 0,
+    zoneUsed: {},
+    accountLastAdmissionAt: null,
+    zoneLastAdmissionAt: {},
+  };
   if (row) {
     try {
       const parsed = JSON.parse(row.value) as Partial<InitialGraphqlQuotaState> & { used?: number };
-      if (Number.isFinite(parsed.windowStartedAt)
-        && now - Number(parsed.windowStartedAt) < GRAPHQL_WINDOW_MS && now >= Number(parsed.windowStartedAt)) {
+      const activeWindow = Number.isFinite(parsed.windowStartedAt)
+        && now - Number(parsed.windowStartedAt) < GRAPHQL_WINDOW_MS && now >= Number(parsed.windowStartedAt);
+      if (activeWindow) {
         const legacyUsed = Number.isFinite(parsed.used) ? Number(parsed.used) : 0;
-        state = {
-          windowStartedAt: Number(parsed.windowStartedAt),
-          physicalUsed: boundedUsage(parsed.physicalUsed ?? legacyUsed, INITIAL_PHYSICAL_GRAPHQL_QUOTA),
-          accountUsed: boundedUsage(parsed.accountUsed ?? legacyUsed, INITIAL_ACCOUNT_QUERY_QUOTA),
-          zoneUsed: Object.fromEntries(Object.entries(parsed.zoneUsed ?? {}).map(([zoneId, used]) => [
-            zoneId,
-            boundedUsage(used, INITIAL_ZONE_QUERY_QUOTA),
-          ])),
-        };
+        state.windowStartedAt = Number(parsed.windowStartedAt);
+        state.physicalUsed = boundedUsage(parsed.physicalUsed ?? legacyUsed, INITIAL_PHYSICAL_GRAPHQL_QUOTA);
+        state.accountUsed = boundedUsage(parsed.accountUsed ?? legacyUsed, INITIAL_ACCOUNT_QUERY_QUOTA);
+        state.zoneUsed = Object.fromEntries(Object.entries(parsed.zoneUsed ?? {}).map(([zoneId, used]) => [
+          zoneId,
+          boundedUsage(used, INITIAL_ZONE_QUERY_QUOTA),
+        ]));
       }
+      state.accountLastAdmissionAt = boundedAdmissionAt(parsed.accountLastAdmissionAt, now);
+      state.zoneLastAdmissionAt = Object.fromEntries(Object.entries(parsed.zoneLastAdmissionAt ?? {}).flatMap(([zoneId, admittedAt]) => {
+        const bounded = boundedAdmissionAt(admittedAt, now);
+        return bounded === null ? [] : [[zoneId, bounded]];
+      }));
     } catch {
       // Corrupt quota state starts a fresh bounded window.
     }
@@ -1114,6 +1294,11 @@ async function saveInitialGraphqlQuota(
 function boundedUsage(value: unknown, limit: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(0, Math.min(limit, parsed)) : 0;
+}
+
+function boundedAdmissionAt(value: unknown, now: number): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed <= now && parsed > now - GRAPHQL_SCOPE_INTERVAL_MS ? parsed : null;
 }
 
 async function acquireInitialIngestionLease(db: D1Database, accountId: string, holder: string): Promise<boolean> {

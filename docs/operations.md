@@ -51,11 +51,14 @@ up to 90 days. Billing Read creates three contiguous slices of no more than 31
 days. Initial ingestion uses Cloudflare's account-based Analytics limiter. Its
 persisted five-minute state reserves 240 logical queries for the account, 240
 for each zone, and a 700-request physical ceiling. Exact-zone work can continue
-when the account allowance is full. One import lease covers browser and cron
-starts. Six Analytics producers feed one serialized D1 consumer. Claimed work
-reserves D1 capacity. A persistence limit requeues the original range for one
-fresh-budget attempt before splitting it. Cloudflare rate limits defer work
-without consuming an import retry. Billing receives reserved REST capacity.
+when the account allowance is full. Requests are paced to Cloudflare's sustained
+limit of one request per second for the account or exact zone. Six Analytics
+producers can use six distinct zone allowances concurrently. One import lease
+covers browser and cron starts. The producers use a two-result buffer before one
+serialized D1 consumer. Claimed work reserves D1 capacity. A fresh per-slice D1
+row-limit failure requeues the original range for one fresh-budget attempt before
+splitting it. Shared run and wall-time limits requeue unfinished slices unchanged.
+Cloudflare rate limits defer work without consuming an import retry. Billing receives reserved REST capacity.
 Monitoring and initial ingestion run concurrently from the cron scheduler.
 Setup can continue while the scheduler finishes eligible slices. One progress
 row combines weighted work across every planned source

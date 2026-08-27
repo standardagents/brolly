@@ -180,23 +180,27 @@ describe("initial ingestion progress", () => {
       `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
        VALUES('parallel-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
     ).bind(now - 7 * DAY_MS, now).run();
-    const metadata = JSON.stringify({
-      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
-    });
     await testD1.db.batch(Array.from({ length: 7 }, (_, index) => testD1!.db.prepare(
       `INSERT INTO backfill_slices(
          id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
        ) VALUES(?1,'parallel-job','graphql:workers',?2,?3,?4,'pending',0,?5,'missing',NULL,?5)`,
-    ).bind(`slice-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS, now)));
+    ).bind(`slice-${index}`, JSON.stringify({
+      version: 2,
+      dataset: "httpRequestsAdaptiveGroups",
+      zoneIds: [(index + 1).toString(16).padStart(32, "0")],
+      maxPageSize: 10_000,
+      units: 1,
+    }), now - (index + 1) * DAY_MS, now - index * DAY_MS, now)));
 
     let inFlight = 0;
     let peakInFlight = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
       await new Promise(resolve => setTimeout(resolve, 5));
       inFlight -= 1;
-      return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } });
+      const zoneId = (JSON.parse(String(init?.body)) as { variables: { zone: string } }).variables.zone;
+      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] } } });
     }));
 
     await runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "parallel-job");
@@ -208,6 +212,73 @@ describe("initial ingestion progress", () => {
     expect(completed?.count).toBe(7);
   });
 
+  it("paces repeated requests to one zone while other zones remain concurrent", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const zoneId = "a".repeat(32);
+    await testD1.db.prepare(
+      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+       VALUES('zone-pace-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+    ).bind(now - 2 * DAY_MS, now).run();
+    await testD1.db.batch(Array.from({ length: 2 }, (_, index) => testD1!.db.prepare(
+      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+       VALUES(?1,'zone-pace-job','graphql:zones',?2,?3,?4,'pending','missing',?4)`,
+    ).bind(`zone-pace-${index}`, JSON.stringify({
+      version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [zoneId], maxPageSize: 10_000, units: 1,
+    }), now - (index + 1) * DAY_MS, now - index * DAY_MS)));
+    const requestTimes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requestTimes.push(Date.now());
+      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] } } });
+    }));
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "zone-pace-job",
+    );
+
+    expect(requestTimes).toHaveLength(2);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+  });
+
+  it("persists account pacing across resumed importer instances", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('persisted-pace-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 2 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('persisted-pace-1','persisted-pace-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - DAY_MS, now),
+    ]);
+    const requestTimes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requestTimes.push(Date.now());
+      return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } });
+    }));
+    const env = { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env;
+
+    await runInitialIngestion(env, "persisted-pace-job");
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('persisted-pace-2','persisted-pace-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - 2 * DAY_MS, now - DAY_MS),
+      testD1.db.prepare(`UPDATE backfill_jobs SET status='pending',updated_at=?2 WHERE id=?1`)
+        .bind("persisted-pace-job", Date.now()),
+    ]);
+    await runInitialIngestion(env, "persisted-pace-job");
+
+    expect(requestTimes).toHaveLength(2);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+  });
+
   it("keeps Analytics fetching active while D1 persistence is serialized", async () => {
     testD1 = createTestD1();
     const now = Date.now();
@@ -215,11 +286,16 @@ describe("initial ingestion progress", () => {
       `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
        VALUES('overlap-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
     ).bind(now - 2 * DAY_MS, now).run();
-    const metadata = JSON.stringify({ version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1 });
     await testD1.db.batch(Array.from({ length: 7 }, (_, index) => testD1!.db.prepare(
       `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
        VALUES(?1,'overlap-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
-    ).bind(`overlap-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)));
+    ).bind(`overlap-${index}`, JSON.stringify({
+      version: 2,
+      dataset: "httpRequestsAdaptiveGroups",
+      zoneIds: [(index + 1).toString(16).padStart(32, "0")],
+      maxPageSize: 10_000,
+      units: 1,
+    }), now - (index + 1) * DAY_MS, now - index * DAY_MS)));
 
     let persistenceStarted = false;
     let seventhFetchStartedDuringPersistence = false;
@@ -233,12 +309,13 @@ describe("initial ingestion progress", () => {
         return baseDb.batch(statements);
       },
     } as unknown as D1Database;
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       const request = fetchCount++;
       if (request >= 6 && persistenceStarted) seventhFetchStartedDuringPersistence = true;
       if (request > 0) await new Promise(resolve => setTimeout(resolve, 5));
-      return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [{
-        dimensions: { date: "2026-08-01", scriptName: "worker" }, sum: { requests: 1, cpuTimeUs: 1 },
+      const zoneId = (JSON.parse(String(init?.body)) as { variables: { zone: string } }).variables.zone;
+      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [{
+        dimensions: { date: "2026-08-01" }, count: 1,
       }] }] } } });
     }));
 
@@ -301,6 +378,56 @@ describe("initial ingestion progress", () => {
     ).all<{ status: string; starts_at: number; ends_at: number }>();
     expect(slices.results.filter(slice => slice.status === "pending")).toHaveLength(2);
     expect(slices.results.find(slice => slice.status === "superseded")).toMatchObject({ starts_at: startsAt, ends_at: endsAt });
+  });
+
+  it("requeues a wall-time stop without marking or splitting the range", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('wall-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 2 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('wall-slice','wall-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 2,
+      }), now - 2 * DAY_MS, now),
+    ]);
+    const baseDb = testD1.db;
+    let movedClock = false;
+    const elapsedDb = {
+      prepare: baseDb.prepare.bind(baseDb),
+      async batch(statements: D1PreparedStatement[]) {
+        const results = await baseDb.batch(statements);
+        if (!movedClock) {
+          movedClock = true;
+          vi.setSystemTime(now + 56_000);
+        }
+        return results;
+      },
+    } as unknown as D1Database;
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+      workersInvocationsAdaptive: [{
+        dimensions: { date: "2026-08-26", scriptName: "worker" }, sum: { requests: 1, cpuTimeUs: 1 },
+      }],
+    }] } } })));
+
+    await runInitialIngestion(
+      { DB: elapsedDb, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "wall-job",
+    );
+
+    const slices = await baseDb.prepare(
+      `SELECT status,scope_key,next_eligible_at FROM backfill_slices WHERE backfill_job_id='wall-job'`,
+    ).all<{ status: string; scope_key: string; next_eligible_at: number | null }>();
+    expect(slices.results).toHaveLength(1);
+    expect(slices.results[0]?.status).toBe("pending");
+    expect(slices.results[0]?.next_eligible_at).toBe(now + 116_000);
+    expect(JSON.parse(slices.results[0]!.scope_key)).not.toHaveProperty("persistenceRetry");
   });
 
   it("holds one D1 lease across overlapping import invocations", async () => {

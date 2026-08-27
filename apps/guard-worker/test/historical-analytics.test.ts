@@ -11,7 +11,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("historical Analytics collection", () => {
   it("uses exact-zone account-based requests and reports an absent zone node", async () => {
     let request: Request | undefined;
-    const rateBudget = { charge: vi.fn() };
+    const rateBudget = { admit: vi.fn(async () => undefined), charge: vi.fn() };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       request = new Request(input, init);
       return Response.json({ data: { viewer: { zones: [] } } });
@@ -39,6 +39,7 @@ describe("historical Analytics collection", () => {
     expect(body.query).toContain("zoneTag: $zone");
     expect(body.query).not.toContain("zoneTag_in");
     expect(body.variables.zone).toBe(zoneId);
+    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "zone", zoneId });
     expect(rateBudget.charge).toHaveBeenCalledWith({ kind: "zone", zoneId }, 1);
     expect(result).toMatchObject({
       complete: false,

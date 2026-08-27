@@ -29,6 +29,7 @@ const SETTINGS_BATCH = 12;
 export type HistoricalRateScope = { kind: "account" } | { kind: "zone"; zoneId: string };
 
 export interface HistoricalRateBudget {
+  admit(scope: HistoricalRateScope): Promise<void>;
   charge(scope: HistoricalRateScope, logicalQueries: number): void;
 }
 
@@ -430,6 +431,7 @@ export class HistoricalAnalyticsClient {
     logicalQueries: number,
     scope: HistoricalRateScope,
   ): Promise<T> {
+    await this.options.rateBudget?.admit(scope);
     this.options.rateBudget?.charge(scope, logicalQueries);
     this.budget.charge("apiCalls");
     this.ledgerBudget?.charge("graphqlQueries", logicalQueries);

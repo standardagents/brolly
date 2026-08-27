@@ -106,12 +106,15 @@ budget left after active safeguards. First-run initial ingestion opts into
 Cloudflare's account-based Analytics limiter. A persisted five-minute window
 reserves 240 logical queries for the account and 240 for each zone. A
 700-request physical ceiling leaves global API capacity for monitoring and
-operator actions. Exact-zone slices use each zone's independent allowance. One
-lease coordinates browser and cron starts. Six Analytics producers feed one
-serialized D1 consumer. Each claimed slice reserves D1 capacity until
-persistence starts. Rate limits keep work pending until the reported reset.
-Persistence exhaustion requeues the range for a fresh-budget attempt before
-range splitting. Reserved REST capacity runs Billing Read before Analytics.
+operator actions. A persisted admission timestamp enforces one request per
+second for the account or exact zone across discovery, collection, and resumed
+invocations. Exact-zone slices use each zone's independent allowance. Six
+producers can fetch from distinct zones concurrently. One lease coordinates
+browser and cron starts. A two-result queue feeds one serialized D1 consumer.
+Each claimed slice reserves D1 capacity until persistence starts. Rate limits
+keep work pending until the reported reset. A fresh per-slice D1 row-limit
+failure requeues the range for a fresh-budget attempt before range splitting.
+Shared run limits requeue unfinished work without changing its range. Reserved REST capacity runs Billing Read before Analytics.
 The cron runs monitoring and initial ingestion concurrently. A lease takeover
 returns interrupted running slices to the pending queue before work resumes.
 
