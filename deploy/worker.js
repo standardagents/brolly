@@ -623,15 +623,16 @@ var MAX_LEDGER_RUN_LIMITS = {
 	wallMs: 55e3
 };
 /**
-* Per-request budget for the one-shot onboarding import.  The import has a
-* smaller Cloudflare request allowance than the recurring monitor so a fresh
-* install cannot crowd out normal monitoring work.
+* Per-run budget for the one-shot onboarding import. Cloudflare allows
+* Account-based Analytics limits provide separate account and zone budgets.
+* The physical request ceiling reserves global API capacity for monitoring.
 */
 var INITIAL_INGESTION_LIMITS = {
 	...MAX_LEDGER_RUN_LIMITS,
-	graphqlQueries: 40,
-	restRequests: 5,
-	wallMs: 25e3
+	graphqlQueries: 700,
+	restRequests: 9,
+	backfillSlices: 100,
+	wallMs: 55e3
 };
 var LedgerBudgetExceededError = class extends Error {
 	kind;
@@ -661,8 +662,13 @@ var LedgerRunBudget = class {
 	signal;
 	startedAt = Date.now();
 	controller = new AbortController();
-	constructor(requested = {}) {
-		this.limits = boundedLimits(requested);
+	constructor(requested = {}, profile = "standard") {
+		const ceilings = profile === "initial_ingestion" ? {
+			...MAX_LEDGER_RUN_LIMITS,
+			graphqlQueries: INITIAL_INGESTION_LIMITS.graphqlQueries,
+			backfillSlices: INITIAL_INGESTION_LIMITS.backfillSlices
+		} : MAX_LEDGER_RUN_LIMITS;
+		this.limits = boundedLimits(requested, ceilings);
 		this.signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(this.limits.wallMs)]);
 	}
 	charge(kind, amount = 1) {
@@ -670,6 +676,10 @@ var LedgerRunBudget = class {
 		this.checkpoint();
 		this.usage[kind] += amount;
 		if (this.usage[kind] > this.limits[kind]) this.trip(kind);
+	}
+	refund(kind, amount = 1) {
+		if (!Number.isFinite(amount) || amount < 0) throw new TypeError(`Invalid ${kind} refund`);
+		this.usage[kind] = Math.max(0, this.usage[kind] - amount);
 	}
 	observePeak(kind, amount) {
 		if (!Number.isFinite(amount) || amount < 0) throw new TypeError(`Invalid ${kind} observation`);
@@ -690,12 +700,12 @@ var LedgerRunBudget = class {
 		throw new LedgerBudgetExceededError(kind, this.usage[kind], this.limits[kind]);
 	}
 };
-function boundedLimits(requested) {
+function boundedLimits(requested, ceilings) {
 	return Object.fromEntries(Object.entries(DEFAULT_LEDGER_RUN_LIMITS).map(([key, fallback]) => {
 		const kind = key;
 		const value = requested[kind] ?? fallback;
 		if (!Number.isFinite(value) || value <= 0) throw new TypeError(`Invalid ${kind} limit`);
-		return [kind, Math.min(value, MAX_LEDGER_RUN_LIMITS[kind])];
+		return [kind, Math.min(value, ceilings[kind])];
 	}));
 }
 //#endregion
@@ -1139,6 +1149,25 @@ function productUsageDefinition(collector) {
 	return BY_COLLECTOR.get(collector);
 }
 function buildProductDatasetQuery(definition, source, limit = 1e4) {
+	const { selection, variableType } = productDatasetSelection(source, limit);
+	if ((source.root ?? "account") === "zone") return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
+	return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
+}
+/** Build the exact-zone form required by Cloudflare's account-based limiter. */
+function buildExactZoneProductDatasetQuery(definition, source, limit = 1e4) {
+	if ((source.root ?? "account") !== "zone") throw new TypeError(`${source.dataset} is not a zone dataset`);
+	const { selection, variableType } = productDatasetSelection(source, limit);
+	return `query BrollyExactZoneProductUsage($zone: string!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag ${selection} } } }`;
+}
+function exactZoneProductDatasetVariables(source, startsAt, endsAt, zoneId) {
+	const variables = productDatasetVariables(source, "", startsAt, endsAt, [zoneId]);
+	return {
+		zone: zoneId,
+		start: String(variables.start),
+		end: String(variables.end)
+	};
+}
+function productDatasetSelection(source, limit) {
 	const variableType = source.timeKind === "date" ? "Date" : "Time";
 	const filter = source.timeKind === "date" ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end` : `${source.timeField}_geq: $start, ${source.timeField}_lt: $end`;
 	const aggregates = [...new Set(source.metrics.map((item) => item.aggregate))];
@@ -1151,9 +1180,10 @@ function buildProductDatasetQuery(definition, source, limit = 1e4) {
 		})
 	].filter(Boolean).join("\n");
 	const boundedLimit = Math.max(1, Math.min(1e4, Math.floor(limit)));
-	const selection = `${source.alias}: ${source.dataset}(limit: ${boundedLimit}, filter: { ${filter} }) { ${body} }`;
-	if ((source.root ?? "account") === "zone") return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
-	return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
+	return {
+		variableType,
+		selection: `${source.alias}: ${source.dataset}(limit: ${boundedLimit}, filter: { ${filter} }) { ${body} }`
+	};
 }
 function productDatasetVariables(source, accountId, startsAt, endsAt, zoneIds = []) {
 	const scope = (source.root ?? "account") === "zone" ? { zones: zoneIds } : { account: accountId };
@@ -1287,13 +1317,15 @@ var HistoricalAnalyticsClient = class {
 	ledgerBudget;
 	tokenProvider;
 	zoneProvider;
+	options;
 	tokenPromise = null;
-	constructor(env, budget, ledgerBudget, tokenProvider = () => operationalToken(env), zoneProvider) {
+	constructor(env, budget, ledgerBudget, tokenProvider = () => operationalToken(env), zoneProvider, options = {}) {
 		this.env = env;
 		this.budget = budget;
 		this.ledgerBudget = ledgerBudget;
 		this.tokenProvider = tokenProvider;
 		this.zoneProvider = zoneProvider;
+		this.options = options;
 	}
 	async discoverCapabilities() {
 		const account = HISTORICAL_DATASETS.filter((item) => item.root === "account");
@@ -1301,13 +1333,7 @@ var HistoricalAnalyticsClient = class {
 		const capabilities = [];
 		for (let offset = 0; offset < account.length; offset += SETTINGS_BATCH) {
 			const batch = account.slice(offset, offset + SETTINGS_BATCH);
-			try {
-				const settings = await this.accountSettings(batch);
-				capabilities.push(...batch.map((spec) => capability(spec, settings[spec.dataset], null)));
-			} catch (error) {
-				if (isBudgetError(error)) throw error;
-				capabilities.push(...batch.map((spec) => unavailableCapability(spec, null, errorMessage$2(error))));
-			}
+			capabilities.push(...await this.accountSettingsIsolated(batch));
 		}
 		let zoneIds;
 		try {
@@ -1321,7 +1347,12 @@ var HistoricalAnalyticsClient = class {
 			applicable: false,
 			state: "healthy"
 		}))];
-		for (let offset = 0; offset < zoneIds.length; offset += MAX_ZONE_BATCH) capabilities.push(...await this.zoneSettings(zones, zoneIds.slice(offset, offset + MAX_ZONE_BATCH)));
+		const settingsBatchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+		const zoneBatches = Array.from({ length: Math.ceil(zoneIds.length / settingsBatchSize) }, (_, index) => zoneIds.slice(index * settingsBatchSize, (index + 1) * settingsBatchSize));
+		for (let offset = 0; offset < zoneBatches.length; offset += 6) {
+			const discovered = await Promise.all(zoneBatches.slice(offset, offset + 6).map((batch) => this.zoneSettings(zones, batch)));
+			capabilities.push(...discovered.flat());
+		}
 		return capabilities;
 	}
 	async collectorCapabilities() {
@@ -1364,7 +1395,7 @@ var HistoricalAnalyticsClient = class {
 			since: new Date(request.startsAt).toISOString(),
 			until: new Date(request.endsAt).toISOString()
 		};
-		const rows = arrayValue((await this.graphql(query, variables, 1)).viewer?.accounts?.[0]?.[spec.dataset]);
+		const rows = arrayValue((await this.graphql(query, variables, 1, { kind: "account" })).viewer?.accounts?.[0]?.[spec.dataset]);
 		const samples = normalizeSpecial(spec, rows, this.env, request.startsAt, request.endsAt);
 		return {
 			collector: spec.collector,
@@ -1380,10 +1411,24 @@ var HistoricalAnalyticsClient = class {
 		const source = spec.source;
 		const zoneIds = source.root === "zone" ? request.zoneIds ?? [] : [];
 		if (source.root === "zone" && !zoneIds.length) throw new Error(`${source.dataset} requires at least one authorized zone`);
-		const payload = await this.graphql(buildProductDatasetQuery(product, source, limit), productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds), source.root === "zone" ? zoneIds.length : 1);
-		const roots = source.root === "zone" ? payload.viewer?.zones ?? [] : payload.viewer?.accounts ?? [];
+		const failedZones = [];
+		let roots;
+		if (source.root === "zone") {
+			const isolated = await this.collectProductZones(spec, request, limit, zoneIds);
+			roots = isolated.roots;
+			failedZones.push(...isolated.failed);
+		} else roots = (await this.graphql(buildProductDatasetQuery(product, source, limit), productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, []), 1, { kind: "account" })).viewer?.accounts ?? [];
+		if (source.root === "zone") {
+			const returned = new Set(roots.flatMap((root) => stringValue$2(root.zoneTag) ? [stringValue$2(root.zoneTag)] : []));
+			for (const zoneId of zoneIds) if (!returned.has(zoneId) && !failedZones.some((item) => item.zoneId === zoneId)) failedZones.push({
+				zoneId,
+				state: "unavailable",
+				detail: "Cloudflare did not return this zone in the Analytics response."
+			});
+		}
 		const rows = roots.reduce((count, root) => count + arrayValue(root[source.alias]).length, 0);
 		const truncated = roots.some((root) => arrayValue(root[source.alias]).length >= limit);
+		const failedDetail = failedZones.length ? failedZones.map((item) => `${item.zoneId}: ${item.detail}`).join("; ") : void 0;
 		return {
 			collector: spec.collector,
 			dataset: spec.dataset,
@@ -1392,39 +1437,116 @@ var HistoricalAnalyticsClient = class {
 				family: product.family,
 				metric: item.metric,
 				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? product.scope : "account",
-				state: truncated ? "delayed" : "healthy",
+				state: failedZones.length ? failedZones.some((item) => item.state === "permission_denied") ? "permission_denied" : "unavailable" : truncated ? "delayed" : "healthy",
 				checkedAt: Date.now(),
-				detail: truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : void 0
+				detail: failedDetail ?? (truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : void 0)
 			})),
-			complete: !truncated,
-			rows
+			complete: !truncated && failedZones.length === 0,
+			rows,
+			zoneGaps: failedZones.length ? failedZones : void 0
 		};
+	}
+	async collectProductZones(spec, request, limit, zoneIds) {
+		const source = spec.source;
+		if (zoneIds.length > (this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH)) {
+			const roots = [];
+			const failed = [];
+			const batchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+			for (let offset = 0; offset < zoneIds.length; offset += batchSize) {
+				const result = await this.collectProductZones(spec, request, limit, zoneIds.slice(offset, offset + batchSize));
+				roots.push(...result.roots);
+				failed.push(...result.failed);
+			}
+			return {
+				roots,
+				failed
+			};
+		}
+		try {
+			const zoneId = zoneIds[0];
+			return {
+				roots: (await this.graphql(this.options.accountBasedRateLimit ? buildExactZoneProductDatasetQuery(spec.product, source, limit) : buildProductDatasetQuery(spec.product, source, limit), this.options.accountBasedRateLimit && zoneId ? exactZoneProductDatasetVariables(source, request.startsAt, request.endsAt, zoneId) : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds), this.options.accountBasedRateLimit ? 1 : zoneIds.length, zoneId ? {
+					kind: "zone",
+					zoneId
+				} : { kind: "account" })).viewer?.zones ?? [],
+				failed: []
+			};
+		} catch (error) {
+			if (isBudgetError(error)) throw error;
+			if (!isIsolatableAnalyticsError(error)) throw error;
+			if (zoneIds.length > 1) {
+				const middle = Math.ceil(zoneIds.length / 2);
+				const left = await this.collectProductZones(spec, request, limit, zoneIds.slice(0, middle));
+				const right = await this.collectProductZones(spec, request, limit, zoneIds.slice(middle));
+				return {
+					roots: [...left.roots, ...right.roots],
+					failed: [...left.failed, ...right.failed]
+				};
+			}
+			const zoneId = zoneIds[0];
+			return zoneId ? {
+				roots: [],
+				failed: [{
+					zoneId,
+					state: unavailableState(error),
+					detail: errorMessage$2(error)
+				}]
+			} : {
+				roots: [],
+				failed: []
+			};
+		}
 	}
 	async accountSettings(specs) {
 		const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
 		const query = `query BrollyAccountAnalyticsSettings($account: String!) { viewer { accounts(filter: { accountTag: $account }) { settings { ${specs.map((item) => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
-		return (await this.graphql(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length)).viewer?.accounts?.[0]?.settings ?? {};
+		return (await this.graphql(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length, { kind: "account" })).viewer?.accounts?.[0]?.settings ?? {};
+	}
+	async accountSettingsIsolated(specs) {
+		try {
+			const settings = await this.accountSettings(specs);
+			return specs.map((spec) => capability(spec, settings[spec.dataset], null));
+		} catch (error) {
+			if (isBudgetError(error)) throw error;
+			if (!isIsolatableAnalyticsError(error)) throw error;
+			if (specs.length > 1) {
+				const middle = Math.ceil(specs.length / 2);
+				return [...await this.accountSettingsIsolated(specs.slice(0, middle)), ...await this.accountSettingsIsolated(specs.slice(middle))];
+			}
+			const spec = specs[0];
+			return spec ? [unavailableCapability(spec, null, errorMessage$2(error), unavailableState(error))] : [];
+		}
 	}
 	async zoneSettings(specs, zoneIds) {
 		const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
-		const query = `query BrollyZoneAnalyticsSettings($zones: [string!]!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map((item) => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
+		const exact = this.options.accountBasedRateLimit;
+		const query = exact ? `query BrollyZoneAnalyticsSettings($zone: string!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag settings { ${specs.map((item) => `${item.dataset} { ${fields} }`).join("\n")} } } } }` : `query BrollyZoneAnalyticsSettings($zones: [string!]!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map((item) => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
+		const zoneId = zoneIds[0];
 		try {
-			const payload = await this.graphql(query, { zones: zoneIds }, specs.length * zoneIds.length);
+			const payload = await this.graphql(query, exact ? { zone: zoneId } : { zones: zoneIds }, specs.length * zoneIds.length, {
+				kind: "zone",
+				zoneId
+			});
 			const returned = new Map((payload.viewer?.zones ?? []).flatMap((zone) => zone.zoneTag ? [[zone.zoneTag, zone.settings ?? {}]] : []));
-			return zoneIds.flatMap((zoneId) => specs.map((spec) => returned.has(zoneId) ? capability(spec, returned.get(zoneId)?.[spec.dataset], zoneId) : unavailableCapability(spec, zoneId, "Cloudflare did not return Analytics settings for this zone.")));
+			return zoneIds.flatMap((currentZone) => specs.map((spec) => returned.has(currentZone) ? capability(spec, returned.get(currentZone)?.[spec.dataset], currentZone) : unavailableCapability(spec, currentZone, "Cloudflare did not return Analytics settings for this zone.")));
 		} catch (error) {
 			if (isBudgetError(error)) throw error;
 			const unauthorized = unauthorizedZoneIds(errorMessage$2(error), zoneIds);
 			if (unauthorized.length) {
-				const denied = unauthorized.flatMap((zoneId) => specs.map((spec) => unavailableCapability(spec, zoneId, "Cloudflare denied Analytics access to this zone.", "permission_denied")));
-				const remaining = zoneIds.filter((zoneId) => !unauthorized.includes(zoneId));
+				const denied = unauthorized.flatMap((deniedZone) => specs.map((spec) => unavailableCapability(spec, deniedZone, "Cloudflare denied Analytics access to this zone.", "permission_denied")));
+				const remaining = zoneIds.filter((currentZone) => !unauthorized.includes(currentZone));
 				return remaining.length ? [...denied, ...await this.zoneSettings(specs, remaining)] : denied;
+			}
+			if (!isIsolatableAnalyticsError(error)) throw error;
+			if (specs.length > 1) {
+				const middle = Math.ceil(specs.length / 2);
+				return [...await this.zoneSettings(specs.slice(0, middle), zoneIds), ...await this.zoneSettings(specs.slice(middle), zoneIds)];
 			}
 			if (zoneIds.length > 1) {
 				const middle = Math.ceil(zoneIds.length / 2);
 				return [...await this.zoneSettings(specs, zoneIds.slice(0, middle)), ...await this.zoneSettings(specs, zoneIds.slice(middle))];
 			}
-			return specs.map((spec) => unavailableCapability(spec, zoneIds[0] ?? null, errorMessage$2(error)));
+			return specs.map((spec) => unavailableCapability(spec, zoneId, errorMessage$2(error), unavailableState(error)));
 		}
 	}
 	async listZoneIds() {
@@ -1446,14 +1568,16 @@ var HistoricalAnalyticsClient = class {
 		} while (page <= totalPages);
 		return zoneIds;
 	}
-	async graphql(query, variables, logicalQueries) {
+	async graphql(query, variables, logicalQueries, scope) {
+		this.options.rateBudget?.charge(scope, logicalQueries);
 		this.budget.charge("apiCalls");
 		this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
 		const response = await fetch(`${API$3}/graphql`, {
 			method: "POST",
 			headers: {
 				authorization: `Bearer ${await this.token()}`,
-				"content-type": "application/json"
+				"content-type": "application/json",
+				...this.options.accountBasedRateLimit ? { "x-rate-limit-type": "account-based" } : {}
 			},
 			body: JSON.stringify({
 				query,
@@ -1461,7 +1585,8 @@ var HistoricalAnalyticsClient = class {
 			}),
 			signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS$1)])
 		});
-		const payload = await response.json();
+		const payload = await response.json().catch(() => ({}));
+		if (response.status === 429 || isGraphqlRateLimit(payload.errors)) throw new HistoricalRateLimitError(response.status, rateLimitResetAt(response.headers), payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached");
 		if (!response.ok || payload.errors?.length) throw new HistoricalAnalyticsError(response.status, payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
 		if (!payload.data) throw new HistoricalAnalyticsError(response.status, "Cloudflare Analytics returned no data");
 		return payload.data;
@@ -1479,6 +1604,17 @@ var HistoricalAnalyticsError = class extends Error {
 		this.name = "HistoricalAnalyticsError";
 	}
 };
+var HistoricalRateLimitError = class extends HistoricalAnalyticsError {
+	retryAt;
+	constructor(status, retryAt, message) {
+		super(status, message);
+		this.retryAt = retryAt;
+		this.name = "HistoricalRateLimitError";
+	}
+};
+function isHistoricalRateLimitError(error) {
+	return error instanceof HistoricalRateLimitError;
+}
 function special(collector, label, dataset, family, scope, kind) {
 	return {
 		collector,
@@ -1708,7 +1844,28 @@ function errorMessage$2(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 function isBudgetError(error) {
-	return error instanceof Error && /BudgetExceededError$/.test(error.name);
+	return isHistoricalRateLimitError(error) || error instanceof Error && /BudgetExceededError$/.test(error.name);
+}
+function isGraphqlRateLimit(errors) {
+	return Boolean(errors?.some((error) => error.extensions?.code?.toLowerCase() === "budget" || /rate.?limit|query budget|quota exceeded|too many requests/i.test(error.message ?? "")));
+}
+function rateLimitResetAt(headers, now = Date.now()) {
+	const retryAfter = headers.get("retry-after");
+	if (retryAfter) {
+		const seconds = Number(retryAfter);
+		if (Number.isFinite(seconds) && seconds >= 0) return now + seconds * 1e3;
+		const timestamp = Date.parse(retryAfter);
+		if (Number.isFinite(timestamp)) return Math.max(now, timestamp);
+	}
+	const resetSeconds = headers.get("ratelimit")?.match(/(?:^|;)\s*t=(\d+)/i)?.[1];
+	return now + (resetSeconds ? Number(resetSeconds) * 1e3 : 3e5);
+}
+function unavailableState(error) {
+	return /permission|unauthoriz|forbidden|access denied|not authorized/i.test(errorMessage$2(error)) ? "permission_denied" : "unavailable";
+}
+function isIsolatableAnalyticsError(error) {
+	if (error instanceof HistoricalAnalyticsError && [400, 403].includes(error.status)) return true;
+	return /permission|unauthoriz|forbidden|access denied|not authorized|cannot query field|unknown field|not available|unavailable/i.test(errorMessage$2(error));
 }
 function arrayValue(value) {
 	return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
@@ -1749,12 +1906,14 @@ var CloudflareClient = class {
 	env;
 	budget;
 	ledgerBudget;
+	historicalOptions;
 	tokenPromise = null;
 	zoneIdsPromise = null;
-	constructor(env, budget, ledgerBudget) {
+	constructor(env, budget, ledgerBudget, historicalOptions = {}) {
 		this.env = env;
 		this.budget = budget;
 		this.ledgerBudget = ledgerBudget;
+		this.historicalOptions = historicalOptions;
 	}
 	async zones() {
 		return (await this.listRows(`/zones?account.id=${encodeURIComponent(this.env.BROLLY_ACCOUNT_ID)}&per_page=50`)).rows.flatMap((row) => {
@@ -1882,7 +2041,7 @@ var CloudflareClient = class {
 		return this.historicalClient().collect(request);
 	}
 	historicalClient() {
-		return new HistoricalAnalyticsClient(this.env, this.budget, this.ledgerBudget, () => this.token(), () => this.zoneIds());
+		return new HistoricalAnalyticsClient(this.env, this.budget, this.ledgerBudget, () => this.token(), () => this.zoneIds(), this.historicalOptions);
 	}
 	async durableObjectUsage(since, until, options = {}) {
 		const limit = Math.max(1, Math.min(options.limit ?? 1e3, 1e4));
@@ -2700,6 +2859,15 @@ var Store = class {
 	}
 	async resolveIncident(key) {
 		const result = await this.db.prepare(`UPDATE incidents SET status='resolved',last_seen=?2 WHERE incident_key=?1 AND status!='resolved'`).bind(key, Date.now()).run();
+		this.chargeMeta(result.meta);
+	}
+	async resolvePassiveCoverageIncidents(accountId, preservedKeys) {
+		const placeholders = preservedKeys.map((_, index) => `?${index + 5}`).join(",");
+		const result = await this.db.prepare(`UPDATE incidents SET status='resolved',last_seen=?2
+       WHERE account_id=?1 AND metric='telemetry_coverage' AND status!='resolved'
+         AND incident_key GLOB ?3
+         AND incident_key NOT GLOB ?4
+         AND incident_key NOT IN (${placeholders})`).bind(accountId, Date.now(), `${accountId}:coverage:*`, `${accountId}:coverage:*:asset_inventory`, ...preservedKeys).run();
 		this.chargeMeta(result.meta);
 	}
 	async setActionState(actionId, state, error) {
@@ -6624,7 +6792,8 @@ async function handleEvaluation(store, evaluation, dailySummary = false, env, au
 }
 async function coverageIncidents(store, coverage, env, automaticQueue) {
 	const accountId = env.BROLLY_ACCOUNT_ID;
-	for (const item of coverage) {
+	await store.resolvePassiveCoverageIncidents(accountId, [...[...EXPECTED_LIVE_COVERAGE].map((key) => `${accountId}:coverage:${key}`), `${accountId}:coverage:billing:authoritative_usage`]);
+	for (const item of coverage.filter(isExpectedLiveCoverage)) {
 		const key = `${accountId}:coverage:${item.family}:${item.metric}`;
 		if (item.state === "healthy") {
 			await store.resolveIncident(key);
@@ -6646,36 +6815,23 @@ async function coverageIncidents(store, coverage, env, automaticQueue) {
 			action: "notify"
 		}, false, env, automaticQueue);
 	}
-	const seen = new Set(coverage.map((item) => `${item.family}:${item.metric}`));
-	const missing = [];
-	for (const definition of METRIC_CATALOG) for (const metric of definition.metrics) {
-		if (seen.has(`${definition.family}:${metric}`)) continue;
-		missing.push({
-			family: definition.family,
-			metric,
-			finestScope: definition.preferredScope,
-			state: "unavailable",
-			checkedAt: Date.now(),
-			detail: "No active fast-telemetry collector"
-		});
-		const asset = {
-			accountId,
-			family: definition.family,
-			id: metric,
-			scope: "account",
-			tier: "control_plane"
-		};
-		await handleEvaluation(store, {
-			key: `${accountId}:coverage:${definition.family}:${metric}`,
-			asset,
-			metric: "telemetry_coverage",
-			severity: "warning",
-			observed: 0,
-			reason: `${definition.family}/${metric} has no active collector`,
-			action: "notify"
-		}, false, env, automaticQueue);
-	}
-	await store.saveCoverage(missing);
+}
+var EXPECTED_LIVE_COVERAGE = /* @__PURE__ */ new Set([
+	"workers:requests",
+	"workers:cpu_ms",
+	"durable_objects:requests",
+	"durable_objects:duration_gb_seconds",
+	"durable_objects:incoming_websocket_messages",
+	"durable_objects:rows_read",
+	"durable_objects:rows_written",
+	"durable_objects:kv_read_units",
+	"durable_objects:kv_write_units",
+	"durable_objects:kv_delete_requests",
+	"durable_objects:sql_storage_bytes",
+	"durable_objects:kv_storage_bytes"
+]);
+function isExpectedLiveCoverage(item) {
+	return item.metric === "asset_inventory" || EXPECTED_LIVE_COVERAGE.has(`${item.family}:${item.metric}`);
 }
 async function flushAutomaticCloudflareControls(store, env, queued) {
 	const actions = [...new Map(queued.map((action) => [action.id, action])).values()].slice(0, 5);
@@ -7466,12 +7622,14 @@ var OAUTH_STATE_TTL_MS = 6e5;
 var SESSION_TTL_MS = 432e5;
 var SESSION_COOKIE = "brolly_session";
 var STATE_COOKIE = "brolly_oauth_state";
+var OAUTH_SCOPE_REVISION = "zone-analytics-v1";
 var BROLLY_OAUTH_SCOPES = [
 	"offline_access",
 	"user-details.read",
 	"memberships.read",
 	"account-settings.read",
 	"account-analytics.read",
+	"analytics.read",
 	"workers-scripts.read",
 	"workers-scripts.write",
 	"workers-kv-storage.read",
@@ -7615,6 +7773,7 @@ async function finishLogin(request, env) {
 		env.DB.prepare(`INSERT INTO auth_sessions(token_hash,user_id,email,display_name,account_id,created_at,last_seen_at,expires_at) VALUES(?1,?2,?3,?4,?5,?6,?6,?7)`).bind(sessionHash, user.sub, user.email ?? null, user.name ?? user.preferred_username ?? null, account.id, now, now + SESSION_TTL_MS),
 		env.DB.prepare(`DELETE FROM auth_sessions WHERE expires_at < ?1`).bind(now)
 	]);
+	await refreshInitialIngestionForOAuthScopes(env.DB, account.id, now);
 	const headers = new Headers({
 		location: "/",
 		"cache-control": "no-store"
@@ -7625,6 +7784,19 @@ async function finishLogin(request, env) {
 		status: 302,
 		headers
 	});
+}
+/** Replan history once when a release adds monitoring permissions. */
+async function refreshInitialIngestionForOAuthScopes(db, accountId, now = Date.now()) {
+	const revisionChanged = `COALESCE((SELECT value FROM settings WHERE key='oauth_scope_revision'),'')!=?2`;
+	await db.batch([
+		db.prepare(`UPDATE backfill_slices SET status='superseded',updated_at=?3
+       WHERE backfill_job_id IN (SELECT id FROM backfill_jobs WHERE account_id=?1 AND kind='initial_v2')
+         AND ${revisionChanged}`).bind(accountId, OAUTH_SCOPE_REVISION, now),
+		db.prepare(`UPDATE backfill_jobs SET kind='initial_v2_superseded',status='superseded',updated_at=?3
+       WHERE account_id=?1 AND kind='initial_v2' AND ${revisionChanged}`).bind(accountId, OAUTH_SCOPE_REVISION, now),
+		db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('oauth_scope_revision',?1,?2)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(OAUTH_SCOPE_REVISION, now)
+	]);
 }
 function hasRenewableAccess(oauth) {
 	return Boolean(oauth.refresh_token?.trim());
@@ -8037,7 +8209,7 @@ function billingFamily(row) {
 }
 //#endregion
 //#region src/release.ts
-var BROLLY_RELEASE = "29014d6c70cfcfe35d6c28692dafc5416c2a839f";
+var BROLLY_RELEASE = "2c282e340b3e653d7d2f115a42e506e7e2244bbf";
 //#endregion
 //#region src/updates.ts
 var RELEASE_URL = "https://raw.githubusercontent.com/standardagents/brolly/deploy-template/brolly-release.json";
@@ -9060,6 +9232,17 @@ var HISTORY_DAYS = 90;
 var BILLING_MAX_DAYS = 31;
 var INITIAL_KIND = "initial_v2";
 var LEGACY_INITIAL_KIND = "initial";
+var INITIAL_FETCH_CONCURRENCY = 6;
+var INITIAL_ACCOUNT_QUERY_QUOTA = 240;
+var INITIAL_ZONE_QUERY_QUOTA = 240;
+var INITIAL_PHYSICAL_GRAPHQL_QUOTA = 700;
+var GRAPHQL_WINDOW_MS = 3e5;
+var INITIAL_LEASE_TTL_MS = 12e4;
+var INITIAL_LEASE_NAME = "initial-ingestion";
+var BILLING_REQUESTS_PER_SLICE = 3;
+var INITIAL_QUOTA_KEY_PREFIX = "initial_ingestion_quota:";
+var INITIAL_D1_READ_RESERVATION = 1e4;
+var INITIAL_D1_WRITE_RESERVATION = 1e3;
 /** Return whether a Billing Read credential is available without making a network request. */
 async function billingIngestionAvailable(env) {
 	try {
@@ -9101,30 +9284,55 @@ async function ensureInitialIngestionJob(env, options = {}) {
        WHERE id=?1 AND (status='planning_failed' OR status='planning' AND updated_at<?3)`).bind(jobId, now, now - 6e4).run();
 		if (Number(claimed.meta.changes ?? 0) !== 1) return ingestionJobResult(await initialJob(env.DB, env.BROLLY_ACCOUNT_ID, INITIAL_KIND) ?? existing, false, await sliceCount(env.DB, jobId));
 	}
+	const planningHolder = crypto.randomUUID();
+	if (!await acquireInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, planningHolder)) return ingestionJobResult(await initialJob(env.DB, env.BROLLY_ACCOUNT_ID, INITIAL_KIND) ?? {
+		id: jobId,
+		status: "planning"
+	}, false, await sliceCount(env.DB, jobId));
 	try {
+		const discoveryQuota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, now);
+		if (!discoveryQuota.canCharge({ kind: "account" }, 1)) {
+			await env.DB.prepare(`UPDATE backfill_jobs SET status='planning',updated_at=?2 WHERE id=?1`).bind(jobId, now).run();
+			return {
+				id: jobId,
+				created,
+				status: "planning",
+				slices: await sliceCount(env.DB, jobId)
+			};
+		}
 		const discoveryLedger = new LedgerRunBudget({
-			graphqlQueries: 300,
+			graphqlQueries: discoveryQuota.physicalRemaining,
 			restRequests: 20,
 			d1RowsRead: 1e3,
 			d1RowsWritten: 1e3,
 			backfillSlices: 1,
 			wallMs: 45e3
 		});
-		const capabilities = await new CloudflareClient(env, new RunBudget({
+		const discoveryBudget = new RunBudget({
 			apiCalls: 320,
 			databaseRows: 2e3,
 			samples: 1,
 			wallMs: 45e3
-		}), discoveryLedger).historicalCapabilities();
-		const slices = initialIngestionSlicePlan(now, options.billingAvailable ?? await billingIngestionAvailable(env), capabilities);
-		for (let offset = 0; offset < slices.length; offset += 100) await env.DB.batch(slices.slice(offset, offset + 100).map((slice) => env.DB.prepare(`INSERT OR IGNORE INTO backfill_slices(
-           id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,
-           retry_count,next_eligible_at,coverage_status,error,updated_at
-         ) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,?9,?10,?8)`).bind(crypto.randomUUID(), jobId, slice.collector, slice.scopeKey, slice.startsAt, slice.endsAt, slice.status, now, slice.coverageStatus, slice.error)));
-		await updateInitialJobStatus(env.DB, jobId);
+		});
+		try {
+			const capabilities = await new CloudflareClient(env, discoveryBudget, discoveryLedger, {
+				accountBasedRateLimit: true,
+				rateBudget: discoveryQuota
+			}).historicalCapabilities();
+			const slices = initialIngestionSlicePlan(now, options.billingAvailable ?? await billingIngestionAvailable(env), capabilities);
+			for (let offset = 0; offset < slices.length; offset += 100) await env.DB.batch(slices.slice(offset, offset + 100).map((slice) => env.DB.prepare(`INSERT OR IGNORE INTO backfill_slices(
+             id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,
+             retry_count,next_eligible_at,coverage_status,error,updated_at
+           ) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,?9,?10,?8)`).bind(crypto.randomUUID(), jobId, slice.collector, slice.scopeKey, slice.startsAt, slice.endsAt, slice.status, now, slice.coverageStatus, slice.error)));
+			await updateInitialJobStatus(env.DB, jobId);
+		} finally {
+			await saveInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, discoveryQuota);
+		}
 	} catch (error) {
 		await env.DB.prepare(`UPDATE backfill_jobs SET status='planning_failed',updated_at=?2 WHERE id=?1`).bind(jobId, Date.now()).run();
 		throw error;
+	} finally {
+		await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, planningHolder);
 	}
 	const current = await initialJob(env.DB, env.BROLLY_ACCOUNT_ID, INITIAL_KIND);
 	return {
@@ -9152,26 +9360,21 @@ function initialIngestionSlicePlan(now, billingAvailable, capabilities) {
 		if (!applicable.length) continue;
 		const enabled = applicable.filter((item) => item.enabled && item.zoneId);
 		const unavailable = applicable.filter((item) => !item.enabled && item.zoneId);
-		for (const group of groupEquivalentCapabilities(enabled)) for (let offset = 0; offset < group.length; offset += 10) {
-			const chunk = group.slice(offset, offset + 10);
-			slices.push(...rangeSlices(spec.collector, spec.dataset, chunk.flatMap((item) => item.zoneId ? [item.zoneId] : []), now, mergedCapability(chunk)));
-		}
-		for (let offset = 0; offset < unavailable.length; offset += 10) {
-			const chunk = unavailable.slice(offset, offset + 10);
-			slices.push(gapSlice(spec.collector, spec.dataset, chunk.flatMap((item) => item.zoneId ? [item.zoneId] : []), now, chunk[0]?.detail ?? "Cloudflare denied access to this zone dataset.", capabilityRetentionDays(chunk[0], spec.retentionDays)));
-		}
+		for (const setting of enabled) slices.push(...rangeSlices(spec.collector, spec.dataset, [setting.zoneId], now, setting));
+		for (const setting of unavailable) slices.push(gapSlice(spec.collector, spec.dataset, [setting.zoneId], now, setting.detail ?? "Cloudflare denied access to this zone dataset.", capabilityRetentionDays(setting, spec.retentionDays)));
 	}
 	if (billingAvailable) slices.push(...boundedRanges("billing", "billable-usage", [], now, HISTORY_DAYS, BILLING_MAX_DAYS, 1e4));
 	return slices.sort((left, right) => right.endsAt - left.endsAt || left.collector.localeCompare(right.collector));
 }
 /** Return progress weighted by dataset-days (and zone-days), not request count. */
 async function initialIngestionProgress(db, accountId) {
-	const job = await db.prepare(`SELECT id,status,created_at,updated_at,kind FROM backfill_jobs
+	const job = await db.prepare(`SELECT id,status,created_at,updated_at,kind,requested_start_at,requested_end_at FROM backfill_jobs
      WHERE account_id=?1 AND kind IN (?2,?3)
      ORDER BY CASE kind WHEN ?2 THEN 0 ELSE 1 END,created_at DESC LIMIT 1`).bind(accountId, INITIAL_KIND, LEGACY_INITIAL_KIND).first();
 	if (!job) return {
 		job: null,
-		collectors: []
+		collectors: [],
+		days: null
 	};
 	const rows = await db.prepare(`SELECT collector_key,scope_key,starts_at,ends_at,status,error
      FROM backfill_slices WHERE backfill_job_id=?1 AND status!='superseded'
@@ -9212,21 +9415,115 @@ async function initialIngestionProgress(db, accountId) {
 			startedAt: job.created_at,
 			updatedAt: job.updated_at
 		},
-		collectors: [...grouped.values()].sort((left, right) => left.collector === "billing" ? 1 : right.collector === "billing" ? -1 : left.label.localeCompare(right.label))
+		collectors: [...grouped.values()].sort((left, right) => left.collector === "billing" ? 1 : right.collector === "billing" ? -1 : left.label.localeCompare(right.label)),
+		days: initialIngestionDays(job, rows.results)
 	};
 }
 /** Drain bounded v2 slices with a fresh budget isolated from monitoring. */
 async function runInitialIngestion(env, jobId) {
-	const ledgerBudget = new LedgerRunBudget(INITIAL_INGESTION_LIMITS);
+	const holder = crypto.randomUUID();
+	if (!await acquireInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder)) return;
+	let quota;
+	try {
+		await requeueRunningInitialSlices(env.DB, jobId);
+		quota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, Date.now());
+	} catch (error) {
+		await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
+		throw error;
+	}
+	if (quota.physicalRemaining < 1) {
+		await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
+		return;
+	}
+	const ledgerBudget = new LedgerRunBudget({
+		...INITIAL_INGESTION_LIMITS,
+		graphqlQueries: quota.physicalRemaining
+	}, "initial_ingestion");
 	const client = new CloudflareClient(env, new RunBudget({
-		apiCalls: INITIAL_INGESTION_LIMITS.graphqlQueries + INITIAL_INGESTION_LIMITS.restRequests,
+		apiCalls: quota.physicalRemaining + INITIAL_INGESTION_LIMITS.restRequests,
 		databaseRows: INITIAL_INGESTION_LIMITS.d1RowsRead + INITIAL_INGESTION_LIMITS.d1RowsWritten,
 		samples: 1e5,
 		wallMs: INITIAL_INGESTION_LIMITS.wallMs
-	}), ledgerBudget);
+	}), ledgerBudget, {
+		accountBasedRateLimit: true,
+		rateBudget: quota
+	});
 	const ledger = new LedgerStore(env.DB, ledgerBudget);
 	const timeZone = env.BROLLY_TIMEZONE ?? "UTC";
-	while (ledgerBudget.remaining("backfillSlices") > 0 && ledgerBudget.remaining("wallMs") >= 8e3) if (!await runOneInitialSlice(env, client, ledger, ledgerBudget, jobId, timeZone)) break;
+	try {
+		if (canStartInitialSlice(ledgerBudget)) {
+			const persistenceProbe = await claimInitialSlice(env, ledgerBudget, quota, jobId, "persistence_retry");
+			if (persistenceProbe) {
+				await finalizeInitialSlice(env, ledger, ledgerBudget, jobId, timeZone, persistenceProbe, await fetchInitialSlice(env, client, ledgerBudget, persistenceProbe, timeZone));
+				if (ledgerBudget.signal.aborted) return;
+			}
+		}
+		while (canStartInitialSlice(ledgerBudget)) {
+			const claimed = await claimInitialSlice(env, ledgerBudget, quota, jobId, "billing");
+			if (!claimed) break;
+			await finalizeInitialSlice(env, ledger, ledgerBudget, jobId, timeZone, claimed, await fetchInitialSlice(env, client, ledgerBudget, claimed, timeZone));
+		}
+		while (canStartInitialSlice(ledgerBudget)) {
+			const ready = new InitialFetchQueue(INITIAL_FETCH_CONCURRENCY);
+			let claimedInWave = 0;
+			let producerError;
+			let producerBudgetExhausted = false;
+			const producer = async () => {
+				while (producerError === void 0 && !producerBudgetExhausted && canStartInitialSlice(ledgerBudget)) {
+					let claimed;
+					try {
+						claimed = await claimInitialSlice(env, ledgerBudget, quota, jobId, "analytics");
+					} catch (error) {
+						if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) {
+							producerBudgetExhausted = true;
+							return;
+						}
+						producerError ??= error;
+						return;
+					}
+					if (!claimed) return;
+					claimedInWave += 1;
+					if (!await ready.push(await fetchInitialSlice(env, client, ledgerBudget, claimed, timeZone))) return;
+				}
+			};
+			const producerCompletion = Promise.all(Array.from({ length: INITIAL_FETCH_CONCURRENCY }, () => producer())).then(() => ready.close());
+			let consumerError;
+			try {
+				while (true) {
+					const fetched = await ready.next();
+					if (!fetched) break;
+					await finalizeInitialSlice(env, ledger, ledgerBudget, jobId, timeZone, fetched.claimed, fetched);
+				}
+			} catch (error) {
+				consumerError = error;
+				ready.close();
+			}
+			await producerCompletion;
+			if (consumerError !== void 0) throw consumerError;
+			if (producerError !== void 0) throw producerError;
+			if (producerBudgetExhausted) {
+				await updateInitialJobStatus(env.DB, jobId);
+				return;
+			}
+			if (claimedInWave === 0) break;
+			if (!await initialSlicesPending(env.DB, jobId)) break;
+		}
+		if (ledgerBudget.signal.aborted) {
+			await updateInitialJobStatus(env.DB, jobId);
+			return;
+		}
+		await updateInitialJobStatus(env.DB, jobId, ledgerBudget);
+	} catch (error) {
+		await requeueRunningInitialSlices(env.DB, jobId).catch(() => void 0);
+		await updateInitialJobStatus(env.DB, jobId).catch(() => void 0);
+		throw error;
+	} finally {
+		try {
+			await saveInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, quota);
+		} finally {
+			await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
+		}
+	}
 }
 /** Resume the account's active range import, if one exists. */
 async function resumeInitialIngestion(env) {
@@ -9240,29 +9537,97 @@ async function resumeInitialIngestion(env) {
 	}
 	await runInitialIngestion(env, job.id);
 }
-async function runOneInitialSlice(env, client, ledger, budget, jobId, timeZone) {
-	const slice = await env.DB.prepare(`SELECT * FROM backfill_slices
-     WHERE backfill_job_id=?1 AND status='pending' AND (next_eligible_at IS NULL OR next_eligible_at<=?2)
-     ORDER BY ends_at DESC,collector_key LIMIT 1`).bind(jobId, Date.now()).first();
-	budget.charge("d1RowsRead", slice ? 1 : 0);
-	if (!slice) {
-		await updateInitialJobStatus(env.DB, jobId, budget);
-		return false;
+var InitialFetchQueue = class {
+	capacity;
+	values = [];
+	readers = [];
+	writers = [];
+	closed = false;
+	constructor(capacity) {
+		this.capacity = capacity;
 	}
-	const metadata = parseSliceMetadata(slice.scope_key, slice.starts_at, slice.ends_at);
-	const requiredQueries = slice.collector_key === "billing" ? 0 : Math.max(1, metadata.zoneIds.length);
-	if (budget.remaining("backfillSlices") < 1 || budget.remaining("d1RowsWritten") < 1e3 || budget.remaining("d1RowsRead") < 1e4 || budget.remaining("wallMs") < 8e3 || budget.remaining("graphqlQueries") < requiredQueries || slice.collector_key === "billing" && budget.remaining("restRequests") < 1) return false;
+	async push(value) {
+		while (!this.closed && this.values.length >= this.capacity) await new Promise((resolve) => this.writers.push(resolve));
+		if (this.closed) return false;
+		const reader = this.readers.shift();
+		if (reader) reader(value);
+		else this.values.push(value);
+		return true;
+	}
+	async next() {
+		const value = this.values.shift();
+		if (value) {
+			this.writers.shift()?.();
+			return value;
+		}
+		if (this.closed) return null;
+		return new Promise((resolve) => this.readers.push(resolve));
+	}
+	close() {
+		this.closed = true;
+		for (const resolve of this.readers.splice(0)) resolve(null);
+		for (const resolve of this.writers.splice(0)) resolve();
+	}
+};
+function canStartInitialSlice(budget) {
+	return budget.remaining("backfillSlices") > 0 && budget.remaining("wallMs") >= 8e3;
+}
+async function claimInitialSlice(env, budget, quota, jobId, mode) {
+	const modeCode = mode === "billing" ? 1 : mode === "persistence_retry" ? 2 : 0;
+	const candidates = await env.DB.prepare(`SELECT * FROM backfill_slices
+     WHERE backfill_job_id=?1 AND status='pending' AND (next_eligible_at IS NULL OR next_eligible_at<=?2)
+       AND ((?3=1 AND collector_key='billing')
+         OR (?3=0 AND collector_key!='billing' AND COALESCE(json_extract(scope_key,'$.persistenceRetry'),0)=0)
+         OR (?3=2 AND collector_key!='billing' AND json_extract(scope_key,'$.persistenceRetry')=1))
+     ORDER BY CASE WHEN json_extract(scope_key,'$.persistenceRetry')=1 THEN 0 ELSE 1 END,
+       ends_at DESC,collector_key LIMIT 100`).bind(jobId, Date.now(), modeCode).all();
+	budget.charge("d1RowsRead", candidates.results.length);
+	let slice;
+	let metadata;
+	for (const candidate of candidates.results) {
+		const parsed = parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at);
+		if (mode !== "billing" && parsed.zoneIds.length > 1) {
+			await migrateLegacyZoneSlice(env.DB, candidate, parsed, budget);
+			return claimInitialSlice(env, budget, quota, jobId, mode);
+		}
+		if (mode !== "billing" && !quota.canCharge(rateScope(parsed), 1)) continue;
+		slice = candidate;
+		metadata = parsed;
+		break;
+	}
+	if (!slice || !metadata) return null;
+	const requiredQueries = slice.collector_key === "billing" ? 0 : 1;
+	if (budget.remaining("backfillSlices") < 1 || budget.remaining("d1RowsWritten") < 1001 || budget.remaining("d1RowsRead") < INITIAL_D1_READ_RESERVATION || budget.remaining("wallMs") < 8e3 || budget.remaining("graphqlQueries") < requiredQueries || slice.collector_key === "billing" && budget.remaining("restRequests") < BILLING_REQUESTS_PER_SLICE) return null;
 	budget.charge("backfillSlices");
 	const claimed = await env.DB.prepare(`UPDATE backfill_slices SET status='running',updated_at=?2 WHERE id=?1 AND status='pending'`).bind(slice.id, Date.now()).run();
 	chargeMeta(budget, claimed.meta);
-	if (Number(claimed.meta.changes ?? 0) !== 1) return false;
+	if (Number(claimed.meta.changes ?? 0) !== 1) {
+		budget.refund("backfillSlices");
+		return claimInitialSlice(env, budget, quota, jobId, mode);
+	}
 	await env.DB.prepare(`UPDATE backfill_jobs SET status='running',updated_at=?2 WHERE id=?1`).bind(jobId, Date.now()).run();
+	const persistenceReservation = mode !== "billing" ? {
+		reads: INITIAL_D1_READ_RESERVATION,
+		writes: INITIAL_D1_WRITE_RESERVATION
+	} : null;
+	if (persistenceReservation) {
+		budget.charge("d1RowsRead", persistenceReservation.reads);
+		budget.charge("d1RowsWritten", persistenceReservation.writes);
+	}
+	return {
+		slice,
+		metadata,
+		persistenceReservation
+	};
+}
+async function fetchInitialSlice(env, client, budget, claimed, timeZone) {
+	const { slice, metadata } = claimed;
 	try {
 		if (slice.collector_key === "billing") {
-			const result = await ingestWindow({
+			const billing = await ingestWindow({
 				env,
 				client,
-				ledger,
+				ledger: new LedgerStore(env.DB, budget),
 				collector: "billing",
 				startsAt: slice.starts_at,
 				endsAt: slice.ends_at,
@@ -9270,15 +9635,45 @@ async function runOneInitialSlice(env, client, ledger, budget, jobId, timeZone) 
 				timeZone,
 				historical: true
 			});
-			if (!result.complete) throw new Error(result.coverage[0]?.detail ?? "Billing history was incomplete");
-		} else {
-			const result = await client.historicalUsage({
+			if (!billing.complete) throw new Error(billing.coverage[0]?.detail ?? "Billing history was incomplete");
+			return {
+				claimed,
+				billing
+			};
+		}
+		return {
+			claimed,
+			usage: await client.historicalUsage({
 				dataset: metadata.dataset,
 				startsAt: slice.starts_at,
 				endsAt: slice.ends_at,
 				maxPageSize: metadata.maxPageSize,
 				zoneIds: metadata.zoneIds
-			});
+			})
+		};
+	} catch (error) {
+		return {
+			claimed,
+			error
+		};
+	}
+}
+async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claimed, fetched) {
+	const slice = claimed.slice;
+	const metadata = claimed.metadata;
+	releasePersistenceReservation(budget, claimed);
+	try {
+		if (slice.collector_key === "billing") {
+			if (fetched.error) throw fetched.error;
+		} else {
+			if (fetched.error) throw fetched.error;
+			const result = fetched.usage;
+			if (!result) throw new Error("Historical Analytics returned no result");
+			if (result.zoneGaps?.length && metadata.zoneIds.length) {
+				await splitZoneGapSlice(env.DB, slice, metadata, result.zoneGaps, budget);
+				await updateInitialJobStatus(env.DB, jobId, budget);
+				return true;
+			}
 			if (!result.complete && calendarDays(slice.starts_at, slice.ends_at) > 1) {
 				await splitSlice(env.DB, slice, metadata, "Cloudflare row limit", budget);
 				await updateInitialJobStatus(env.DB, jobId, budget);
@@ -9290,7 +9685,9 @@ async function runOneInitialSlice(env, client, ledger, budget, jobId, timeZone) 
 			});
 			await ledger.applyObservations(observations, timeZone);
 			if (!result.complete) {
-				await finishSlice(env.DB, budget, slice.id, "failed", "Cloudflare's row limit was reached for a single day; retained rows are marked partial", "partial");
+				const detail = "Cloudflare's row limit was reached for a single day; retained rows are marked partial";
+				await markSliceTerminalGap(env.DB, slice, metadata, detail, budget);
+				await finishSlice(env.DB, budget, slice.id, "failed", detail, "partial");
 				await updateInitialJobStatus(env.DB, jobId, budget);
 				return true;
 			}
@@ -9299,15 +9696,33 @@ async function runOneInitialSlice(env, client, ledger, budget, jobId, timeZone) 
 		await updateInitialJobStatus(env.DB, jobId, budget);
 		return true;
 	} catch (error) {
+		if (isHistoricalRateLimitError(error)) {
+			const now = Date.now();
+			await env.DB.prepare(`UPDATE backfill_slices SET status='pending',error=?2,next_eligible_at=?3,
+          coverage_status='missing',updated_at=?4 WHERE id=?1`).bind(slice.id, error.message.slice(0, 2e3), Math.max(now + 1e3, error.retryAt), now).run();
+			await updateInitialJobStatus(env.DB, jobId);
+			return false;
+		}
 		if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) {
-			if (calendarDays(slice.starts_at, slice.ends_at) > 1) {
+			if (metadata.persistenceRetry && calendarDays(slice.starts_at, slice.ends_at) > 1) {
 				await splitSlice(env.DB, slice, metadata, "bounded persistence budget");
+				await updateInitialJobStatus(env.DB, jobId);
+				return false;
+			}
+			if (!metadata.persistenceRetry) {
+				const now = Date.now();
+				await env.DB.prepare(`UPDATE backfill_slices SET status='pending',scope_key=?2,error=?3,next_eligible_at=?4,
+             coverage_status='missing',updated_at=?5 WHERE id=?1`).bind(slice.id, serializeMetadata({
+					...metadata,
+					persistenceRetry: true
+				}), `Deferred after reaching a bounded persistence limit: ${error.message}`, now + 6e4, now).run();
 				await updateInitialJobStatus(env.DB, jobId);
 				return false;
 			}
 			const previous = Math.min(3, Number(slice.retry_count ?? 0));
 			const failed = previous >= 3;
 			const retryCount = failed ? 3 : previous + 1;
+			if (failed) await markSliceTerminalGap(env.DB, slice, metadata, error.message);
 			await env.DB.prepare(`UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,
            coverage_status=?6,updated_at=?7 WHERE id=?1`).bind(slice.id, failed ? "failed" : "pending", `${failed ? "Single-day import could not fit within" : "Deferred after reaching"} a bounded run limit: ${error.message}`, retryCount, failed ? null : Date.now() + 6e4, failed ? "partial" : "missing", Date.now()).run();
 			await updateInitialJobStatus(env.DB, jobId);
@@ -9321,10 +9736,59 @@ async function runOneInitialSlice(env, client, ledger, budget, jobId, timeZone) 
 			12e4,
 			48e4
 		][retryCount - 1];
+		if (failed) await markSliceTerminalGap(env.DB, slice, metadata, errorMessage$1(error), budget);
 		chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,coverage_status='missing',updated_at=?6 WHERE id=?1`).bind(slice.id, failed ? "failed" : "pending", errorMessage$1(error).slice(0, 2e3), retryCount, nextEligibleAt, Date.now()).run()).meta);
 		await updateInitialJobStatus(env.DB, jobId, budget);
 		return true;
 	}
+}
+async function splitZoneGapSlice(db, slice, metadata, gaps, budget) {
+	const gapByZone = new Map(gaps.map((gap) => [gap.zoneId, gap]));
+	const availableZoneIds = metadata.zoneIds.filter((zoneId) => !gapByZone.has(zoneId));
+	const now = Date.now();
+	const days = calendarDays(slice.starts_at, slice.ends_at);
+	const statements = [db.prepare(`UPDATE backfill_slices SET status='superseded',error=?2,updated_at=?3 WHERE id=?1`).bind(slice.id, "Zone availability changed during import; isolated unavailable partitions", now)];
+	if (availableZoneIds.length) statements.push(db.prepare(`INSERT INTO backfill_slices(
+       id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
+     ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',NULL,?7)`).bind(crypto.randomUUID(), slice.backfill_job_id, slice.collector_key, serializeMetadata({
+		...metadata,
+		zoneIds: availableZoneIds,
+		units: days * availableZoneIds.length
+	}), slice.starts_at, slice.ends_at, now));
+	for (const gap of gaps) statements.push(db.prepare(`INSERT INTO backfill_slices(
+       id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
+     ) VALUES(?1,?2,?3,?4,?5,?6,'failed',0,NULL,'missing',?7,?8)`).bind(crypto.randomUUID(), slice.backfill_job_id, slice.collector_key, serializeMetadata({
+		...metadata,
+		zoneIds: [gap.zoneId],
+		units: days,
+		availability: "unavailable",
+		terminalGap: true
+	}), slice.starts_at, slice.ends_at, `${metadata.dataset}: ${gap.detail}`, now));
+	const results = await db.batch(statements);
+	if (budget) for (const result of results) chargeMeta(budget, result.meta);
+}
+async function migrateLegacyZoneSlice(db, slice, metadata, budget) {
+	const now = Date.now();
+	const units = calendarDays(slice.starts_at, slice.ends_at);
+	const superseded = await db.prepare(`UPDATE backfill_slices SET status='superseded',error=?2,updated_at=?3 WHERE id=?1 AND status='pending'`).bind(slice.id, "Migrated to exact-zone rate-limit partitions", now).run();
+	chargeMeta(budget, superseded.meta);
+	if (Number(superseded.meta.changes ?? 0) !== 1) return;
+	const results = await db.batch(metadata.zoneIds.map((zoneId) => db.prepare(`INSERT INTO backfill_slices(
+         id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
+       ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',NULL,?7)`).bind(crypto.randomUUID(), slice.backfill_job_id, slice.collector_key, serializeMetadata({
+		...metadata,
+		zoneIds: [zoneId],
+		units,
+		persistenceRetry: void 0
+	}), slice.starts_at, slice.ends_at, now)));
+	for (const result of results) chargeMeta(budget, result.meta);
+}
+function releasePersistenceReservation(budget, claimed) {
+	const reservation = claimed.persistenceReservation;
+	if (!reservation) return;
+	budget.refund("d1RowsRead", reservation.reads);
+	budget.refund("d1RowsWritten", reservation.writes);
+	claimed.persistenceReservation = null;
 }
 async function splitSlice(db, slice, metadata, reason, budget) {
 	const children = bisectInitialIngestionRange(slice.starts_at, slice.ends_at, metadata.zoneIds.length);
@@ -9333,7 +9797,8 @@ async function splitSlice(db, slice, metadata, reason, budget) {
          id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at
        ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',?7)`).bind(crypto.randomUUID(), slice.backfill_job_id, slice.collector_key, serializeMetadata({
 		...metadata,
-		units
+		units,
+		persistenceRetry: void 0
 	}), startsAt, endsAt, now))]);
 	if (budget) for (const result of results) chargeMeta(budget, result.meta);
 }
@@ -9350,6 +9815,14 @@ function bisectInitialIngestionRange(startsAt, endsAt, partitions) {
 async function finishSlice(db, budget, id, status, error, coverage) {
 	chargeMeta(budget, (await db.prepare(`UPDATE backfill_slices SET status=?2,error=?3,next_eligible_at=NULL,coverage_status=?4,updated_at=?5 WHERE id=?1`).bind(id, status, error, coverage, Date.now()).run()).meta);
 }
+async function markSliceTerminalGap(db, slice, metadata, reason, budget) {
+	const result = await db.prepare(`UPDATE backfill_slices SET scope_key=?2,error=COALESCE(error,?3),updated_at=?4 WHERE id=?1`).bind(slice.id, serializeMetadata({
+		...metadata,
+		availability: metadata.availability ?? "available",
+		terminalGap: true
+	}), reason.slice(0, 2e3), Date.now()).run();
+	if (budget) chargeMeta(budget, result.meta);
+}
 async function updateInitialJobStatus(db, jobId, budget) {
 	const result = await db.prepare(`UPDATE backfill_jobs SET status=CASE
        WHEN EXISTS(SELECT 1 FROM backfill_slices WHERE backfill_job_id=?1 AND status IN ('pending','running')) THEN 'running'
@@ -9360,6 +9833,49 @@ async function updateInitialJobStatus(db, jobId, budget) {
 }
 function rangeSlices(collector, dataset, zoneIds, now, setting) {
 	return boundedRanges(collector, dataset, zoneIds, now, Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86400))), Math.max(1, Math.floor(setting.maxDurationSeconds / 86400)), setting.maxPageSize);
+}
+function initialIngestionDays(job, rows) {
+	const end = job.requested_end_at;
+	const requestedStart = startOfUtcDay(job.requested_start_at);
+	const latestStart = startOfUtcDay(end) - 89 * DAY_MS;
+	const start = Math.max(requestedStart, latestStart);
+	const total = Math.max(1, Math.min(90, Math.ceil((end - start) / DAY_MS)));
+	let complete = 0;
+	let pending = 0;
+	let gaps = 0;
+	const errors = [];
+	let failedWindows = 0;
+	for (const row of rows) {
+		if (row.status !== "failed") continue;
+		failedWindows += 1;
+		if (row.error && !errors.includes(row.error) && errors.length < 3) errors.push(row.error);
+	}
+	for (let offset = 0; offset < total; offset += 1) {
+		const dayStart = start + offset * DAY_MS;
+		const dayEnd = Math.min(end, dayStart + DAY_MS);
+		const parsed = rows.filter((row) => row.starts_at < dayEnd && row.ends_at > dayStart).map((row) => ({
+			row,
+			metadata: parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at)
+		}));
+		if (parsed.length === 0) {
+			gaps += 1;
+			continue;
+		}
+		if (parsed.filter(({ row, metadata }) => metadata.terminalGap || row.status === "failed").length) gaps += 1;
+		const available = parsed.filter(({ row, metadata }) => metadata.availability !== "unavailable" || row.status !== "failed");
+		const active = available.some(({ row }) => row.status === "pending" || row.status === "running");
+		const failed = available.some(({ row }) => row.status === "failed");
+		if (active) pending += 1;
+		else if (!failed) complete += 1;
+	}
+	return {
+		total,
+		complete,
+		pending,
+		gaps,
+		failedWindows,
+		errors
+	};
 }
 function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, maxPageSize) {
 	const startsAt = startOfUtcDay(now) - (retentionDays - 1) * DAY_MS;
@@ -9377,7 +9893,8 @@ function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays,
 				dataset,
 				zoneIds,
 				maxPageSize,
-				units
+				units,
+				availability: "available"
 			}),
 			status: "pending",
 			coverageStatus: "missing",
@@ -9398,31 +9915,13 @@ function gapSlice(collector, dataset, zoneIds, now, detail, retentionDays) {
 			dataset,
 			zoneIds,
 			maxPageSize: 1e4,
-			units: calendarDays(startsAt, now) * Math.max(1, zoneIds.length)
+			units: calendarDays(startsAt, now) * Math.max(1, zoneIds.length),
+			availability: "unavailable",
+			terminalGap: true
 		}),
 		status: "failed",
 		coverageStatus: "missing",
 		error: `${dataset}: ${detail}`
-	};
-}
-function groupEquivalentCapabilities(values) {
-	const groups = /* @__PURE__ */ new Map();
-	for (const value of values) {
-		const key = [
-			value.maxDurationSeconds,
-			value.notOlderThanSeconds,
-			value.maxPageSize
-		].join(":");
-		groups.set(key, [...groups.get(key) ?? [], value]);
-	}
-	return [...groups.values()];
-}
-function mergedCapability(values) {
-	return {
-		...values[0],
-		maxDurationSeconds: Math.min(...values.map((item) => item.maxDurationSeconds)),
-		notOlderThanSeconds: Math.min(...values.map((item) => item.notOlderThanSeconds)),
-		maxPageSize: Math.min(...values.map((item) => item.maxPageSize))
 	};
 }
 function parseSliceMetadata(value, startsAt, endsAt) {
@@ -9433,7 +9932,10 @@ function parseSliceMetadata(value, startsAt, endsAt) {
 			dataset: parsed.dataset,
 			zoneIds: Array.isArray(parsed.zoneIds) ? parsed.zoneIds.filter((item) => typeof item === "string") : [],
 			maxPageSize: Number.isFinite(parsed.maxPageSize) ? Number(parsed.maxPageSize) : 1e4,
-			units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt)
+			units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt),
+			availability: parsed.availability === "unavailable" ? "unavailable" : parsed.availability === "available" ? "available" : void 0,
+			terminalGap: parsed.terminalGap === true,
+			persistenceRetry: parsed.persistenceRetry === true
 		};
 	} catch {}
 	return {
@@ -9478,6 +9980,104 @@ function errorMessage$1(error) {
 function chargeMeta(budget, meta) {
 	budget.charge("d1RowsRead", meta.rows_read ?? 0);
 	budget.charge("d1RowsWritten", meta.rows_written ?? meta.changes ?? 0);
+}
+var InitialGraphqlQuota = class {
+	state;
+	constructor(state) {
+		this.state = state;
+	}
+	get physicalRemaining() {
+		return Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
+	}
+	get resetAt() {
+		return this.state.windowStartedAt + GRAPHQL_WINDOW_MS;
+	}
+	canCharge(scope, logicalQueries) {
+		this.rollover();
+		if (this.physicalRemaining < 1) return false;
+		const amount = Math.max(1, Math.floor(logicalQueries));
+		return scope.kind === "account" ? this.state.accountUsed + amount <= INITIAL_ACCOUNT_QUERY_QUOTA : (this.state.zoneUsed[scope.zoneId] ?? 0) + amount <= INITIAL_ZONE_QUERY_QUOTA;
+	}
+	charge(scope, logicalQueries) {
+		if (!this.canCharge(scope, logicalQueries)) throw new HistoricalRateLimitError(429, Math.max(Date.now() + 1e3, this.resetAt), "Initial Analytics quota is reserved until the next Cloudflare window");
+		const amount = Math.max(1, Math.floor(logicalQueries));
+		this.state.physicalUsed += 1;
+		if (scope.kind === "account") this.state.accountUsed += amount;
+		else this.state.zoneUsed[scope.zoneId] = (this.state.zoneUsed[scope.zoneId] ?? 0) + amount;
+	}
+	snapshot() {
+		return {
+			windowStartedAt: this.state.windowStartedAt,
+			physicalUsed: this.state.physicalUsed,
+			accountUsed: this.state.accountUsed,
+			zoneUsed: { ...this.state.zoneUsed }
+		};
+	}
+	rollover(now = Date.now()) {
+		if (now >= this.state.windowStartedAt && now - this.state.windowStartedAt < GRAPHQL_WINDOW_MS) return;
+		this.state.windowStartedAt = now;
+		this.state.physicalUsed = 0;
+		this.state.accountUsed = 0;
+		this.state.zoneUsed = {};
+	}
+};
+function rateScope(metadata) {
+	const zoneId = metadata.zoneIds[0];
+	return zoneId ? {
+		kind: "zone",
+		zoneId
+	} : { kind: "account" };
+}
+async function loadInitialGraphqlQuota(db, accountId, now) {
+	const row = await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(`${INITIAL_QUOTA_KEY_PREFIX}${accountId}`).first();
+	let state = {
+		windowStartedAt: now,
+		physicalUsed: 0,
+		accountUsed: 0,
+		zoneUsed: {}
+	};
+	if (row) try {
+		const parsed = JSON.parse(row.value);
+		if (Number.isFinite(parsed.windowStartedAt) && now - Number(parsed.windowStartedAt) < GRAPHQL_WINDOW_MS && now >= Number(parsed.windowStartedAt)) {
+			const legacyUsed = Number.isFinite(parsed.used) ? Number(parsed.used) : 0;
+			state = {
+				windowStartedAt: Number(parsed.windowStartedAt),
+				physicalUsed: boundedUsage(parsed.physicalUsed ?? legacyUsed, INITIAL_PHYSICAL_GRAPHQL_QUOTA),
+				accountUsed: boundedUsage(parsed.accountUsed ?? legacyUsed, INITIAL_ACCOUNT_QUERY_QUOTA),
+				zoneUsed: Object.fromEntries(Object.entries(parsed.zoneUsed ?? {}).map(([zoneId, used]) => [zoneId, boundedUsage(used, INITIAL_ZONE_QUERY_QUOTA)]))
+			};
+		}
+	} catch {}
+	return new InitialGraphqlQuota(state);
+}
+async function saveInitialGraphqlQuota(db, accountId, quota) {
+	const now = Date.now();
+	await db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(`${INITIAL_QUOTA_KEY_PREFIX}${accountId}`, JSON.stringify(quota.snapshot()), now).run();
+}
+function boundedUsage(value, limit) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? Math.max(0, Math.min(limit, parsed)) : 0;
+}
+async function acquireInitialIngestionLease(db, accountId, holder) {
+	const now = Date.now();
+	const result = await db.prepare(`INSERT INTO cron_lease(name,holder,expires_at) VALUES(?1,?2,?3)
+     ON CONFLICT(name) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at
+     WHERE cron_lease.expires_at<?4 OR cron_lease.holder=?2`).bind(`${INITIAL_LEASE_NAME}:${accountId}`, holder, now + INITIAL_LEASE_TTL_MS, now).run();
+	return Number(result.meta.changes ?? 0) === 1;
+}
+async function releaseInitialIngestionLease(db, accountId, holder) {
+	await db.prepare(`DELETE FROM cron_lease WHERE name=?1 AND holder=?2`).bind(`${INITIAL_LEASE_NAME}:${accountId}`, holder).run();
+}
+async function requeueRunningInitialSlices(db, jobId) {
+	const now = Date.now();
+	await db.prepare(`UPDATE backfill_slices SET status='pending',next_eligible_at=?2,updated_at=?2
+     WHERE backfill_job_id=?1 AND status='running'`).bind(jobId, now).run();
+}
+async function initialSlicesPending(db, jobId) {
+	const row = await db.prepare(`SELECT 1 AS pending FROM backfill_slices WHERE backfill_job_id=?1 AND status='pending'
+       AND (next_eligible_at IS NULL OR next_eligible_at<=?2) LIMIT 1`).bind(jobId, Date.now()).first();
+	return Boolean(row);
 }
 async function initialJob(db, accountId, kind) {
 	const row = await db.prepare(`SELECT id,status,updated_at FROM backfill_jobs WHERE account_id=?1 AND kind=?2 LIMIT 1`).bind(accountId, kind).first();
@@ -9811,8 +10411,7 @@ var src_default = {
 		ctx.waitUntil((async () => {
 			const activeEnv = await configuredEnv(env);
 			if (!activeEnv) return;
-			await runMonitor(activeEnv).catch((error) => console.error("[Brolly] monitor failed", error));
-			await resumeInitialIngestion(activeEnv).catch((error) => console.error("[Brolly] initial import failed", error));
+			await Promise.all([runMonitor(activeEnv).catch((error) => console.error("[Brolly] monitor failed", error)), resumeInitialIngestion(activeEnv).catch((error) => console.error("[Brolly] initial import failed", error))]);
 		})());
 	},
 	async fetch(request, env, ctx) {
