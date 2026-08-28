@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunBudget } from "@standardagents/brolly-core";
-import { HistoricalAnalyticsClient, HistoricalRateLimitError } from "../src/historical-analytics.js";
+import { HISTORICAL_DATASETS, HistoricalAnalyticsClient, HistoricalRateLimitError } from "../src/historical-analytics.js";
 import type { Env } from "../src/env.js";
 
 const env = { BROLLY_ACCOUNT_ID: "account-1" } as Env;
@@ -9,12 +9,12 @@ const DAY_MS = 86_400_000;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("historical Analytics collection", () => {
-  it("uses exact-zone account-based requests and reports an absent zone node", async () => {
+  it("uses nested account zone batches and reports an absent zone node", async () => {
     let request: Request | undefined;
     const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       request = new Request(input, init);
-      return Response.json({ data: { viewer: { zones: [] } } });
+      return Response.json({ data: { viewer: { accounts: [{ zones: [] }] } } });
     }));
     const zoneId = "a".repeat(32);
     const client = new HistoricalAnalyticsClient(
@@ -36,10 +36,10 @@ describe("historical Analytics collection", () => {
 
     const body = await request!.clone().json() as { query: string; variables: Record<string, unknown> };
     expect(request!.headers.get("x-rate-limit-type")).toBe("account-based");
-    expect(body.query).toContain("zoneTag: $zone");
-    expect(body.query).not.toContain("zoneTag_in");
-    expect(body.variables.zone).toBe(zoneId);
-    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "zone", zoneId }, 1);
+    expect(body.query).toContain("accounts(filter: { accountTag: $account })");
+    expect(body.query).toContain("zoneTag_in: $zones");
+    expect(body.variables).toMatchObject({ account: "account-1", zones: [zoneId] });
+    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "account" }, 1);
     expect(result).toMatchObject({
       complete: false,
       rows: 0,
@@ -156,6 +156,57 @@ describe("historical Analytics collection", () => {
 });
 
 describe("historical Analytics capability discovery", () => {
+  it("resumes capability discovery from persisted progress after a shared window fills", async () => {
+    const zoneIds = Array.from({ length: 55 }, (_, index) => (index + 1).toString(16).padStart(32, "0"));
+    const settings = Object.fromEntries(HISTORICAL_DATASETS.map(spec => [spec.dataset, setting()]));
+    let phase = 1;
+    const requests: Array<{ phase: number; zones: string[] }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { variables?: { zones?: string[] } };
+      const zones = body.variables?.zones ?? [];
+      requests.push({ phase, zones });
+      return zones.length
+        ? Response.json({ data: { viewer: { accounts: [{ zones: zones.map(zoneTag => ({ zoneTag, settings })) }] } } })
+        : Response.json({ data: { viewer: { accounts: [{ settings }] } } });
+    }));
+    const budget = (limit: number) => {
+      let used = 0;
+      return {
+        admit: vi.fn(async (_scope: unknown, logicalQueries: number) => {
+          if (used + logicalQueries > limit) {
+            throw new HistoricalRateLimitError(429, Date.now() + 300_000, "test shared window is full");
+          }
+          used += logicalQueries;
+        }),
+        pauseUntil: vi.fn(),
+      };
+    };
+    let seed = [] as Awaited<ReturnType<HistoricalAnalyticsClient["discoverCapabilities"]>>;
+    const first = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", async () => zoneIds,
+      { accountBasedRateLimit: true, rateBudget: budget(160) },
+    );
+
+    await expect(first.discoverCapabilities({ onProgress: values => { seed = [...values]; } }))
+      .rejects.toBeInstanceOf(HistoricalRateLimitError);
+    expect(seed.some(item => item.root === "account")).toBe(true);
+    expect(new Set(seed.flatMap(item => item.zoneId ?? [])).size).toBeGreaterThan(0);
+
+    phase = 2;
+    const second = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", async () => zoneIds,
+      { accountBasedRateLimit: true, rateBudget: budget(160) },
+    );
+    const capabilities = await second.discoverCapabilities({ seed });
+    const primaryZoneDatasets = HISTORICAL_DATASETS.filter(spec => spec.root === "zone" && !spec.fallbackFor);
+
+    expect(requests.filter(request => request.phase === 2 && request.zones.length === 0)).toHaveLength(0);
+    expect(capabilities.filter(item => item.root === "account")).toHaveLength(
+      HISTORICAL_DATASETS.filter(spec => spec.root === "account" && !spec.fallbackFor).length,
+    );
+    expect(capabilities.filter(item => item.root === "zone")).toHaveLength(primaryZoneDatasets.length * zoneIds.length);
+  });
+
   it("isolates an account dataset that makes a combined settings query fail", async () => {
     const requests: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {

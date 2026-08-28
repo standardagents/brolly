@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ImportProgress, ImportProgressView, initialIngestionOverallProgress } from "../src/client/onboarding/ingest.js";
+import { ImportProgressView, initialIngestionOverallProgress, useInitialIngestion } from "../src/client/onboarding/ingest.js";
 import type { InitialIngestionResponse } from "../src/client/types.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -19,7 +19,7 @@ afterEach(() => {
 describe("initial import progress", () => {
   it("renders capability planning before work units have been persisted", async () => {
     const container = await render({
-      ingestion: { job: { id: "job", status: "planning", startedAt: 1, updatedAt: 1 }, days: null, collectors: [] },
+      ingestion: { job: { id: "job", status: "planning", startedAt: 1, updatedAt: 1 }, days: null, collectors: [], readiness: pendingReadiness() },
       running: true,
       error: "",
       billingConnected: true,
@@ -34,6 +34,7 @@ describe("initial import progress", () => {
       job: { id: "job", status: "running", startedAt: 1_000_000, updatedAt: 1_001_000 },
       days: { total: 90, complete: 0, pending: 90, gaps: 0, failedWindows: 0, errors: [] },
       collectors: [collector(100, 25)],
+      readiness: readyReadiness(),
     };
     const container = await render({ ingestion, running: true, error: "", billingConnected: true, now: 1_240_000 });
     const progress = [...container.querySelectorAll<HTMLElement>("[role='progressbar']")];
@@ -65,6 +66,7 @@ describe("initial import progress", () => {
       job: { id: "job", status: "running", startedAt: 1, updatedAt: 2 },
       days: { total: 90, complete: 10, pending: 80, gaps: 77, failedWindows: 18, errors: ["coverage gap"] },
       collectors: [collector(100, 10)],
+      readiness: pendingReadiness(),
     };
     const container = await render({ ingestion, running: true, error: "", billingConnected: false });
     const progress = container.querySelector<HTMLElement>("[role='progressbar']");
@@ -87,10 +89,11 @@ describe("initial import progress", () => {
         updatedAt: now,
         limiterMode: "shared-fallback",
         resumeAt: now + 4 * 60_000,
-        sharedQueryLimit: 280,
+        sharedQueryLimit: 60,
       },
       days: { total: 90, complete: 45, pending: 45, gaps: 0, failedWindows: 0, errors: [] },
       collectors: [collector(100, 50)],
+      readiness: pendingReadiness(),
     };
     const container = await render({ ingestion, running: true, error: "", billingConnected: true, now });
     const panel = container.querySelector<HTMLElement>("[data-import-state='rate_limited']");
@@ -105,6 +108,7 @@ describe("initial import progress", () => {
       job: { id: "job", status: "complete_with_gaps", startedAt: 1, updatedAt: 2 },
       days: { total: 90, complete: 80, pending: 0, gaps: 10, failedWindows: 1, errors: ["coverage gap"] },
       collectors: [collector(100, 80, 20)],
+      readiness: readyReadiness(),
     };
     const container = await render({ ingestion: withGap, running: false, error: "", billingConnected: false });
     expect(container.querySelector("[data-import-state='complete_with_gaps']")).not.toBeNull();
@@ -133,6 +137,7 @@ describe("initial import progress", () => {
         job: { id: "job", status: "complete", startedAt: 1, updatedAt: 2 },
         days: { total: 90, complete: 90, pending: 0, gaps: 0, failedWindows: 0, errors: [] },
         collectors: [],
+        readiness: readyReadiness(),
       } satisfies InitialIngestionResponse);
     }));
     const container = document.createElement("div");
@@ -140,7 +145,7 @@ describe("initial import progress", () => {
     root = createRoot(container);
 
     await act(async () => {
-      root!.render(<ImportProgress token="token" billingConnected={false} />);
+      root!.render(<IngestionProbe token="token" />);
       await Promise.resolve();
     });
     expect(progressRequests).toBe(1);
@@ -161,6 +166,7 @@ describe("initial import progress", () => {
         job: { id: "job", status: "running", startedAt: 1, updatedAt: 2 },
         days: { total: 90, complete: 0, pending: 90, gaps: 0, failedWindows: 0, errors: [] },
         collectors: [collector(100, 1)],
+        readiness: pendingReadiness(),
       } satisfies InitialIngestionResponse);
     }));
     const container = document.createElement("div");
@@ -168,7 +174,7 @@ describe("initial import progress", () => {
     root = createRoot(container);
 
     await act(async () => {
-      root!.render(<ImportProgress token="token" billingConnected={false} />);
+      root!.render(<IngestionProbe token="token" />);
       await Promise.resolve();
     });
     expect(progressRequests).toBe(1);
@@ -208,4 +214,17 @@ async function render(props: Parameters<typeof ImportProgressView>[0]): Promise<
     root!.render(<ImportProgressView {...props} />);
   });
   return container;
+}
+
+function IngestionProbe({ token }: { token: string }) {
+  const ingestion = useInitialIngestion(token);
+  return <div data-running={ingestion.running} />;
+}
+
+function pendingReadiness(): InitialIngestionResponse["readiness"] {
+  return { billing: "pending", account: "pending", products: {} };
+}
+
+function readyReadiness(): InitialIngestionResponse["readiness"] {
+  return { billing: "ready", account: "ready", products: {} };
 }

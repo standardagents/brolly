@@ -230,6 +230,13 @@ export async function refreshInitialIngestionForOAuthScopes(db: D1Database, acco
          AND ${revisionChanged}`,
     ).bind(accountId, OAUTH_SCOPE_REVISION, now),
     db.prepare(
+      `DELETE FROM settings
+       WHERE key IN (
+         SELECT 'initial_ingestion_capabilities:' || id FROM backfill_jobs
+         WHERE account_id=?1 AND kind='initial_v2'
+       ) AND ${revisionChanged}`,
+    ).bind(accountId, OAUTH_SCOPE_REVISION),
+    db.prepare(
       `UPDATE backfill_jobs SET kind='initial_v2_superseded',status='superseded',updated_at=?3
        WHERE account_id=?1 AND kind='initial_v2' AND ${revisionChanged}`,
     ).bind(accountId, OAUTH_SCOPE_REVISION, now),

@@ -37,7 +37,12 @@ beforeEach(() => {
       series: [{ day: "2026-08-17", costUsd: 10, metrics: { requests: 100 }, sealed: true }, { day: "2026-08-18", costUsd: 12, metrics: { requests: 120 }, sealed: false }],
       cycles: [{ startsAt: Date.UTC(2026, 7, 1), endsAt: Date.UTC(2026, 8, 1), approximate: false }],
     });
-    if (path === "/api/onboarding/ingest") return json({ job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 }, collectors: [] });
+    if (path === "/api/onboarding/ingest") return json({
+      job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 },
+      days: { total: 90, complete: 90, pending: 0, gaps: 0, failedWindows: 0, errors: [] },
+      collectors: [],
+      readiness: { billing: "ready", account: "ready", products: {} },
+    });
     if (path === "/api/onboarding/estimates") return json({
       generatedAt: 1, windowStartAt: 1, windowEndAt: 1, cached: true, apiCalls: 0,
       planTier: "paid", planTierSource: "api",

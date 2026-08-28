@@ -75,12 +75,14 @@ denied Analytics scope, or guided Billing Read setup when billing is missing.
 The billing guide provides a copyable least-privilege token recipe. A token
 entered there is verified before
 it is saved, AES-GCM encrypted with `BROLLY_CREDENTIAL_KEY`, and stored only in
-the installation's D1. The next step imports Cloudflare's available 90-day
-usage and billing history. Its progress indicator combines planned work across
+the installation's D1. Brolly then imports Cloudflare's available 90-day usage
+and billing history. Billing ranges run before Analytics collection. Its progress indicator combines planned work across
 collectors and shows an estimated remaining time. Its collapsed summary opens
 to show progress for each Cloudflare data source. Setup can continue while that
-bounded job runs in the background. Risk tolerance uses the imported history
-to seed daily and billing-cycle limits. A Cloudflare budget wait appears with
+bounded job runs in the background. Risk tolerance and account limits open when
+Billing reaches a terminal state and account-root history is ready or limited.
+Product limits become editable independently
+as each product reaches a terminal usable state. A Cloudflare budget wait appears with
 its retry countdown and updated completion estimate. Scheduled monitoring begins
 after first-run setup finishes, which gives the history import exclusive account
 access during setup. An operator may continue

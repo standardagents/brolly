@@ -72,21 +72,31 @@ describe("Cloudflare OAuth authentication", () => {
         `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
          VALUES('old-slice','old-job','graphql:zones','{}',?1,?2,'failed','missing',?2)`,
       ).bind(now - 86_400_000, now).run();
+      await testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_capabilities:old-job", "[]", now).run();
 
       await refreshInitialIngestionForOAuthScopes(testD1.db, "account-1", now);
       expect(await testD1.db.prepare(`SELECT kind,status FROM backfill_jobs WHERE id='old-job'`).first()).toMatchObject({
         kind: "initial_v2_superseded", status: "superseded",
       });
       expect(await testD1.db.prepare(`SELECT status FROM backfill_slices WHERE id='old-slice'`).first()).toMatchObject({ status: "superseded" });
+      expect(await testD1.db.prepare(
+        `SELECT value FROM settings WHERE key='initial_ingestion_capabilities:old-job'`,
+      ).first()).toBeNull();
 
       await testD1.db.prepare(
         `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
          VALUES('new-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
       ).bind(now - 86_400_000, now).run();
+      await testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_capabilities:new-job", "[]", now).run();
       await refreshInitialIngestionForOAuthScopes(testD1.db, "account-1", now + 1);
       expect(await testD1.db.prepare(`SELECT kind,status FROM backfill_jobs WHERE id='new-job'`).first()).toMatchObject({
         kind: "initial_v2", status: "pending",
       });
+      expect(await testD1.db.prepare(
+        `SELECT value FROM settings WHERE key='initial_ingestion_capabilities:new-job'`,
+      ).first()).toMatchObject({ value: "[]" });
     } finally {
       testD1.close();
     }

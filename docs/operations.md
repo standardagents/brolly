@@ -49,22 +49,25 @@ the background and shows its progress while the operator connects channels.
 Usage collectors create daily slices within each dataset's available retention,
 up to 90 days. Billing Read creates three contiguous slices of no more than 31
 days. Initial ingestion uses Cloudflare's account-based Analytics limiter. Its
-persisted five-minute state reserves 240 logical queries for the account, 240
-for each zone, and a 700-request physical ceiling. Exact-zone work can continue
-when the account allowance is full. Requests are paced to Cloudflare's sustained
-limit of one request per second for the account or exact zone. Six Analytics
-producers can use six distinct zone allowances concurrently. One import lease
-covers browser and cron starts. The producers use a two-result buffer before one
+persisted five-minute state applies one shared query-cost budget from the first
+request. First-run setup admits up to 200 counted units. Configured imports admit
+up to 160 counted units so monitoring retains capacity. Zone settings and usage
+are nested under the connected account in batches of at most ten zones. Physical
+requests use one shared lane at one request per second. Each invocation allows
+at most 40 GraphQL requests. One import lease covers browser and cron starts.
+Capability results are checkpointed after each successful discovery request.
+Planning resumes from that checkpoint in the next shared window.
+The producers use a two-result buffer before one
 serialized D1 consumer. Claimed work reserves D1 capacity. A fresh per-slice D1
 row-limit failure requeues the original range for one fresh-budget attempt before
 splitting it. Shared run and wall-time limits requeue unfinished slices unchanged.
 Cloudflare rate limits defer work without consuming an import retry. Billing receives reserved REST capacity.
 During first-run setup, scheduled passes serve the import exclusively. The
 minute monitor begins after setup records `onboarding_complete`. A generic
-credential-level budget response switches that import to a shared 280-query
-fallback lane after Cloudflare's retry deadline. A configured re-import uses a
-240-query fallback lane so live monitoring retains capacity. A named account or
-zone response pauses only that scope. Daily Analytics capability discovery is
+credential-level budget response records Cloudflare's retry deadline and lowers
+the persisted shared allowance to 80 percent of the observed counted spend,
+with a floor of 60 units. A named account or zone response pauses that scope.
+Daily Analytics capability discovery is
 deferred until a configured re-import finishes.
 Setup can continue while the scheduler finishes eligible slices. One progress
 row combines weighted work across every planned source
@@ -278,7 +281,10 @@ remaining time after progress begins. The collapsed row opens to per-source
 progress. A counted warning control contains unavailable window details.
 During a Cloudflare rate-limit wait, the row shows the retry countdown and the
 fallback completion estimate.
-Channel and level edits remain available while ingestion runs.
+Risk tolerance and account limits open when Billing reaches a terminal state
+and account-root history is ready or limited.
+Each product limit shows Importing, Ready, Ready with gaps, or Unavailable.
+Setup completion does not depend on every product import reaching a terminal state.
 
 The first access check uses at most six Cloudflare requests for recent usage,
 billing access, and account-plan detection. The detected plan is persisted and

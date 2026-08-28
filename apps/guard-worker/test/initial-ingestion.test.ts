@@ -32,7 +32,7 @@ describe("initial ingestion slice plan", () => {
     expect(slices.length).toBeLessThan(100);
   });
 
-  it("plans each zone independently for account-based rate limiting", () => {
+  it("plans zones in bounded batches for account-based rate limiting", () => {
     const zoneIds = Array.from({ length: 12 }, (_, index) => `zone-${index + 1}`);
     const zoneCapabilities = HISTORICAL_DATASETS
       .filter(spec => spec.root === "zone")
@@ -40,11 +40,11 @@ describe("initial ingestion slice plan", () => {
     const slices = initialIngestionSlicePlan(NOW, false, [...accountCapabilities(), ...zoneCapabilities]);
     const zones = datasetSlices(slices, "httpRequestsAdaptiveGroups");
 
-    expect(zones).toHaveLength(24);
-    expect(zones.every(slice => metadata(slice).zoneIds.length === 1)).toBe(true);
+    expect(zones).toHaveLength(4);
+    expect(zones.every(slice => metadata(slice).zoneIds.length <= 10)).toBe(true);
     expect(new Set(zones.flatMap(slice => metadata(slice).zoneIds))).toEqual(new Set(zoneIds));
-    expect(zones.filter(slice => slice.status === "pending")).toHaveLength(12);
-    expect(zones.filter(slice => slice.status === "complete")).toHaveLength(12);
+    expect(zones.filter(slice => slice.status === "pending")).toHaveLength(2);
+    expect(zones.filter(slice => slice.status === "complete")).toHaveLength(2);
     expect(zones.reduce((sum, slice) => sum + metadata(slice).units, 0)).toBe(90 * zoneIds.length);
   });
 
@@ -58,7 +58,7 @@ describe("initial ingestion slice plan", () => {
     }));
     const gaps = datasetSlices(initialIngestionSlicePlan(NOW, false, [...accountCapabilities(), ...unavailable]), spec.dataset);
 
-    expect(gaps).toHaveLength(2);
+    expect(gaps).toHaveLength(1);
     expect(gaps.every(gap => gap.status === "failed" && gap.coverageStatus === "missing")).toBe(true);
     expect(gaps.reduce((sum, gap) => sum + metadata(gap).units, 0)).toBe(180);
     expect(gaps[0]?.error).toContain("denied Analytics access");
@@ -66,7 +66,10 @@ describe("initial ingestion slice plan", () => {
 
   it("adds three non-overlapping billing ranges inside the 31-day API limit", () => {
     const withoutBilling = initialIngestionSlicePlan(NOW, false, accountCapabilities());
-    expect(withoutBilling.some(slice => slice.collector === "billing")).toBe(false);
+    expect(withoutBilling.filter(slice => slice.collector === "billing")).toMatchObject([{
+      status: "complete",
+      coverageStatus: "missing",
+    }]);
 
     const billing = initialIngestionSlicePlan(NOW, true, accountCapabilities())
       .filter(slice => slice.collector === "billing");
@@ -141,7 +144,7 @@ describe("initial ingestion progress", () => {
 
     expect((await initialIngestionProgress(testD1.db, "account-1")).job).toMatchObject({
       id: "new-job",
-      limiterMode: "optimistic",
+      limiterMode: "shared-paced",
     });
   });
 
@@ -229,9 +232,82 @@ describe("initial ingestion progress", () => {
     expect(progress.days).toMatchObject({ total: 3, complete: 1, pending: 0, gaps: 2 });
   });
 
-  it("fetches up to six Analytics slices concurrently and finalizes each slice", async () => {
+  it("reports Billing, account, and product readiness from terminal slice evidence", async () => {
     testD1 = createTestD1();
-    const now = Date.now();
+    const start = NOW - DAY_MS;
+    await testD1.db.prepare(
+      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+       VALUES('readiness-job','account-1','initial_v2',?1,?2,'running',?2,?2)`,
+    ).bind(start, NOW).run();
+    const slice = (id: string, collector: string, dataset: string, status: string, extra: Record<string, unknown> = {}) => testD1!.db.prepare(
+      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,error,updated_at)
+       VALUES(?1,'readiness-job',?2,?3,?4,?5,?6,'missing',?7,?5)`,
+    ).bind(id, collector, JSON.stringify({
+      version: 2, dataset, zoneIds: [], maxPageSize: 10_000, units: 1, availability: "available", ...extra,
+    }), start, NOW, status, status === "failed" ? "coverage gap" : null);
+    await testD1.db.batch([
+      slice("billing", "billing", "billable-usage", "complete"),
+      slice("workers", "graphql:workers", "workersInvocationsAdaptive", "complete"),
+      slice("d1-complete", "graphql:d1", "d1AnalyticsAdaptiveGroups", "complete"),
+      slice("d1-gap", "graphql:d1", "d1AnalyticsAdaptiveGroups", "failed", { terminalGap: true }),
+      slice("email-pending", "graphql:email", "emailSendingAdaptiveGroups", "pending"),
+      slice("zones-retention", "graphql:zones", "httpRequestsAdaptiveGroups", "complete", {
+        availability: "unavailable", expectedGap: true,
+      }),
+      slice("zones-measured", "graphql:zones", "httpRequestsAdaptiveGroups", "complete"),
+    ]);
+
+    const progress = await initialIngestionProgress(testD1.db, "account-1");
+
+    expect(progress.readiness).toMatchObject({
+      billing: "ready",
+      account: "limited",
+      products: {
+        workers: { state: "ready", percent: 100, errors: 0 },
+        d1: { state: "limited", percent: 100, errors: 1 },
+        email: { state: "importing", percent: 0, errors: 0 },
+        zones: { state: "ready", percent: 100, errors: 0 },
+      },
+    });
+  });
+
+  it("keeps account history ready when Billing is terminally unavailable", async () => {
+    testD1 = createTestD1();
+    const start = NOW - DAY_MS;
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('billing-gap-job','account-1','initial_v2',?1,?2,'complete_with_gaps',?2,?2)`,
+      ).bind(start, NOW),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,error,updated_at)
+         VALUES('billing-gap','billing-gap-job','billing',?1,?2,?3,'complete','missing',NULL,?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "billable-usage", zoneIds: [], maxPageSize: 10_000, units: 1,
+        availability: "unavailable", expectedGap: true,
+      }), start, NOW),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,error,updated_at)
+         VALUES('account-history','billing-gap-job','graphql:workers',?1,?2,?3,'complete','complete',NULL,?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+        availability: "available",
+      }), start, NOW),
+    ]);
+
+    const progress = await initialIngestionProgress(testD1.db, "account-1");
+    expect(progress.readiness).toMatchObject({
+      billing: "unavailable",
+      account: "ready",
+    });
+    expect(progress.days).toMatchObject({ gaps: 0, failedWindows: 0, errors: [] });
+  });
+
+  it("paces physical Analytics requests through one shared lane", async () => {
+    vi.useFakeTimers();
+    testD1 = createTestD1();
+    const now = Date.UTC(2026, 7, 27, 12);
+    vi.setSystemTime(now);
     await testD1.db.prepare(
       `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
        VALUES('parallel-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
@@ -248,27 +324,26 @@ describe("initial ingestion progress", () => {
       units: 1,
     }), now - (index + 1) * DAY_MS, now - index * DAY_MS, now)));
 
-    let inFlight = 0;
-    let peakInFlight = 0;
+    const requestTimes: number[] = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      inFlight += 1;
-      peakInFlight = Math.max(peakInFlight, inFlight);
-      await new Promise(resolve => setTimeout(resolve, 5));
-      inFlight -= 1;
-      const zoneId = (JSON.parse(String(init?.body)) as { variables: { zone: string } }).variables.zone;
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] } } });
+      requestTimes.push(Date.now());
+      const zones = (JSON.parse(String(init?.body)) as { variables: { zones: string[] } }).variables.zones;
+      return Response.json({ data: { viewer: { accounts: [{ zones: zones.map(zoneTag => ({ zoneTag, httpRequestsAdaptiveGroups: [] })) }] } } });
     }));
 
-    await runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "parallel-job");
+    const run = runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "parallel-job");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
 
-    expect(peakInFlight).toBe(6);
+    expect(requestTimes).toHaveLength(7);
+    expect(requestTimes.slice(1).every((time, index) => time - requestTimes[index]! >= 1_000)).toBe(true);
     const completed = await testD1.db.prepare(
       `SELECT COUNT(*) AS count FROM backfill_slices WHERE backfill_job_id='parallel-job' AND status='complete'`,
     ).first<{ count: number }>();
     expect(completed?.count).toBe(7);
   });
 
-  it("paces repeated requests to one zone while other zones remain concurrent", async () => {
+  it("paces repeated zone requests through the shared lane", async () => {
     testD1 = createTestD1();
     const now = Date.now();
     const zoneId = "a".repeat(32);
@@ -285,7 +360,7 @@ describe("initial ingestion progress", () => {
     const requestTimes: number[] = [];
     vi.stubGlobal("fetch", vi.fn(async () => {
       requestTimes.push(Date.now());
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] } } });
+      return Response.json({ data: { viewer: { accounts: [{ zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] }] } } });
     }));
 
     await runInitialIngestion(
@@ -333,51 +408,6 @@ describe("initial ingestion progress", () => {
 
     expect(requestTimes).toHaveLength(2);
     expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
-  });
-
-  it("keeps Analytics fetching active while D1 persistence is serialized", async () => {
-    testD1 = createTestD1();
-    const now = Date.now();
-    await testD1.db.prepare(
-      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
-       VALUES('overlap-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
-    ).bind(now - 2 * DAY_MS, now).run();
-    await testD1.db.batch(Array.from({ length: 7 }, (_, index) => testD1!.db.prepare(
-      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
-       VALUES(?1,'overlap-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
-    ).bind(`overlap-${index}`, JSON.stringify({
-      version: 2,
-      dataset: "httpRequestsAdaptiveGroups",
-      zoneIds: [(index + 1).toString(16).padStart(32, "0")],
-      maxPageSize: 10_000,
-      units: 1,
-    }), now - (index + 1) * DAY_MS, now - index * DAY_MS)));
-
-    let persistenceStarted = false;
-    let seventhFetchStartedDuringPersistence = false;
-    let fetchCount = 0;
-    const baseDb = testD1.db;
-    const delayedDb = {
-      prepare: baseDb.prepare.bind(baseDb),
-      async batch(statements: D1PreparedStatement[]) {
-        persistenceStarted = true;
-        await new Promise(resolve => setTimeout(resolve, 25));
-        return baseDb.batch(statements);
-      },
-    } as unknown as D1Database;
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      const request = fetchCount++;
-      if (request >= 6 && persistenceStarted) seventhFetchStartedDuringPersistence = true;
-      if (request > 0) await new Promise(resolve => setTimeout(resolve, 5));
-      const zoneId = (JSON.parse(String(init?.body)) as { variables: { zone: string } }).variables.zone;
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [{
-        dimensions: { date: "2026-08-01" }, count: 1,
-      }] }] } } });
-    }));
-
-    await runInitialIngestion({ DB: delayedDb, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "overlap-job");
-
-    expect(seventhFetchStartedDuringPersistence).toBe(true);
   });
 
   it("requeues a persistence overflow before splitting it on a fresh-budget attempt", async () => {
@@ -680,7 +710,7 @@ describe("initial ingestion progress", () => {
     const state = JSON.parse(stored!.value) as { jobId?: string; limiterMode?: string; pausedUntil?: number; sharedUsed?: number };
 
     expect(state.pausedUntil).toBeGreaterThan(now + 9 * 60_000);
-    expect(state).toMatchObject({ jobId: "long-pause-job", limiterMode: "shared-fallback", sharedUsed: 280 });
+    expect(state).toMatchObject({ jobId: "long-pause-job", limiterMode: "shared-fallback", sharedUsed: 60 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -714,7 +744,7 @@ describe("initial ingestion progress", () => {
     expect((await initialIngestionProgress(testD1.db, "account-1")).job).toMatchObject({
       limiterMode: "shared-fallback",
       resumeAt: now + 5 * 60_000,
-      sharedQueryLimit: 280,
+      sharedQueryLimit: 60,
     });
 
     await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
@@ -728,8 +758,8 @@ describe("initial ingestion progress", () => {
     await resumed;
 
     expect(admissions).toHaveLength(3);
-    expect(admissions[1]! - admissions[0]!).toBeGreaterThanOrEqual(Math.ceil(5 * 60_000 / 280));
-    expect(admissions[2]! - admissions[1]!).toBeGreaterThanOrEqual(Math.ceil(5 * 60_000 / 280));
+    expect(admissions[1]! - admissions[0]!).toBeGreaterThanOrEqual(1_000);
+    expect(admissions[2]! - admissions[1]!).toBeGreaterThanOrEqual(1_000);
     const stored = await testD1.db.prepare(
       `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
     ).first<{ value: string }>();
@@ -755,7 +785,7 @@ describe("initial ingestion progress", () => {
       "initial_ingestion_quota:account-1",
       JSON.stringify({
         jobId: "named-limit-job",
-        limiterMode: "optimistic",
+        limiterMode: "shared-paced",
         windowStartedAt: now - 299_000,
         physicalUsed: 0,
         sharedUsed: 0,
@@ -772,15 +802,15 @@ describe("initial ingestion progress", () => {
     }), now - DAY_MS, now)));
     let limitedCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { variables?: { zone?: string } };
-      const zoneId = body.variables?.zone;
+      const body = JSON.parse(String(init?.body)) as { variables?: { zones?: string[] } };
+      const zoneId = body.variables?.zones?.[0];
       if (zoneId === limitedZone) {
         limitedCalls += 1;
         return Response.json({
           errors: [{ message: `Zone ${limitedZone} has exceeded its rate limit. Please try again after 5 minutes.`, extensions: { code: "budget" } }],
         }, { status: 429 });
       }
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: healthyZone, httpRequestsAdaptiveGroups: [] }] } } });
+      return Response.json({ data: { viewer: { accounts: [{ zones: [{ zoneTag: healthyZone, httpRequestsAdaptiveGroups: [] }] }] } } });
     }));
 
     const run = runInitialIngestion(
@@ -803,12 +833,22 @@ describe("initial ingestion progress", () => {
     ).first<{ value: string }>();
     expect(JSON.parse(quota!.value)).toMatchObject({
       jobId: "named-limit-job",
-      limiterMode: "optimistic",
+      limiterMode: "shared-paced",
       zonePausedUntil: { [limitedZone]: expect.any(Number) },
     });
+    await testD1.db.prepare(
+      `UPDATE backfill_slices SET next_eligible_at=?2 WHERE id=?1`,
+    ).bind(`slice-${limitedZone}`, Date.now()).run();
+    const pausedRun = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "named-limit-job",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await pausedRun;
+    expect(limitedCalls).toBe(1);
   });
 
-  it("continues zone work when the account query bucket is full", async () => {
+  it("holds account and zone work when the shared query budget is full", async () => {
     testD1 = createTestD1();
     const now = Date.now();
     const zoneId = "a".repeat(32);
@@ -827,12 +867,12 @@ describe("initial ingestion progress", () => {
       ).bind(JSON.stringify({ version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [zoneId], maxPageSize: 10_000, units: 1 }), now - DAY_MS, now),
       testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
         .bind("initial_ingestion_quota:account-1", JSON.stringify({
-          windowStartedAt: now, physicalUsed: 0, accountUsed: 240, zoneUsed: {},
+          jobId: "scoped-job", limiterMode: "shared-paced", windowStartedAt: now,
+          physicalUsed: 0, sharedUsed: 200, accountUsed: 0, zoneUsed: {},
         }), now),
     ]);
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
-      data: { viewer: { zones: [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] } },
-    })));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
 
     await runInitialIngestion(
       { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
@@ -844,42 +884,9 @@ describe("initial ingestion progress", () => {
     ).all<{ id: string; status: string }>();
     expect(rows.results).toEqual([
       { id: "account-slice", status: "pending" },
-      { id: "zone-slice", status: "complete" },
+      { id: "zone-slice", status: "pending" },
     ]);
-  });
-
-  it("persists independent quota usage for a 55-zone account", async () => {
-    testD1 = createTestD1();
-    const now = Date.now();
-    const zoneIds = Array.from({ length: 55 }, (_, index) => index.toString(16).padStart(32, "0"));
-    await testD1.db.prepare(
-      `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
-       VALUES('zone-quota-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
-    ).bind(now - DAY_MS, now).run();
-    await testD1.db.batch(zoneIds.map((zoneId, index) => testD1!.db.prepare(
-      `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
-       VALUES(?1,'zone-quota-job','graphql:zones',?2,?3,?4,'pending','missing',?4)`,
-    ).bind(`zone-quota-${index}`, JSON.stringify({
-      version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [zoneId], maxPageSize: 10_000, units: 1,
-    }), now - DAY_MS, now)));
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { variables?: { zone?: string } };
-      const zoneId = body.variables?.zone;
-      return Response.json({ data: { viewer: { zones: zoneId ? [{ zoneTag: zoneId, httpRequestsAdaptiveGroups: [] }] : [] } } });
-    }));
-
-    await runInitialIngestion(
-      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
-      "zone-quota-job",
-    );
-
-    const quota = await testD1.db.prepare(
-      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
-    ).first<{ value: string }>();
-    const state = JSON.parse(quota!.value) as { physicalUsed: number; zoneUsed: Record<string, number> };
-    expect(state.physicalUsed).toBe(55);
-    expect(Object.keys(state.zoneUsed)).toHaveLength(55);
-    expect(Object.values(state.zoneUsed).every(used => used === 1)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("carries logical GraphQL usage across resumed runs", async () => {
@@ -897,7 +904,8 @@ describe("initial ingestion progress", () => {
       testD1.db.prepare(
         `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`,
       ).bind("initial_ingestion_quota:account-1", JSON.stringify({
-        windowStartedAt: now, physicalUsed: 699, accountUsed: 239, zoneUsed: {},
+        jobId: "quota-job", limiterMode: "shared-paced", windowStartedAt: now,
+        physicalUsed: 39, sharedUsed: 199, accountUsed: 199, zoneUsed: {},
       }), now),
     ]);
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } })));
@@ -905,10 +913,10 @@ describe("initial ingestion progress", () => {
     await runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "quota-job");
 
     const quota = await testD1.db.prepare("SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'").first<{ value: string }>();
-    expect(JSON.parse(quota!.value)).toMatchObject({ windowStartedAt: now, physicalUsed: 700, accountUsed: 240 });
+    expect(JSON.parse(quota!.value)).toMatchObject({ windowStartedAt: now, physicalUsed: 40, sharedUsed: 200, accountUsed: 200 });
   });
 
-  it("attributes requests after a mid-run rollover to the new quota window", async () => {
+  it("resets persisted quota counters after a mid-run window rollover", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 27, 18);
     vi.setSystemTime(now);
@@ -927,7 +935,8 @@ describe("initial ingestion progress", () => {
       ).bind(`rollover-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
       testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
         .bind("initial_ingestion_quota:account-1", JSON.stringify({
-          windowStartedAt: now - 299_000, physicalUsed: 699, accountUsed: 239, zoneUsed: {},
+          jobId: "rollover-job", limiterMode: "shared-paced", windowStartedAt: now - 299_000,
+          physicalUsed: 39, sharedUsed: 199, accountUsed: 199, zoneUsed: {},
         }), now),
     ]);
     let calls = 0;
@@ -946,8 +955,9 @@ describe("initial ingestion progress", () => {
     ).first<{ value: string }>();
     expect(JSON.parse(quota!.value)).toMatchObject({
       windowStartedAt: now + 2_000,
-      physicalUsed: 1,
-      accountUsed: 1,
+      physicalUsed: 0,
+      sharedUsed: 0,
+      accountUsed: 0,
     });
   });
 
@@ -966,6 +976,46 @@ describe("initial ingestion progress", () => {
 
     expect(result).toMatchObject({ status: "planning", slices: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("finishes planning from a persisted capability checkpoint", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const zoneIds = ["1".repeat(32), "2".repeat(32)];
+    const cachedCapabilities = [
+      ...accountCapabilities(),
+      ...HISTORICAL_DATASETS.filter(spec => spec.root === "zone" && !spec.fallbackFor)
+        .flatMap(spec => zoneIds.map(zoneId => enabledCapability(spec, { zoneId, retentionDays: 30, maxDays: 30 }))),
+    ];
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('cached-plan','account-1','initial_v2',?1,?2,'planning_failed',?2,?2)`,
+      ).bind(now - 90 * DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_capabilities:cached-plan", JSON.stringify(cachedCapabilities), now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES('onboarding_complete','true',?1)`).bind(now),
+    ]);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).not.toContain("/graphql");
+      return Response.json({
+        success: true,
+        result: zoneIds.map(id => ({ id })),
+        result_info: { page: 1, per_page: 50, total_pages: 1 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ensureInitialIngestionJob(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      { now, billingAvailable: false },
+    );
+
+    expect(result).toMatchObject({ id: "cached-plan", status: "running" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_capabilities:cached-plan'`,
+    ).first()).toBeNull();
   });
 
   it("completes billing slices before Analytics fetches", async () => {
@@ -1010,13 +1060,13 @@ describe("initial ingestion progress", () => {
     ).bind(JSON.stringify({
       version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [validZone, deniedZone], maxPageSize: 10_000, units: 2,
     }), now - DAY_MS, now).run();
-    const requestedZones: string[] = [];
+    const requestedZones: string[][] = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { variables?: { zone?: string } };
-      const zone = body.variables?.zone ?? "";
-      requestedZones.push(zone);
-      if (zone === deniedZone) return Response.json({ errors: [{ message: `zone ${deniedZone} is not authorized` }] });
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: zone, httpRequestsAdaptiveGroups: [] }] } } });
+      const body = JSON.parse(String(init?.body)) as { variables?: { zones?: string[] } };
+      const zones = body.variables?.zones ?? [];
+      requestedZones.push(zones);
+      if (zones.includes(deniedZone)) return Response.json({ errors: [{ message: `zone ${deniedZone} is not authorized` }] });
+      return Response.json({ data: { viewer: { accounts: [{ zones: zones.map(zoneTag => ({ zoneTag, httpRequestsAdaptiveGroups: [] })) }] } } });
     }));
 
     await runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "zone-job");
@@ -1031,7 +1081,7 @@ describe("initial ingestion progress", () => {
       { status: "complete", zoneIds: [validZone] },
       { status: "failed", zoneIds: [deniedZone] },
     ]);
-    expect(requestedZones.filter(zone => zone === deniedZone)).toHaveLength(1);
+    expect(requestedZones.filter(zones => zones.includes(deniedZone))).toHaveLength(1);
   });
 
   it("finishes a single-day row-limit gap instead of leaving the slice running", async () => {

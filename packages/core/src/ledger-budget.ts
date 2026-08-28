@@ -37,13 +37,13 @@ export const MAX_LEDGER_RUN_LIMITS: LedgerRunLimits = {
 };
 
 /**
- * Per-run budget for the one-shot onboarding import. Cloudflare allows
- * Account-based Analytics limits provide separate account and zone budgets.
- * The physical request ceiling reserves global API capacity for monitoring.
+ * Per-run logical query-cost budget for the onboarding import. The guard
+ * Worker applies a separate physical request ceiling for Cloudflare
+ * subrequests.
  */
 export const INITIAL_INGESTION_LIMITS: LedgerRunLimits = {
   ...MAX_LEDGER_RUN_LIMITS,
-  graphqlQueries: 700,
+  graphqlQueries: 200,
   // Billing may require the v2 request, a Paygo fallback, and an aligned
   // Paygo retry. Reserve three requests for each of the three ranges.
   restRequests: 9,

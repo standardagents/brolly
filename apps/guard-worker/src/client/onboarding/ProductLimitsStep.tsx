@@ -5,7 +5,7 @@ import { rowSeries, metricIncluded, billableMetricIds, costSeries, metricAggrega
 import { windowDefaults } from "../components/limits-chart/defaults";
 import type { LevelValues } from "../components/limits-chart/levels";
 import { Expander, Icon, ProductIcon, Spinner, Switch } from "../components/ui";
-import type { AlertLevel, OnboardingData, Policy, ScopeLimits } from "../types";
+import type { AlertLevel, InitialIngestionResponse, OnboardingData, Policy, ScopeLimits } from "../types";
 import { StepIntro } from "./BudgetSteps";
 import { emptyScope, updateScope } from "./limits-policy";
 
@@ -61,12 +61,13 @@ function useStickyTop(): number {
  * row in one opens the same row in the other). A sticky sidebar lists
  * products and their billable items and follows the scroll position.
  */
-export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
+export function ProductLimitsStep({ token, data, policy, levels, setPolicy, readiness }: {
   token: string;
   data: OnboardingData;
   policy: Policy;
   levels: AlertLevel[];
   setPolicy: Dispatch<SetStateAction<Policy>>;
+  readiness: InitialIngestionResponse["readiness"]["products"];
 }) {
   const families = data.families;
   const STICKY_TOP = useStickyTop();
@@ -151,7 +152,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
 
   return <>
     <StepIntro title="Product limits">
-      Cost and billable usage limits for each product: per day on the left, per billing cycle on the right. Each starts from its typical history and your risk tolerance. Billing-cycle usage charts mark each product meter&apos;s included allotment.
+      Each product will become editable when its available history reaches a final state. Every product limit will remain available from the dashboard after setup.
     </StepIntro>
     <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-8 max-lg:grid-cols-1">
       <nav className="sticky self-start max-lg:static" style={{ top: STICKY_TOP + 16 }} aria-label="Products">
@@ -213,6 +214,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
               scope={scope}
               family={family.family}
               label={family.label}
+              readiness={readiness[family.family] ?? { state: "importing", percent: 0, errors: 0 }}
               levels={chartLevels}
               tolerance={policy.riskTolerance?.percentOfTypical}
               dayLimits={policy.limits?.day?.[scope]}
@@ -234,12 +236,13 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy }: {
  * section. Every prop is either scope-narrowed policy state (stable identity
  * for untouched scopes) or a stable callback that takes the scope.
  */
-const ProductSection = memo(function ProductSection({ ref, token, scope, family, label, levels, tolerance, dayLimits, cycleLimits, setPolicy, open, onOpenChange, onInfo }: {
+const ProductSection = memo(function ProductSection({ ref, token, scope, family, label, readiness, levels, tolerance, dayLimits, cycleLimits, setPolicy, open, onOpenChange, onInfo }: {
   ref: (element: HTMLElement | null) => void;
   token: string;
   scope: string;
   family: string;
   label: string;
+  readiness: InitialIngestionResponse["readiness"]["products"][string];
   levels: Array<{ id: string; label: string; color: string }>;
   tolerance: LevelValues | undefined;
   dayLimits: ScopeLimits | undefined;
@@ -252,13 +255,15 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
   const STICKY_TOP = useStickyTop();
   const elementRef = useRef<HTMLElement | null>(null);
   const near = useNearViewport(elementRef);
-  const usage = useUsageSeries(token, scope, near);
+  const modifiable = readiness.state === "ready" || readiness.state === "limited";
+  const usage = useUsageSeries(token, scope, near && modifiable);
   const setRefs = useCallback((element: HTMLElement | null) => { elementRef.current = element; ref(element); }, [ref]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const [deviatedRows, setDeviatedRows] = useState<ReadonlySet<string>>(() => new Set());
   const familyEnabled = dayLimits?.enabled ?? true;
   const policyScope = { key: scope, kind: "family", family } as const;
   const setFamilyEnabled = (next: boolean) => {
+    if (!modifiable) return;
     for (const window of ["day", "cycle"] as const) setPolicy(previous => updateScope(previous, window, policyScope, current => ({ ...current, enabled: next })));
   };
   useEffect(() => {
@@ -296,15 +301,19 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
       <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel pl-2 pr-5 pt-4 pb-3" style={{ top: STICKY_TOP }}>
         <ProductIcon family={family} />
         <h3 className="text-[17px] font-[750]">{label}</h3>
+        <ProductImportStatus readiness={readiness} />
         <span className="ml-1 inline-flex items-center gap-1.5">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="bell" className="size-3.5" /> Alerts</span>
           {control && <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink" title="Brolly can quarantine this product."><Icon name="shield" className="size-3.5" /> Quarantine</span>}
         </span>
         <span className="ml-auto flex items-center gap-2 text-[11.5px] font-bold text-muted">
           <span>{familyEnabled ? "Monitored" : "Not monitored"}</span>
-          <Switch label={`Monitor ${label}`} on={familyEnabled} onChange={setFamilyEnabled} title={familyEnabled ? "Monitored. Switch off to ignore this product." : "Not monitored."} />
+          <Switch label={`Monitor ${label}`} on={familyEnabled} onChange={setFamilyEnabled} disabled={!modifiable} title={modifiable ? familyEnabled ? "Monitored. Switch off to ignore this product." : "Not monitored." : "Available when this product history reaches a final state."} />
         </span>
       </header>
+      {readiness.state === "importing" && <ProductImportPending percent={readiness.percent} />}
+      {readiness.state === "unavailable" && <ProductImportUnavailable errors={readiness.errors} />}
+      {readiness.state === "limited" && <p className="mb-4 rounded-field border border-warn/30 bg-warn-bg px-3 py-2 text-[12px] text-muted" data-product-import-limited>Available history is ready. {readiness.errors} unavailable {readiness.errors === 1 ? "window" : "windows"} will remain marked as coverage gaps.</p>}
       {usage.loading && <div className="grid h-[200px] place-content-center text-[13px] text-faint"><span className="inline-flex items-center gap-2"><Spinner /> Loading usage history…</span></div>}
       {usage.error && <p className="text-[13px] text-faint">Usage history is unavailable. {usage.error}</p>}
       {usage.data && !near && <div className="h-[320px]" aria-hidden="true" />}
@@ -327,6 +336,34 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     </section>
   );
 });
+
+function ProductImportStatus({ readiness }: {
+  readiness: InitialIngestionResponse["readiness"]["products"][string];
+}) {
+  const label = readiness.state === "importing"
+    ? `${readiness.percent}% importing`
+    : readiness.state === "ready"
+      ? "Ready"
+      : readiness.state === "limited"
+        ? "Ready with gaps"
+        : "Unavailable";
+  return <span className={`rounded-full px-2 py-1 text-[10.5px] font-bold tabular-nums ${readiness.state === "ready" ? "bg-good-bg text-good" : readiness.state === "limited" || readiness.state === "unavailable" ? "bg-warn-bg text-warn" : "bg-chip text-chip-ink"}`} data-product-import-state={readiness.state}>{label}</span>;
+}
+
+function ProductImportPending({ percent }: { percent: number }) {
+  return <div className="grid h-[160px] place-content-center gap-3 text-center text-[12.5px] text-muted" data-product-import-pending>
+    <span className="inline-flex items-center justify-center gap-2"><Spinner /> Importing available history</span>
+    <span className="tabular-nums">{percent}% processed</span>
+  </div>;
+}
+
+function ProductImportUnavailable({ errors }: { errors: number }) {
+  return <div className="grid h-[160px] place-content-center gap-2 text-center text-[12.5px] text-muted" data-product-import-unavailable>
+    <Icon name="alert" className="mx-auto size-5 text-warn" />
+    <strong className="text-ink">Usage history is unavailable</strong>
+    {errors > 0 && <span>{errors} unavailable {errors === 1 ? "window" : "windows"}</span>}
+  </div>;
+}
 
 function sameItems(left: SidebarItem[] | undefined, right: SidebarItem[]): boolean {
   return !!left && left.length === right.length && left.every((item, index) => item.id === right[index]!.id && item.label === right[index]!.label);

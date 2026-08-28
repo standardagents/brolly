@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   PRODUCT_USAGE_DEFINITIONS,
+  accountZoneProductDatasetVariables,
+  buildAccountZoneProductDatasetQuery,
   buildProductDatasetQuery,
   normalizeProductDataset,
   productUsageDefinition,
@@ -25,6 +27,12 @@ describe("product usage registry", () => {
     const query = buildProductDatasetQuery(zones, zones.datasets[0]!);
     expect(query).toContain("zones(filter: { zoneTag_in: $zones })");
     expect(query).toContain("zoneTag");
+    const nested = buildAccountZoneProductDatasetQuery(zones, zones.datasets[0]!);
+    expect(nested).toContain("accounts(filter: { accountTag: $account })");
+    expect(nested).toContain("zones(filter: { zoneTag_in: $zones })");
+    expect(accountZoneProductDatasetVariables(
+      zones.datasets[0]!, "account-1", Date.UTC(2026, 7, 1), Date.UTC(2026, 7, 2), ["zone-1", "zone-2"],
+    )).toMatchObject({ account: "account-1", zones: ["zone-1", "zone-2"] });
   });
 
   it("normalizes action metrics and maximum storage per resource", () => {

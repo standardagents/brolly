@@ -28,16 +28,17 @@ const LEGACY_INITIAL_KIND = "initial";
 const INITIAL_FETCH_CONCURRENCY = 6;
 const INITIAL_FETCH_QUEUE_CAPACITY = 2;
 const GRAPHQL_SCOPE_INTERVAL_MS = 1_000;
-const INITIAL_ACCOUNT_QUERY_QUOTA = 240;
-const INITIAL_ZONE_QUERY_QUOTA = 240;
-const INITIAL_PHYSICAL_GRAPHQL_QUOTA = 700;
-const INITIAL_SHARED_QUERY_QUOTA = 280;
-const CONFIGURED_SHARED_QUERY_QUOTA = 240;
+const INITIAL_PHYSICAL_GRAPHQL_QUOTA = 40;
+const INITIAL_SHARED_QUERY_QUOTA = 200;
+const CONFIGURED_SHARED_QUERY_QUOTA = 160;
+const MIN_ADAPTIVE_SHARED_QUERY_QUOTA = 60;
+const MAX_ZONE_BATCH = 10;
 const GRAPHQL_WINDOW_MS = 5 * 60_000;
 const INITIAL_LEASE_TTL_MS = 120_000;
 const INITIAL_LEASE_NAME = "initial-ingestion";
 const BILLING_REQUESTS_PER_SLICE = 3;
 const INITIAL_QUOTA_KEY_PREFIX = "initial_ingestion_quota:";
+const INITIAL_CAPABILITY_KEY_PREFIX = "initial_ingestion_capabilities:";
 const INITIAL_D1_READ_RESERVATION = 10_000;
 const INITIAL_D1_WRITE_RESERVATION = 1_000;
 
@@ -76,9 +77,13 @@ export interface InitialIngestionProgress {
     status: string;
     startedAt: number;
     updatedAt: number;
-    limiterMode: "optimistic" | "shared-fallback";
+    limiterMode: "shared-paced" | "shared-fallback";
     resumeAt: number | null;
     sharedQueryLimit: number;
+    queryWindowStartedAt: number;
+    physicalRequestsUsed: number;
+    physicalRequestLimit: number;
+    logicalQueryUnitsUsed: number;
   } | null;
   collectors: Array<{
     collector: string;
@@ -101,6 +106,19 @@ export interface InitialIngestionProgress {
     failedWindows: number;
     errors: string[];
   } | null;
+  readiness: InitialIngestionReadiness;
+}
+
+export type InitialIngestionReadinessState = "importing" | "ready" | "limited" | "unavailable";
+
+export interface InitialIngestionReadiness {
+  billing: "pending" | "ready" | "unavailable";
+  account: "pending" | "ready" | "limited";
+  products: Record<string, {
+    state: InitialIngestionReadinessState;
+    percent: number;
+    errors: number;
+  }>;
 }
 
 interface InitialSliceRow {
@@ -189,19 +207,28 @@ export async function ensureInitialIngestionJob(
       return { id: jobId, created, status: "planning", slices: await sliceCount(env.DB, jobId) };
     }
     const discoveryLedger = new LedgerRunBudget({
-      graphqlQueries: discoveryQuota.physicalRemaining,
+      graphqlQueries: discoveryQuota.logicalRemaining,
       restRequests: 20,
       d1RowsRead: 1_000,
       d1RowsWritten: 1_000,
       backfillSlices: 1,
       wallMs: 45_000,
     });
-    const discoveryBudget = new RunBudget({ apiCalls: 320, databaseRows: 2_000, samples: 1, wallMs: 45_000 });
+    const discoveryBudget = new RunBudget({
+      apiCalls: INITIAL_PHYSICAL_GRAPHQL_QUOTA + 10,
+      databaseRows: 2_000,
+      samples: 1,
+      wallMs: 45_000,
+    });
     try {
+      const capabilitySeed = await loadInitialCapabilities(env.DB, jobId, discoveryLedger);
       const capabilities = await new CloudflareClient(env, discoveryBudget, discoveryLedger, {
         accountBasedRateLimit: true,
         rateBudget: discoveryQuota,
-      }).historicalCapabilities();
+      }).historicalCapabilities({
+        seed: capabilitySeed,
+        onProgress: values => saveInitialCapabilities(env.DB, jobId, values, discoveryLedger),
+      });
       const billingAvailable = options.billingAvailable ?? await billingIngestionAvailable(env);
       const slices = initialIngestionSlicePlan(now, billingAvailable, capabilities);
       for (let offset = 0; offset < slices.length; offset += 100) {
@@ -218,33 +245,31 @@ export async function ensureInitialIngestionJob(
       await saveCoverageIntervals(env.DB, slices.filter(slice => {
         const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
         return metadata.availability === "unavailable";
-      }).map(slice => {
+      }).flatMap(slice => {
         const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
-        return {
+        return (metadata.zoneIds.length ? metadata.zoneIds : [""]).map(scopeKey => ({
           accountId: env.BROLLY_ACCOUNT_ID,
           dataset: metadata.dataset,
-          scopeKey: metadata.zoneIds[0] ?? "",
+          scopeKey,
           startsAt: slice.startsAt,
           endsAt: slice.endsAt,
           state: "unavailable" as const,
           reason: slice.error ?? undefined,
           recordedAt: now,
-        };
+        }));
       }));
-      if (!billingAvailable) await saveCoverageInterval(env.DB, {
-        accountId: env.BROLLY_ACCOUNT_ID,
-        dataset: "billable-usage",
-        startsAt: historyStart(now),
-        endsAt: now,
-        state: "unavailable",
-        reason: "Billing Read access is unavailable.",
-        recordedAt: now,
-      });
+      const clearedCapabilities = await env.DB.prepare(`DELETE FROM settings WHERE key=?1`)
+        .bind(`${INITIAL_CAPABILITY_KEY_PREFIX}${jobId}`).run();
+      chargeMeta(discoveryLedger, clearedCapabilities.meta);
       await updateInitialJobStatus(env.DB, jobId);
     } finally {
       await saveInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, discoveryQuota);
     }
   } catch (error) {
+    if (isHistoricalRateLimitError(error)) {
+      await env.DB.prepare(`UPDATE backfill_jobs SET status='planning',updated_at=?2 WHERE id=?1`).bind(jobId, Date.now()).run();
+      return { id: jobId, created, status: "planning", slices: await sliceCount(env.DB, jobId) };
+    }
     await env.DB.prepare(`UPDATE backfill_jobs SET status='planning_failed',updated_at=?2 WHERE id=?1`).bind(jobId, Date.now()).run();
     throw error;
   } finally {
@@ -284,22 +309,53 @@ export function initialIngestionSlicePlan(
     if (!applicable.length) continue;
     const enabled = applicable.filter(item => item.enabled && item.zoneId);
     const unavailable = applicable.filter(item => !item.enabled && item.zoneId);
-    for (const setting of enabled) {
-      slices.push(...rangeSlices(spec.collector, spec.dataset, [setting.zoneId!], now, setting));
+    for (const group of capabilityGroups(enabled)) {
+      for (const zoneIds of chunks(group.map(item => item.zoneId!), MAX_ZONE_BATCH)) {
+        slices.push(...rangeSlices(spec.collector, spec.dataset, zoneIds, now, group[0]!));
+      }
     }
-    for (const setting of unavailable) {
-      slices.push(gapSlice(
-        spec.collector,
-        spec.dataset,
-        [setting.zoneId!],
-        now,
-        setting.detail ?? "Cloudflare denied access to this zone dataset.",
-        capabilityRetentionDays(setting, spec.retentionDays),
-      ));
+    for (const group of capabilityGroups(unavailable)) {
+      for (const zoneIds of chunks(group.map(item => item.zoneId!), MAX_ZONE_BATCH)) {
+        const setting = group[0]!;
+        slices.push(gapSlice(
+          spec.collector,
+          spec.dataset,
+          zoneIds,
+          now,
+          setting.detail ?? "Cloudflare denied access to this zone dataset.",
+          capabilityRetentionDays(setting, spec.retentionDays),
+        ));
+      }
     }
   }
   if (billingAvailable) slices.push(...boundedRanges("billing", "billable-usage", [], now, HISTORY_DAYS, BILLING_MAX_DAYS, 10_000));
+  else slices.push(gapRange(
+    "billing", "billable-usage", [], historyStart(now, HISTORY_DAYS), now,
+    "Billing Read access is unavailable.", true,
+  ));
   return slices.sort((left, right) => right.endsAt - left.endsAt || left.collector.localeCompare(right.collector));
+}
+
+function capabilityGroups(values: HistoricalDatasetCapability[]): HistoricalDatasetCapability[][] {
+  const groups = new Map<string, HistoricalDatasetCapability[]>();
+  for (const value of values) {
+    const key = JSON.stringify([
+      value.enabled,
+      value.maxDurationSeconds,
+      value.notOlderThanSeconds,
+      value.maxPageSize,
+      value.state,
+      value.detail,
+    ]);
+    const group = groups.get(key) ?? [];
+    group.push(value);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function chunks<T>(values: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size));
 }
 
 /** Return progress weighted by dataset-days (and zone-days), not request count. */
@@ -309,7 +365,7 @@ export async function initialIngestionProgress(db: D1Database, accountId: string
      WHERE account_id=?1 AND kind IN (?2,?3)
      ORDER BY CASE kind WHEN ?2 THEN 0 ELSE 1 END,created_at DESC LIMIT 1`,
   ).bind(accountId, INITIAL_KIND, LEGACY_INITIAL_KIND).first<{ id: string; status: string; created_at: number; updated_at: number; kind: string; requested_start_at: number; requested_end_at: number }>();
-  if (!job) return { job: null, collectors: [], days: null };
+  if (!job) return { job: null, collectors: [], days: null, readiness: emptyInitialIngestionReadiness() };
   const rows = await db.prepare(
     `SELECT collector_key,scope_key,starts_at,ends_at,status,error
      FROM backfill_slices WHERE backfill_job_id=?1 AND status!='superseded'
@@ -356,9 +412,14 @@ export async function initialIngestionProgress(db: D1Database, accountId: string
       limiterMode: quota.mode,
       resumeAt: quota.resumeAt,
       sharedQueryLimit: quota.fallbackLimit,
+      queryWindowStartedAt: quota.windowStartedAt,
+      physicalRequestsUsed: quota.physicalUsed,
+      physicalRequestLimit: INITIAL_PHYSICAL_GRAPHQL_QUOTA,
+      logicalQueryUnitsUsed: quota.logicalUsed,
     },
     collectors: [...grouped.values()].sort((left, right) => left.collector === "billing" ? 1 : right.collector === "billing" ? -1 : left.label.localeCompare(right.label)),
     days: initialIngestionDays(job, rows.results),
+    readiness: initialIngestionReadiness(job.status, rows.results),
   };
 }
 
@@ -379,7 +440,7 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
     return;
   }
   const ledgerBudget = new LedgerRunBudget(
-    { ...INITIAL_INGESTION_LIMITS, graphqlQueries: INITIAL_PHYSICAL_GRAPHQL_QUOTA },
+    { ...INITIAL_INGESTION_LIMITS, graphqlQueries: quota.logicalRemaining },
     "initial_ingestion",
   );
   const budget = new RunBudget({
@@ -642,6 +703,7 @@ async function claimInitialSlice(
          OR (?3=0 AND collector_key!='billing' AND COALESCE(json_extract(scope_key,'$.persistenceRetry'),0)=0)
          OR (?3=2 AND collector_key!='billing' AND json_extract(scope_key,'$.persistenceRetry')=1))
      ORDER BY CASE WHEN json_extract(scope_key,'$.persistenceRetry')=1 THEN 0 ELSE 1 END,
+       CASE WHEN COALESCE(json_array_length(json_extract(scope_key,'$.zoneIds')),0)=0 THEN 0 ELSE 1 END,
        ends_at DESC,collector_key LIMIT 100`,
   ).bind(jobId, Date.now(), modeCode).all<InitialSliceRow>();
   budget.charge("d1RowsRead", candidates.results.length);
@@ -650,12 +712,8 @@ async function claimInitialSlice(
   let earliestAdmission: number | null | undefined;
   for (const candidate of candidates.results) {
     const parsed = parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at);
-    if (mode !== "billing" && parsed.zoneIds.length > 1) {
-      await migrateLegacyZoneSlice(env.DB, candidate, parsed, budget);
-      return claimInitialSlice(env, budget, quota, jobId, mode);
-    }
     if (mode !== "billing") {
-      const admission = quota.claimAdmission(rateScope(parsed), 1);
+      const admission = quota.claimAdmission(rateScope(parsed), 1, parsed.zoneIds);
       if (admission.kind === "quota") continue;
       if (admission.kind === "paced") {
         if (admission.waitUntil === null) earliestAdmission ??= null;
@@ -669,7 +727,12 @@ async function claimInitialSlice(
     metadata = parsed;
     break;
   }
-  if (!slice || !metadata) return earliestAdmission === undefined ? null : { waitUntil: earliestAdmission };
+  if (!slice || !metadata) {
+    if (earliestAdmission === undefined) return null;
+    if (earliestAdmission !== null
+      && earliestAdmission - Date.now() > Math.max(0, budget.remaining("wallMs") - 5_000)) return null;
+    return { waitUntil: earliestAdmission };
+  }
   const requiredQueries = slice.collector_key === "billing" ? 0 : 1;
   if (budget.remaining("backfillSlices") < 1
     || budget.remaining("d1RowsWritten") < INITIAL_D1_WRITE_RESERVATION + 1
@@ -912,15 +975,26 @@ async function splitZoneGapSlice(
   for (const gap of gaps) statements.push(db.prepare(
     `INSERT INTO backfill_slices(
        id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
-     ) VALUES(?1,?2,?3,?4,?5,?6,'failed',0,NULL,'missing',?7,?8)`,
+     ) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8,'missing',?9,?10)`,
   ).bind(
     crypto.randomUUID(), slice.backfill_job_id, slice.collector_key,
-    serializeMetadata({ ...metadata, zoneIds: [gap.zoneId], units: days, availability: "unavailable", terminalGap: true }),
-    slice.starts_at, slice.ends_at, `${metadata.dataset}: ${gap.detail}`, now,
+    serializeMetadata({
+      ...metadata,
+      zoneIds: [gap.zoneId],
+      units: days,
+      availability: gap.state === "delayed" ? "available" : "unavailable",
+      terminalGap: gap.state === "delayed" ? undefined : true,
+    }),
+    slice.starts_at,
+    slice.ends_at,
+    gap.state === "delayed" ? "pending" : "failed",
+    gap.state === "delayed" ? Math.max(now + 1_000, gap.retryAt ?? now + GRAPHQL_WINDOW_MS) : null,
+    `${metadata.dataset}: ${gap.detail}`,
+    now,
   ));
   const results = await db.batch(statements);
   if (budget) for (const result of results) chargeMeta(budget, result.meta);
-  for (const gap of gaps) await saveCoverageInterval(db, {
+  for (const gap of gaps.filter(item => item.state !== "delayed")) await saveCoverageInterval(db, {
     accountId,
     dataset: metadata.dataset,
     scopeKey: gap.zoneId,
@@ -930,35 +1004,6 @@ async function splitZoneGapSlice(
     reason: gap.detail,
     recordedAt: now,
   }, budget);
-}
-
-async function migrateLegacyZoneSlice(
-  db: D1Database,
-  slice: InitialSliceRow,
-  metadata: InitialIngestionSliceMetadata,
-  budget: LedgerRunBudget,
-): Promise<void> {
-  const now = Date.now();
-  const units = calendarDays(slice.starts_at, slice.ends_at);
-  const superseded = await db.prepare(
-    `UPDATE backfill_slices SET status='superseded',error=?2,updated_at=?3 WHERE id=?1 AND status='pending'`,
-  ).bind(slice.id, "Migrated to exact-zone rate-limit partitions", now).run();
-  chargeMeta(budget, superseded.meta);
-  if (Number(superseded.meta.changes ?? 0) !== 1) return;
-  const results = await db.batch(metadata.zoneIds.map(zoneId => db.prepare(
-      `INSERT INTO backfill_slices(
-         id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,error,updated_at
-       ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',NULL,?7)`,
-    ).bind(
-      crypto.randomUUID(),
-      slice.backfill_job_id,
-      slice.collector_key,
-      serializeMetadata({ ...metadata, zoneIds: [zoneId], units, persistenceRetry: undefined }),
-      slice.starts_at,
-      slice.ends_at,
-      now,
-    )));
-  for (const result of results) chargeMeta(budget, result.meta);
 }
 
 function releasePersistenceReservation(budget: LedgerRunBudget, claimed: ClaimedInitialSlice): void {
@@ -1099,6 +1144,74 @@ function initialIngestionDays(
   return { total, complete, pending, gaps, failedWindows, errors };
 }
 
+function emptyInitialIngestionReadiness(): InitialIngestionReadiness {
+  return { billing: "pending", account: "pending", products: {} };
+}
+
+function initialIngestionReadiness(
+  jobStatus: string,
+  rows: Array<{ collector_key: string; scope_key: string; starts_at: number; ends_at: number; status: string; error: string | null }>,
+): InitialIngestionReadiness {
+  const parsedRows = rows.map(row => ({ row, metadata: parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at) }));
+  const activeJob = jobStatus === "planning" || jobStatus === "pending" || jobStatus === "running";
+  const billingRows = parsedRows.filter(item => item.row.collector_key === "billing");
+  const billingActive = billingRows.length === 0 || billingRows.some(item => item.row.status === "pending" || item.row.status === "running");
+  const billingUsable = billingRows.some(item => item.row.status === "complete" && item.metadata.availability !== "unavailable");
+  const billing = billingActive ? "pending" : billingUsable ? "ready" : "unavailable";
+  const specByDataset = new Map(HISTORICAL_DATASETS.map(spec => [spec.dataset, spec]));
+  const accountRows = parsedRows.filter(item => specByDataset.get(item.metadata.dataset)?.root === "account");
+  const accountActive = accountRows.some(item => item.row.status === "pending" || item.row.status === "running")
+    || accountRows.length === 0 && activeJob;
+  const accountUsable = accountRows.some(item => item.row.status === "complete"
+    && item.metadata.availability !== "unavailable"
+    && !item.metadata.expectedGap);
+  const accountUnexpected = accountRows.some(item => !item.metadata.expectedGap
+    && (item.row.status === "failed" || item.metadata.terminalGap));
+  const account = billing === "pending" || accountActive
+    ? "pending"
+    : accountUsable && !accountUnexpected
+      ? "ready"
+      : "limited";
+  const families = [...new Set(HISTORICAL_DATASETS.map(spec => spec.family))];
+  const rowsByFamily = new Map<string, typeof parsedRows>();
+  for (const item of parsedRows) {
+    const family = specByDataset.get(item.metadata.dataset)?.family;
+    if (!family) continue;
+    const familyRows = rowsByFamily.get(family) ?? [];
+    familyRows.push(item);
+    rowsByFamily.set(family, familyRows);
+  }
+  const products: InitialIngestionReadiness["products"] = {};
+
+  for (const family of families) {
+    const parsed = rowsByFamily.get(family) ?? [];
+    const totalUnits = parsed.reduce((sum, item) => sum + item.metadata.units, 0);
+    const processedUnits = parsed.reduce((sum, item) => (
+      item.row.status === "complete" || item.row.status === "failed" ? sum + item.metadata.units : sum
+    ), 0);
+    const active = parsed.some(item => item.row.status === "pending" || item.row.status === "running");
+    const usable = parsed.some(item => item.row.status === "complete"
+      && item.metadata.availability !== "unavailable"
+      && !item.metadata.expectedGap);
+    const unexpected = parsed.filter(item => !item.metadata.expectedGap
+      && (item.row.status === "failed" || item.metadata.terminalGap));
+    const state: InitialIngestionReadinessState = active || parsed.length === 0 && activeJob
+      ? "importing"
+      : usable && unexpected.length > 0
+        ? "limited"
+        : usable
+          ? "ready"
+          : "unavailable";
+    products[family] = {
+      state,
+      percent: totalUnits > 0 ? Math.round(Math.min(totalUnits, processedUnits) / totalUnits * 100) : state === "importing" ? 0 : 100,
+      errors: unexpected.length,
+    };
+  }
+
+  return { billing, account, products };
+}
+
 function boundedRanges(collector: string, dataset: string, zoneIds: string[], now: number, retentionDays: number, maxDays: number, maxPageSize: number): InitialIngestionSlicePlan[] {
   const startsAt = startOfUtcDay(now) - (retentionDays - 1) * DAY_MS;
   const slices: InitialIngestionSlicePlan[] = [];
@@ -1223,7 +1336,8 @@ function chargeMeta(budget: LedgerRunBudget, meta: { rows_read?: number; rows_wr
 
 interface InitialGraphqlQuotaState {
   jobId: string;
-  limiterMode: "optimistic" | "shared-fallback";
+  limiterMode: "shared-paced" | "shared-fallback";
+  adaptiveLimit: number | null;
   windowStartedAt: number;
   physicalUsed: number;
   sharedUsed: number;
@@ -1244,16 +1358,24 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
 
   constructor(
     private readonly state: InitialGraphqlQuotaState,
-    private readonly sharedLimit: number,
+    private readonly baseSharedLimit: number,
   ) {}
 
   get physicalRemaining(): number {
     this.rollover();
     if (this.state.pausedUntil && Date.now() < this.state.pausedUntil) return 0;
     const physical = Math.max(0, INITIAL_PHYSICAL_GRAPHQL_QUOTA - this.state.physicalUsed);
-    if (this.state.limiterMode !== "shared-fallback") return physical;
-    return this.state.sharedUsed < this.sharedLimit ? physical : 0;
+    return this.state.sharedUsed < this.activeSharedLimit ? physical : 0;
   }
+
+  get logicalRemaining(): number {
+    this.rollover();
+    return Math.max(0, this.activeSharedLimit - this.state.sharedUsed);
+  }
+
+  get windowStartedAt(): number { return this.state.windowStartedAt; }
+  get physicalUsed(): number { return this.state.physicalUsed; }
+  get logicalUsed(): number { return this.state.sharedUsed; }
 
   get resetAt(): number {
     return Math.max(this.state.windowStartedAt + GRAPHQL_WINDOW_MS, this.state.pausedUntil ?? 0);
@@ -1263,31 +1385,33 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     this.rollover();
     if (this.physicalRemaining < 1) return false;
     const amount = Math.max(1, Math.floor(logicalQueries));
-    if (this.state.limiterMode === "shared-fallback" && this.state.sharedUsed + amount > this.sharedLimit) return false;
-    return scope.kind === "account"
-      ? this.state.accountUsed + amount <= INITIAL_ACCOUNT_QUERY_QUOTA
-      : (this.state.zoneUsed[scope.zoneId] ?? 0) + amount <= INITIAL_ZONE_QUERY_QUOTA;
+    void scope;
+    return this.state.sharedUsed + amount <= this.activeSharedLimit;
   }
 
-  claimAdmission(scope: HistoricalRateScope, logicalQueries: number):
+  claimAdmission(scope: HistoricalRateScope, logicalQueries: number, zoneIds: readonly string[] = []):
     | { kind: "ready" }
     | { kind: "paced"; waitUntil: number | null }
     | { kind: "quota" } {
     this.rollover();
-    const scopePause = this.scopePausedUntil(scope);
+    const scopePause = Math.max(
+      this.scopePausedUntil(scope) ?? 0,
+      ...zoneIds.map(zoneId => this.state.zonePausedUntil[zoneId] ?? 0),
+    );
     if (scopePause && scopePause > Date.now()) return { kind: "paced", waitUntil: scopePause };
     if (!this.canCharge(scope, logicalQueries)) return { kind: "quota" };
-    const key = this.admissionKey(scope);
+    const key = "shared";
     if (this.inFlightClaims.has(key)) return { kind: "paced", waitUntil: null };
     const waitUntil = Math.max(
       this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS,
-      this.state.limiterMode === "shared-fallback" ? this.state.sharedNextAdmissionAt ?? 0 : 0,
+      this.state.sharedNextAdmissionAt ?? 0,
     );
     return waitUntil > Date.now() ? { kind: "paced", waitUntil } : { kind: "ready" };
   }
 
   reserveClaim(scope: HistoricalRateScope): void {
-    this.inFlightClaims.add(this.admissionKey(scope));
+    void scope;
+    this.inFlightClaims.add("shared");
   }
 
   releaseClaim(scope: HistoricalRateScope): void {
@@ -1316,7 +1440,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   }
 
   async admit(scope: HistoricalRateScope, logicalQueries: number): Promise<void> {
-    const key = this.admissionKey(scope);
+    const key = "shared";
     const previous = this.admissionTails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -1326,7 +1450,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     try {
       const delay = Math.max(
         this.lastAdmissionAt(scope) + GRAPHQL_SCOPE_INTERVAL_MS,
-        this.state.limiterMode === "shared-fallback" ? this.state.sharedNextAdmissionAt ?? 0 : 0,
+        this.state.sharedNextAdmissionAt ?? 0,
       ) - Date.now();
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
       this.setLastAdmissionAt(scope, Date.now());
@@ -1341,14 +1465,16 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     const until = Math.max(Date.now() + 1_000, retryAt);
     if (scope?.kind === "account") {
       this.state.accountPausedUntil = Math.max(this.state.accountPausedUntil ?? 0, until);
-      this.state.accountUsed = INITIAL_ACCOUNT_QUERY_QUOTA;
     } else if (scope?.kind === "zone") {
       this.state.zonePausedUntil[scope.zoneId] = Math.max(this.state.zonePausedUntil[scope.zoneId] ?? 0, until);
-      this.state.zoneUsed[scope.zoneId] = INITIAL_ZONE_QUERY_QUOTA;
     } else {
       this.state.pausedUntil = Math.max(this.state.pausedUntil ?? 0, until);
       this.state.limiterMode = "shared-fallback";
-      this.state.sharedUsed = this.sharedLimit;
+      this.state.adaptiveLimit = Math.max(
+        MIN_ADAPTIVE_SHARED_QUERY_QUOTA,
+        Math.min(this.baseSharedLimit, Math.floor(this.state.sharedUsed * 0.8)),
+      );
+      this.state.sharedUsed = this.activeSharedLimit;
     }
     for (const resolve of this.claimWaiters) resolve();
     this.claimWaiters.clear();
@@ -1360,10 +1486,8 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     }
     const amount = Math.max(1, Math.floor(logicalQueries));
     this.state.physicalUsed += 1;
-    if (this.state.limiterMode === "shared-fallback") {
-      this.state.sharedUsed += amount;
-      this.state.sharedNextAdmissionAt = Date.now() + amount * Math.ceil(GRAPHQL_WINDOW_MS / this.sharedLimit);
-    }
+    this.state.sharedUsed += amount;
+    this.state.sharedNextAdmissionAt = Date.now() + GRAPHQL_SCOPE_INTERVAL_MS;
     if (scope.kind === "account") this.state.accountUsed += amount;
     else this.state.zoneUsed[scope.zoneId] = (this.state.zoneUsed[scope.zoneId] ?? 0) + amount;
   }
@@ -1372,6 +1496,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     return {
       jobId: this.state.jobId,
       limiterMode: this.state.limiterMode,
+      adaptiveLimit: this.state.adaptiveLimit,
       windowStartedAt: this.state.windowStartedAt,
       physicalUsed: this.state.physicalUsed,
       sharedUsed: this.state.sharedUsed,
@@ -1387,12 +1512,12 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   }
 
   get mode(): InitialGraphqlQuotaState["limiterMode"] { return this.state.limiterMode; }
-  get fallbackLimit(): number { return this.sharedLimit; }
+  get fallbackLimit(): number { return this.activeSharedLimit; }
 
   get resumeAt(): number | null {
     this.rollover();
     if (this.state.pausedUntil && this.state.pausedUntil > Date.now()) return this.state.pausedUntil;
-    if (this.state.limiterMode === "shared-fallback" && this.state.sharedUsed >= this.sharedLimit) {
+    if (this.state.sharedUsed >= this.activeSharedLimit) {
       return this.state.windowStartedAt + GRAPHQL_WINDOW_MS;
     }
     return null;
@@ -1407,10 +1532,6 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   private setLastAdmissionAt(scope: HistoricalRateScope, admittedAt: number): void {
     if (scope.kind === "account") this.state.accountLastAdmissionAt = admittedAt;
     else this.state.zoneLastAdmissionAt[scope.zoneId] = admittedAt;
-  }
-
-  private admissionKey(scope: HistoricalRateScope): string {
-    return this.state.limiterMode === "shared-fallback" ? "shared" : rateScopeKey(scope);
   }
 
   private scopePausedUntil(scope: HistoricalRateScope): number | null {
@@ -1430,6 +1551,12 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     this.state.zoneUsed = {};
     this.state.sharedNextAdmissionAt = null;
   }
+
+  private get activeSharedLimit(): number {
+    return this.state.limiterMode === "shared-fallback" && this.state.adaptiveLimit
+      ? Math.min(this.baseSharedLimit, this.state.adaptiveLimit)
+      : this.baseSharedLimit;
+  }
 }
 
 function rateScopeKey(scope: HistoricalRateScope): string {
@@ -1437,8 +1564,60 @@ function rateScopeKey(scope: HistoricalRateScope): string {
 }
 
 function rateScope(metadata: InitialIngestionSliceMetadata): HistoricalRateScope {
-  const zoneId = metadata.zoneIds[0];
-  return zoneId ? { kind: "zone", zoneId } : { kind: "account" };
+  void metadata;
+  return { kind: "account" };
+}
+
+async function loadInitialCapabilities(
+  db: D1Database,
+  jobId: string,
+  budget: LedgerRunBudget,
+): Promise<HistoricalDatasetCapability[]> {
+  const row = await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`)
+    .bind(`${INITIAL_CAPABILITY_KEY_PREFIX}${jobId}`).first<{ value: string }>();
+  budget.charge("d1RowsRead");
+  if (!row) return [];
+  try {
+    const values = JSON.parse(row.value) as unknown;
+    return Array.isArray(values) ? values.filter(isCachedHistoricalCapability) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveInitialCapabilities(
+  db: D1Database,
+  jobId: string,
+  capabilities: readonly HistoricalDatasetCapability[],
+  budget: LedgerRunBudget,
+): Promise<void> {
+  const result = await db.prepare(
+    `INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
+  ).bind(
+    `${INITIAL_CAPABILITY_KEY_PREFIX}${jobId}`,
+    JSON.stringify(capabilities),
+    Date.now(),
+  ).run();
+  chargeMeta(budget, result.meta);
+}
+
+function isCachedHistoricalCapability(value: unknown): value is HistoricalDatasetCapability {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<HistoricalDatasetCapability>;
+  return typeof candidate.collector === "string"
+    && typeof candidate.label === "string"
+    && typeof candidate.dataset === "string"
+    && typeof candidate.family === "string"
+    && (candidate.root === "account" || candidate.root === "zone")
+    && (candidate.zoneId === null || typeof candidate.zoneId === "string")
+    && typeof candidate.applicable === "boolean"
+    && typeof candidate.enabled === "boolean"
+    && Number.isFinite(candidate.maxDurationSeconds)
+    && Number.isFinite(candidate.notOlderThanSeconds)
+    && Number.isFinite(candidate.maxPageSize)
+    && typeof candidate.state === "string"
+    && typeof candidate.detail === "string";
 }
 
 async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId: string, now: number): Promise<InitialGraphqlQuota> {
@@ -1450,7 +1629,8 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId:
   const sharedLimit = onboarding?.value === "true" ? CONFIGURED_SHARED_QUERY_QUOTA : INITIAL_SHARED_QUERY_QUOTA;
   let state: InitialGraphqlQuotaState = {
     jobId,
-    limiterMode: "optimistic",
+    limiterMode: "shared-paced",
+    adaptiveLimit: null,
     windowStartedAt: now,
     physicalUsed: 0,
     sharedUsed: 0,
@@ -1467,7 +1647,10 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId:
     try {
       const parsed = JSON.parse(row.value) as Partial<InitialGraphqlQuotaState> & { used?: number };
       const sameJob = parsed.jobId === jobId;
-      state.limiterMode = sameJob && parsed.limiterMode === "shared-fallback" ? "shared-fallback" : "optimistic";
+      state.limiterMode = sameJob && parsed.limiterMode === "shared-fallback" ? "shared-fallback" : "shared-paced";
+      state.adaptiveLimit = sameJob && Number.isFinite(parsed.adaptiveLimit)
+        ? Math.max(MIN_ADAPTIVE_SHARED_QUERY_QUOTA, Math.min(sharedLimit, Number(parsed.adaptiveLimit)))
+        : null;
       const activeWindow = Number.isFinite(parsed.windowStartedAt)
         && now - Number(parsed.windowStartedAt) < GRAPHQL_WINDOW_MS && now >= Number(parsed.windowStartedAt);
       if (activeWindow) {
@@ -1475,10 +1658,10 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId:
         state.windowStartedAt = Number(parsed.windowStartedAt);
         state.physicalUsed = boundedUsage(parsed.physicalUsed ?? legacyUsed, INITIAL_PHYSICAL_GRAPHQL_QUOTA);
         state.sharedUsed = sameJob ? boundedUsage(parsed.sharedUsed, sharedLimit) : 0;
-        state.accountUsed = boundedUsage(parsed.accountUsed ?? legacyUsed, INITIAL_ACCOUNT_QUERY_QUOTA);
+        state.accountUsed = boundedUsage(parsed.accountUsed ?? legacyUsed, sharedLimit);
         state.zoneUsed = Object.fromEntries(Object.entries(parsed.zoneUsed ?? {}).map(([zoneId, used]) => [
           zoneId,
-          boundedUsage(used, INITIAL_ZONE_QUERY_QUOTA),
+          boundedUsage(used, sharedLimit),
         ]));
       }
       state.accountLastAdmissionAt = boundedAdmissionAt(parsed.accountLastAdmissionAt, now);

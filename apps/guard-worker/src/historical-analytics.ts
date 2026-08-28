@@ -11,9 +11,9 @@ import type { Env } from "./env.js";
 import { operationalToken } from "./credentials.js";
 import {
   PRODUCT_USAGE_DEFINITIONS,
-  buildExactZoneProductDatasetQuery,
+  accountZoneProductDatasetVariables,
+  buildAccountZoneProductDatasetQuery,
   buildProductDatasetQuery,
-  exactZoneProductDatasetVariables,
   normalizeProductDataset,
   productDatasetVariables,
   type ProductDatasetDefinition,
@@ -36,6 +36,11 @@ export interface HistoricalRateBudget {
 export interface HistoricalAnalyticsOptions {
   accountBasedRateLimit?: boolean;
   rateBudget?: HistoricalRateBudget;
+}
+
+export interface HistoricalCapabilityDiscoveryOptions {
+  seed?: readonly HistoricalDatasetCapability[];
+  onProgress?: (capabilities: readonly HistoricalDatasetCapability[]) => Promise<void> | void;
 }
 
 export interface HistoricalRateLimitTelemetry {
@@ -98,7 +103,7 @@ export interface HistoricalUsageResult {
   coverage: CoverageResult[];
   complete: boolean;
   rows: number;
-  zoneGaps?: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }>;
+  zoneGaps?: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string; retryAt?: number }>;
 }
 
 interface DatasetSetting {
@@ -152,16 +157,24 @@ export class HistoricalAnalyticsClient {
     private readonly options: HistoricalAnalyticsOptions = {},
   ) {}
 
-  async discoverCapabilities(): Promise<HistoricalDatasetCapability[]> {
+  async discoverCapabilities(options: HistoricalCapabilityDiscoveryOptions = {}): Promise<HistoricalDatasetCapability[]> {
     const account = HISTORICAL_DATASETS.filter(item => item.root === "account" && !item.fallbackFor);
     const zones = HISTORICAL_DATASETS.filter(item => item.root === "zone" && !item.fallbackFor);
     const fallbacks = HISTORICAL_DATASETS.filter(item => item.root === "zone" && item.fallbackFor);
     const capabilities: HistoricalDatasetCapability[] = [];
+    const publish = async (values: readonly HistoricalDatasetCapability[]): Promise<void> => {
+      for (const value of values) {
+        const index = capabilities.findIndex(item => item.dataset === value.dataset && item.zoneId === value.zoneId);
+        if (index >= 0) capabilities[index] = value;
+        else capabilities.push(value);
+      }
+      await options.onProgress?.([...capabilities]);
+    };
+    await publish(options.seed ?? []);
     for (let offset = 0; offset < account.length; offset += SETTINGS_BATCH) {
       const batch = account.slice(offset, offset + SETTINGS_BATCH).filter(spec => !hasCapability(capabilities, spec.dataset, null));
       if (!batch.length) continue;
-      const discovered = await this.accountSettingsIsolated(batch);
-      capabilities.push(...discovered);
+      await this.accountSettingsIsolated(batch, publish);
     }
 
     let zoneIds: string[];
@@ -169,29 +182,30 @@ export class HistoricalAnalyticsClient {
       zoneIds = this.zoneProvider ? await this.zoneProvider() : await this.listZoneIds();
     } catch (error) {
       if (isBudgetError(error)) throw error;
-      return [...capabilities, ...zones.map(spec => unavailableCapability(spec, null, errorMessage(error)))];
+      await publish(zones.map(spec => unavailableCapability(spec, null, errorMessage(error))));
+      return capabilities;
     }
     if (!zoneIds.length) {
-      return [...capabilities, ...zones.map(spec => ({
+      await publish(zones.map(spec => ({
         ...unavailableCapability(spec, null, "The connected account has no zones."),
         applicable: false,
         state: "healthy" as const,
-      }))];
+      })));
+      return capabilities;
     }
-    const settingsBatchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+    const activeZones = new Set(zoneIds);
+    for (let index = capabilities.length - 1; index >= 0; index -= 1) {
+      const zoneId = capabilities[index]?.zoneId;
+      if (zoneId && !activeZones.has(zoneId)) capabilities.splice(index, 1);
+    }
+    const settingsBatchSize = MAX_ZONE_BATCH;
     const zoneBatches = Array.from(
       { length: Math.ceil(zoneIds.length / settingsBatchSize) },
       (_, index) => zoneIds.slice(index * settingsBatchSize, (index + 1) * settingsBatchSize),
     );
-    for (let offset = 0; offset < zoneBatches.length; offset += 6) {
-      const discovered = await Promise.all(
-        zoneBatches.slice(offset, offset + 6).map(batch => {
-          const missing = zones.filter(spec => batch.some(zoneId => !hasCapability(capabilities, spec.dataset, zoneId)));
-          return missing.length ? this.zoneSettings(missing, batch) : Promise.resolve([]);
-        }),
-      );
-      const values = discovered.flat();
-      capabilities.push(...values);
+    for (const batch of zoneBatches) {
+      const missing = zones.filter(spec => batch.some(zoneId => !hasCapability(capabilities, spec.dataset, zoneId)));
+      if (missing.length) await this.zoneSettings(missing, batch, publish);
     }
 
     for (const fallback of fallbacks) {
@@ -199,12 +213,8 @@ export class HistoricalAnalyticsClient {
         const preferred = capabilities.find(item => item.dataset === fallback.fallbackFor && item.zoneId === zoneId);
         return preferred && !preferred.enabled && !hasCapability(capabilities, fallback.dataset, zoneId);
       });
-      for (let offset = 0; offset < missingZones.length; offset += 6) {
-        const discovered = await Promise.all(
-          missingZones.slice(offset, offset + 6).map(zoneId => this.zoneSettings([fallback], [zoneId])),
-        );
-        const values = discovered.flat();
-        capabilities.push(...values);
+      for (let offset = 0; offset < missingZones.length; offset += MAX_ZONE_BATCH) {
+        await this.zoneSettings([fallback], missingZones.slice(offset, offset + MAX_ZONE_BATCH), publish);
       }
     }
     return capabilities;
@@ -248,7 +258,7 @@ export class HistoricalAnalyticsClient {
     const source = spec.source!;
     const zoneIds = source.root === "zone" ? request.zoneIds ?? [] : [];
     if (source.root === "zone" && !zoneIds.length) throw new Error(`${source.dataset} requires at least one authorized zone`);
-    const failedZones: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> = [];
+    const failedZones: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string; retryAt?: number }> = [];
     let roots: Array<Record<string, unknown>>;
     if (source.root === "zone") {
       const isolated = await this.collectProductZones(spec, request, limit, zoneIds);
@@ -282,7 +292,11 @@ export class HistoricalAnalyticsClient {
         family: product.family,
         metric: item.metric,
         finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? product.scope : "account",
-        state: failedZones.length ? failedZones.some(item => item.state === "permission_denied") ? "permission_denied" : "unavailable" : truncated ? "delayed" : "healthy",
+        state: failedZones.length
+          ? failedZones.some(item => item.state === "permission_denied")
+            ? "permission_denied"
+            : failedZones.some(item => item.state === "delayed") ? "delayed" : "unavailable"
+          : truncated ? "delayed" : "healthy",
         checkedAt: Date.now(),
         detail: failedDetail ?? (truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : undefined),
       })),
@@ -297,12 +311,12 @@ export class HistoricalAnalyticsClient {
     request: HistoricalUsageRequest,
     limit: number,
     zoneIds: string[],
-  ): Promise<{ roots: Array<Record<string, unknown>>; failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> }> {
+  ): Promise<{ roots: Array<Record<string, unknown>>; failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string; retryAt?: number }> }> {
     const source = spec.source!;
-    if (zoneIds.length > (this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH)) {
+    if (zoneIds.length > MAX_ZONE_BATCH) {
       const roots: Array<Record<string, unknown>> = [];
-      const failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string }> = [];
-      const batchSize = this.options.accountBasedRateLimit ? 1 : MAX_ZONE_BATCH;
+      const failed: Array<{ zoneId: string; state: CoverageResult["state"]; detail: string; retryAt?: number }> = [];
+      const batchSize = MAX_ZONE_BATCH;
       for (let offset = 0; offset < zoneIds.length; offset += batchSize) {
         const result = await this.collectProductZones(spec, request, limit, zoneIds.slice(offset, offset + batchSize));
         roots.push(...result.roots);
@@ -312,20 +326,53 @@ export class HistoricalAnalyticsClient {
     }
     try {
       const zoneId = zoneIds[0];
-      const payload = await this.graphql<{ viewer?: { zones?: Array<Record<string, unknown>> } }>(
+      const payload = await this.graphql<{
+        viewer?: {
+          accounts?: Array<{ zones?: Array<Record<string, unknown>> }>;
+          zones?: Array<Record<string, unknown>>;
+        };
+      }>(
         this.options.accountBasedRateLimit
-          ? buildExactZoneProductDatasetQuery(spec.product!, source, limit)
+          ? buildAccountZoneProductDatasetQuery(spec.product!, source, limit)
           : buildProductDatasetQuery(spec.product!, source, limit),
-        this.options.accountBasedRateLimit && zoneId
-          ? exactZoneProductDatasetVariables(source, request.startsAt, request.endsAt, zoneId)
+        this.options.accountBasedRateLimit
+          ? accountZoneProductDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds)
           : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds),
-        this.options.accountBasedRateLimit ? 1 : zoneIds.length,
-        zoneId ? { kind: "zone", zoneId } : { kind: "account" },
+        zoneIds.length,
+        { kind: "account" },
       );
-      return { roots: payload.viewer?.zones ?? [], failed: [] };
+      return {
+        roots: this.options.accountBasedRateLimit
+          ? payload.viewer?.accounts?.[0]?.zones ?? []
+          : payload.viewer?.zones ?? [],
+        failed: [],
+      };
     } catch (error) {
+      if (isHistoricalRateLimitError(error) && error.telemetry?.limiterScope === "zone") {
+        const namedZone = zoneIds.find(candidate => error.message.toLowerCase().includes(candidate.toLowerCase()));
+        if (namedZone && zoneIds.length > 1) {
+          const remaining = zoneIds.filter(candidate => candidate !== namedZone);
+          const collected = await this.collectProductZones(spec, request, limit, remaining);
+          return {
+            roots: collected.roots,
+            failed: [...collected.failed, { zoneId: namedZone, state: "delayed", detail: error.message, retryAt: error.retryAt }],
+          };
+        }
+      }
       if (isBudgetError(error)) throw error;
       if (!isIsolatableAnalyticsError(error)) throw error;
+      const unauthorized = unauthorizedZoneIds(errorMessage(error), zoneIds);
+      if (unauthorized.length) {
+        const failed = unauthorized.map(deniedZone => ({
+          zoneId: deniedZone,
+          state: "permission_denied" as const,
+          detail: "Cloudflare denied Analytics access to this zone.",
+        }));
+        const remaining = zoneIds.filter(currentZone => !unauthorized.includes(currentZone));
+        if (!remaining.length) return { roots: [], failed };
+        const collected = await this.collectProductZones(spec, request, limit, remaining);
+        return { roots: collected.roots, failed: [...failed, ...collected.failed] };
+      }
       if (zoneIds.length > 1) {
         const middle = Math.ceil(zoneIds.length / 2);
         const left = await this.collectProductZones(spec, request, limit, zoneIds.slice(0, middle));
@@ -344,67 +391,87 @@ export class HistoricalAnalyticsClient {
     return payload.viewer?.accounts?.[0]?.settings ?? {};
   }
 
-  private async accountSettingsIsolated(specs: readonly HistoricalDatasetSpec[]): Promise<HistoricalDatasetCapability[]> {
+  private async accountSettingsIsolated(
+    specs: readonly HistoricalDatasetSpec[],
+    publish: (values: readonly HistoricalDatasetCapability[]) => Promise<void> = async () => undefined,
+  ): Promise<HistoricalDatasetCapability[]> {
     try {
       const settings = await this.accountSettings(specs);
-      return specs.map(spec => capability(spec, settings[spec.dataset], null));
+      const values = specs.map(spec => capability(spec, settings[spec.dataset], null));
+      await publish(values);
+      return values;
     } catch (error) {
       if (isBudgetError(error)) throw error;
       if (!isIsolatableAnalyticsError(error)) throw error;
       if (specs.length > 1) {
         const middle = Math.ceil(specs.length / 2);
         return [
-          ...await this.accountSettingsIsolated(specs.slice(0, middle)),
-          ...await this.accountSettingsIsolated(specs.slice(middle)),
+          ...await this.accountSettingsIsolated(specs.slice(0, middle), publish),
+          ...await this.accountSettingsIsolated(specs.slice(middle), publish),
         ];
       }
       const spec = specs[0];
-      return spec ? [unavailableCapability(spec, null, errorMessage(error), unavailableState(error))] : [];
+      const values = spec ? [unavailableCapability(spec, null, errorMessage(error), unavailableState(error))] : [];
+      await publish(values);
+      return values;
     }
   }
 
-  private async zoneSettings(specs: readonly HistoricalDatasetSpec[], zoneIds: string[]): Promise<HistoricalDatasetCapability[]> {
+  private async zoneSettings(
+    specs: readonly HistoricalDatasetSpec[],
+    zoneIds: string[],
+    publish: (values: readonly HistoricalDatasetCapability[]) => Promise<void> = async () => undefined,
+  ): Promise<HistoricalDatasetCapability[]> {
     const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
-    const exact = this.options.accountBasedRateLimit;
-    const query = exact
-      ? `query BrollyZoneAnalyticsSettings($zone: string!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`
+    const nested = this.options.accountBasedRateLimit;
+    const query = nested
+      ? `query BrollyAccountZoneAnalyticsSettings($account: String!, $zones: [string!]!) { viewer { accounts(filter: { accountTag: $account }) { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } } }`
       : `query BrollyZoneAnalyticsSettings($zones: [string!]!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
     const zoneId = zoneIds[0]!;
     try {
-      const payload = await this.graphql<{ viewer?: { zones?: Array<{ zoneTag?: string; settings?: Record<string, DatasetSetting> }> } }>(
+      const payload = await this.graphql<{ viewer?: {
+        accounts?: Array<{ zones?: Array<{ zoneTag?: string; settings?: Record<string, DatasetSetting> }> }>;
+        zones?: Array<{ zoneTag?: string; settings?: Record<string, DatasetSetting> }>;
+      } }>(
         query,
-        exact ? { zone: zoneId } : { zones: zoneIds },
+        nested ? { account: this.env.BROLLY_ACCOUNT_ID, zones: zoneIds } : { zones: zoneIds },
         specs.length * zoneIds.length,
-        { kind: "zone", zoneId },
+        { kind: "account" },
       );
-      const returned = new Map((payload.viewer?.zones ?? []).flatMap(zone => zone.zoneTag ? [[zone.zoneTag, zone.settings ?? {}] as const] : []));
-      return zoneIds.flatMap(currentZone => specs.map(spec => returned.has(currentZone)
+      const roots = nested ? payload.viewer?.accounts?.[0]?.zones ?? [] : payload.viewer?.zones ?? [];
+      const returned = new Map(roots.flatMap(zone => zone.zoneTag ? [[zone.zoneTag, zone.settings ?? {}] as const] : []));
+      const values = zoneIds.flatMap(currentZone => specs.map(spec => returned.has(currentZone)
         ? capability(spec, returned.get(currentZone)?.[spec.dataset], currentZone)
         : unavailableCapability(spec, currentZone, "Cloudflare did not return Analytics settings for this zone.")));
+      await publish(values);
+      return values;
     } catch (error) {
       if (isBudgetError(error)) throw error;
       const unauthorized = unauthorizedZoneIds(errorMessage(error), zoneIds);
       if (unauthorized.length) {
         const denied = unauthorized.flatMap(deniedZone => specs.map(spec => unavailableCapability(spec, deniedZone, "Cloudflare denied Analytics access to this zone.", "permission_denied")));
+        await publish(denied);
         const remaining = zoneIds.filter(currentZone => !unauthorized.includes(currentZone));
-        return remaining.length ? [...denied, ...await this.zoneSettings(specs, remaining)] : denied;
+        return remaining.length ? [...denied, ...await this.zoneSettings(specs, remaining, publish)] : denied;
       }
       if (!isIsolatableAnalyticsError(error)) throw error;
       if (specs.length > 1) {
         const middle = Math.ceil(specs.length / 2);
         return [
-          ...await this.zoneSettings(specs.slice(0, middle), zoneIds),
-          ...await this.zoneSettings(specs.slice(middle), zoneIds),
+          ...await this.zoneSettings(specs.slice(0, middle), zoneIds, publish),
+          ...await this.zoneSettings(specs.slice(middle), zoneIds, publish),
         ];
       }
       if (zoneIds.length > 1) {
         const middle = Math.ceil(zoneIds.length / 2);
         return [
-          ...await this.zoneSettings(specs, zoneIds.slice(0, middle)),
-          ...await this.zoneSettings(specs, zoneIds.slice(middle)),
+          ...await this.zoneSettings(specs, zoneIds.slice(0, middle), publish),
+          ...await this.zoneSettings(specs, zoneIds.slice(middle), publish),
         ];
       }
-      return specs.map(spec => unavailableCapability(spec, zoneId, errorMessage(error), unavailableState(error)));
+      const values = specs.map(spec => unavailableCapability(spec, zoneId, errorMessage(error), unavailableState(error)));
+      await publish(values);
+      return values;
     }
   }
 
@@ -450,6 +517,7 @@ export class HistoricalAnalyticsClient {
     const payload = await response.json().catch(() => ({})) as GraphqlPayload<T>;
     if (response.status === 429 || isGraphqlRateLimit(payload.errors)) {
       const message = payload.errors?.map(item => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached";
+      const namedScope = namedRateLimitScope(message);
       const telemetry: HistoricalRateLimitTelemetry = {
         occurredAt: Date.now(),
         status: response.status,
@@ -459,11 +527,11 @@ export class HistoricalAnalyticsClient {
         retryAfter: response.headers.get("retry-after"),
         rateLimit: response.headers.get("ratelimit"),
         rateLimitPolicy: response.headers.get("ratelimit-policy"),
-        limiterScope: scopedRateLimit(message, scope) ? scope.kind : "shared",
+        limiterScope: namedScope?.kind ?? (scopedRateLimit(message, scope) ? scope.kind : "shared"),
         rayId: response.headers.get("cf-ray"),
       };
       const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
-      this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : scope);
+      this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : namedScope ?? scope);
       throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
     }
     if (!response.ok || payload.errors?.length) {
@@ -764,6 +832,11 @@ function scopedRateLimit(message: string, scope: HistoricalRateScope): boolean {
   return scope.kind === "account"
     ? /\bAccount\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message)
     : /\bZone\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message);
+}
+function namedRateLimitScope(message: string): HistoricalRateScope | null {
+  const zoneId = message.match(/\bZone\s+([a-f0-9]{32})\s+has exceeded its rate limit/i)?.[1];
+  if (zoneId) return { kind: "zone", zoneId };
+  return /\bAccount\s+[a-f0-9]{32}\s+has exceeded its rate limit/i.test(message) ? { kind: "account" } : null;
 }
 function rateLimitResetAt(headers: Headers, message: string, now = Date.now()): number {
   const floor = /after\s+5\s+minutes|five\s+minutes/i.test(message) ? now + 5 * 60_000 : now;

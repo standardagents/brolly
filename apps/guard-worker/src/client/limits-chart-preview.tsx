@@ -35,6 +35,7 @@ export function LimitsChartPreview() {
       </section>
       <section className="mb-12 rounded-panel border border-line bg-panel p-8">
         <ProductLimitsStep token="session" policy={policy} levels={ALERT_LEVELS} setPolicy={setPolicy}
+          readiness={Object.fromEntries(["workers", "durable_objects", "kv", "d1", "r2", "queues", "workers_ai", "vectorize"].map(family => [family, { state: "ready" as const, percent: 100, errors: 0 }]))}
           data={{ accountId: "demo", complete: false, policy, families: [
             { family: "workers", label: "Workers", metrics: [], protection: "active" },
             { family: "durable_objects", label: "Durable Objects", metrics: [], protection: "active" },

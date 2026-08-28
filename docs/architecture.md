@@ -104,17 +104,19 @@ billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
 budget left after active safeguards. First-run initial ingestion opts into
 Cloudflare's account-based Analytics limiter. A persisted five-minute window
-reserves 240 logical queries for the account and 240 for each zone. A
-700-request physical ceiling leaves global API capacity for monitoring and
-operator actions. A persisted admission timestamp enforces one request per
-second for the account or exact zone across discovery, collection, and resumed
-invocations. Scheduled passes dedicate themselves to the import until first-run
-setup completes. Generic credential-budget errors persist a shared-limiter mode
-and retry deadline. The shared lane allows 280 queries during first-run setup and
-240 during a configured re-import. Named account and zone errors pause their
-individual scope.
-Exact-zone slices use each zone's independent allowance. Six
-producers can fetch from distinct zones concurrently. One lease coordinates
+applies a shared query-cost budget from the first request. First-run setup uses
+200 counted units. Configured imports use 160 counted units to reserve capacity
+for monitoring. A separate 40-request ceiling bounds physical GraphQL
+subrequests. A persisted admission timestamp enforces one physical request per
+second across discovery, collection, and resumed invocations. Zone settings and
+usage requests nest batches of at most ten zones under the connected account.
+Capability planning checkpoints each successful batch in D1. A later shared
+window resumes with the remaining account and zone settings.
+Scheduled passes dedicate themselves to the import until first-run setup
+completes. Generic credential-budget errors persist a retry deadline and an
+adaptive shared allowance. The adaptive allowance uses 80 percent of observed
+counted spend with a floor of 60 units. Named account and zone errors pause their
+individual scope. One lease coordinates
 browser and cron starts. A two-result queue feeds one serialized D1 consumer.
 Each claimed slice reserves D1 capacity until persistence starts. Rate limits
 keep work pending until the reported reset. A fresh per-slice D1 row-limit
@@ -186,8 +188,10 @@ counts. Unavailable windows appear as a count on a warning control. The control
 opens their details. A Cloudflare budget wait replaces the spinner with its retry
 countdown and fallback completion estimate. The import writes ledger
 history and coverage state without creating alert instances, notifications, or
-control actions. Risk tolerance and both limit steps remain editable while the
-import continues.
+control actions. Risk tolerance and account limits open after Billing reaches
+a terminal state and account-root history is ready or limited. Product limits become editable independently as their
+available slices reach a terminal usable state. Setup can finish while product
+imports continue.
 
 The onboarding access check reads recent usage, billing access, and the account
 subscription within six bounded Cloudflare requests. It persists the detected

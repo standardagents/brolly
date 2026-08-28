@@ -12,6 +12,7 @@ import {
 import {
   HistoricalAnalyticsClient,
   type HistoricalAnalyticsOptions,
+  type HistoricalCapabilityDiscoveryOptions,
   type HistoricalDatasetCapability,
   type HistoricalUsageRequest,
   type HistoricalUsageResult,
@@ -213,8 +214,8 @@ export class CloudflareClient {
     return this.historicalClient().collectorCapabilities();
   }
 
-  async historicalCapabilities(): Promise<HistoricalDatasetCapability[]> {
-    return this.historicalClient().discoverCapabilities();
+  async historicalCapabilities(options: HistoricalCapabilityDiscoveryOptions = {}): Promise<HistoricalDatasetCapability[]> {
+    return this.historicalClient().discoverCapabilities(options);
   }
 
   async historicalUsage(request: HistoricalUsageRequest): Promise<HistoricalUsageResult> {

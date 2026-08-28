@@ -208,25 +208,25 @@ export function buildProductDatasetQuery(definition: ProductUsageDefinition, sou
   return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
 }
 
-/** Build the exact-zone form required by Cloudflare's account-based limiter. */
-export function buildExactZoneProductDatasetQuery(
+/** Build a bounded zone batch nested under the connected account. */
+export function buildAccountZoneProductDatasetQuery(
   definition: ProductUsageDefinition,
   source: ProductDatasetDefinition,
   limit = 10_000,
 ): string {
   if ((source.root ?? "account") !== "zone") throw new TypeError(`${source.dataset} is not a zone dataset`);
   const { selection, variableType } = productDatasetSelection(source, limit);
-  return `query BrollyExactZoneProductUsage($zone: string!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag: $zone }) { zoneTag ${selection} } } }`;
+  return `query BrollyAccountZoneProductUsage($account: String!, $zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } } }`;
 }
 
-export function exactZoneProductDatasetVariables(
+export function accountZoneProductDatasetVariables(
   source: ProductDatasetDefinition,
+  accountId: string,
   startsAt: number,
   endsAt: number,
-  zoneId: string,
-): Record<string, string> {
-  const variables = productDatasetVariables(source, "", startsAt, endsAt, [zoneId]);
-  return { zone: zoneId, start: String(variables.start), end: String(variables.end) };
+  zoneIds: string[],
+): Record<string, string | string[]> {
+  return { ...productDatasetVariables(source, accountId, startsAt, endsAt, zoneIds), account: accountId };
 }
 
 function productDatasetSelection(source: ProductDatasetDefinition, limit: number): { selection: string; variableType: "Date" | "Time" } {

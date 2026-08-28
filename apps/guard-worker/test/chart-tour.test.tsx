@@ -253,7 +253,12 @@ describe("BudgetWizard chart tour", () => {
       });
       if (url.pathname === "/api/targets") return json({ credentialStorageReady: true, targets: [{ id: "target", kind: "discord", label: "Ops", providerId: null, enabled: true, createdAt: 1, updatedAt: 1, lastDeliveryAt: null, lastDeliveryOk: null, lastDeliveryError: null }] });
       if (url.pathname === "/api/alert-levels") return json({ levels });
-      if (url.pathname === "/api/onboarding/ingest") return json({ job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 }, collectors: [] });
+      if (url.pathname === "/api/onboarding/ingest") return json({
+        job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 },
+        days: { total: 90, complete: 90, pending: 0, gaps: 0, failedWindows: 0, errors: [] },
+        collectors: [],
+        readiness: { billing: "ready", account: "ready", products: {} },
+      });
       if (url.pathname === "/api/onboarding/estimates") return json({
         generatedAt: 1, windowStartAt: 1, windowEndAt: 1, cached: true, apiCalls: 0,
         headroom: { warning: 0.25, critical: 0.75, emergency: 1.5 }, account: null, families: {}, assets: {}, unchangedFamilies: [],

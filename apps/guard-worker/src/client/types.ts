@@ -129,9 +129,13 @@ export interface InitialIngestionJob {
   status: string;
   startedAt: number;
   updatedAt: number;
-  limiterMode?: "optimistic" | "shared-fallback";
+  limiterMode?: "shared-paced" | "shared-fallback";
   resumeAt?: number | null;
   sharedQueryLimit?: number;
+  queryWindowStartedAt?: number;
+  physicalRequestsUsed?: number;
+  physicalRequestLimit?: number;
+  logicalQueryUnitsUsed?: number;
 }
 
 export interface InitialIngestionCollector {
@@ -161,6 +165,15 @@ export interface InitialIngestionResponse {
   job: InitialIngestionJob | null;
   days: InitialIngestionDays | null;
   collectors: InitialIngestionCollector[];
+  readiness: {
+    billing: "pending" | "ready" | "unavailable";
+    account: "pending" | "ready" | "limited";
+    products: Record<string, {
+      state: "importing" | "ready" | "limited" | "unavailable";
+      percent: number;
+      errors: number;
+    }>;
+  };
 }
 
 export interface BillingAccessStatus {

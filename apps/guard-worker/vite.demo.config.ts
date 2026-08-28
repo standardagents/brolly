@@ -290,6 +290,11 @@ const onboarding = {
 const initialIngestion: InitialIngestionResponse = {
   job: { id: "initial-demo", status: "running", startedAt: now, updatedAt: now },
   days: { total: 90, complete: 0, pending: 90, gaps: 0, failedWindows: 0, errors: [] },
+  readiness: {
+    billing: "pending",
+    account: "pending",
+    products: Object.fromEntries(catalogFamilies.map(family => [family.family, { state: "importing" as const, percent: 0, errors: 0 }])),
+  },
   collectors: [
     { collector: "graphql:workers", label: "Workers", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
     { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 0, failed: 0, pending: 3, totalUnits: 90, completeUnits: 0, failedUnits: 0, oldestCompleteAt: null, errors: [] },
@@ -318,6 +323,15 @@ const frozenIngestErrors: InitialIngestionResponse | null = process.env.BROLLY_D
         { collector: "graphql:durable_objects", label: "Durable Objects", total: 3, complete: 1, failed: 1, pending: 1, totalUnits: 90, completeUnits: 28, failedUnits: 12, oldestCompleteAt: "2026-05-19", errors: ["Durable Objects analytics returned no data before 2026-06-14; the account predates retention for that range."] },
         { collector: "billing", label: "Billing", total: 3, complete: 1, failed: 2, pending: 0, totalUnits: 90, completeUnits: 30, failedUnits: 60, oldestCompleteAt: "2026-07-28", errors: ["Billing API token lacks the Billing Read permission (HTTP 403).", "Invoice detail for June 2026 timed out after 3 attempts."] },
       ],
+      readiness: {
+        billing: "ready",
+        account: "ready",
+        products: Object.fromEntries(catalogFamilies.map(family => [family.family, {
+          state: family.family === "workers" || family.family === "durable_objects" ? "limited" as const : "ready" as const,
+          percent: 100,
+          errors: family.family === "workers" || family.family === "durable_objects" ? 1 : 0,
+        }])),
+      },
     }
   : null;
 
@@ -336,6 +350,15 @@ function advanceInitialIngestion(): InitialIngestionResponse {
   const complete = Math.min(...initialIngestion.collectors.map(item => item.completeUnits));
   initialIngestion.days = { total: 90, complete, pending: 90 - complete, gaps: 0, failedWindows: 0, errors: [] };
   initialIngestion.job = { ...initialIngestion.job!, status: done ? "complete" : "running", updatedAt: Date.now() };
+  initialIngestion.readiness = {
+    billing: billing === 3 ? "ready" : "pending",
+    account: billing === 3 ? "ready" : "pending",
+    products: Object.fromEntries(catalogFamilies.map(family => [family.family, family.family === "workers"
+      ? { state: workers === 3 ? "ready" as const : "importing" as const, percent: Math.round(workers / 3 * 100), errors: 0 }
+      : family.family === "durable_objects"
+        ? { state: durableObjects === 3 ? "ready" as const : "importing" as const, percent: Math.round(durableObjects / 3 * 100), errors: 0 }
+        : { state: "ready" as const, percent: 100, errors: 0 }])),
+  };
   return initialIngestion;
 }
 

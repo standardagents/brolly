@@ -62,20 +62,16 @@ export function useInitialIngestion(token: string) {
 }
 
 /**
- * Sidebar import progress. Mounting it starts the initial ingestion, which runs
- * in the background. One 90-day row advances only when every available source
- * for a day is complete. Successful imports disappear; coverage gaps remain.
+ * Sidebar import progress. The wizard owns the ingestion poller and passes its
+ * response here. One 90-day row advances only when every available source for
+ * a day is complete. Successful imports disappear; coverage gaps remain.
  */
-export function ImportProgress({ token, billingConnected, onRunningChange }: {
-  token: string;
+export function ImportProgress({ ingestion, running, error, billingConnected }: {
+  ingestion: InitialIngestionResponse | null;
+  running: boolean;
+  error: string;
   billingConnected: boolean;
-  /** Reports whether the import is still running, so the wizard can hold steps that need imported history. */
-  onRunningChange?: (running: boolean) => void;
 }) {
-  const { ingestion, running, error } = useInitialIngestion(token);
-  useEffect(() => {
-    onRunningChange?.(running);
-  }, [running, onRunningChange]);
   return <ImportProgressView ingestion={ingestion} running={running} error={error} billingConnected={billingConnected} />;
 }
 
@@ -113,6 +109,10 @@ export function ImportProgressView({
       data-import-state={state}
       data-import-limiter-mode={ingestion?.job?.limiterMode}
       data-import-resume-at={resumeAt ?? undefined}
+      data-import-query-units={ingestion?.job?.logicalQueryUnitsUsed}
+      data-import-query-limit={ingestion?.job?.sharedQueryLimit}
+      data-import-physical-requests={ingestion?.job?.physicalRequestsUsed}
+      data-import-physical-limit={ingestion?.job?.physicalRequestLimit}
     >
       <div className="flex items-center justify-between gap-2">
         <button
@@ -201,7 +201,7 @@ export function initialIngestionOverallProgress(
   const active = ingestion.job?.status === "pending" || ingestion.job?.status === "running";
   const fallback = ingestion.job?.limiterMode === "shared-fallback";
   const fallbackPending = ingestion.collectors.reduce((total, collector) => total + collector.pending, 0);
-  const fallbackLimit = Math.max(1, ingestion.job?.sharedQueryLimit ?? 240);
+  const fallbackLimit = Math.max(1, ingestion.job?.sharedQueryLimit ?? 200);
   const waitMs = Math.max(0, (ingestion.job?.resumeAt ?? now) - now);
   const estimatedRemainingMs = fallback && active && fallbackPending > 0
     ? waitMs + fallbackPending * Math.ceil(5 * 60_000 / fallbackLimit)

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Brand, Button, Eyebrow, Icon, Notice, Spinner, StepMarker } from "../components/ui";
 import { effectivePlanTier } from "../plan-tier";
 import type { OnboardingData } from "../types";
@@ -16,7 +16,7 @@ import { RiskToleranceStep } from "./RiskToleranceStep";
 import { AccountLimitStep } from "./LimitSteps";
 import { ProductLimitsStep } from "./ProductLimitsStep";
 import { GrantBillingAccessButton } from "./access";
-import { ImportProgress } from "./ingest";
+import { ImportProgress, useInitialIngestion } from "./ingest";
 import { useNotificationTargets } from "../components/notifications";
 import { preparePolicy, prepareRuntimeIntegrations } from "./model";
 import { useBudgetEstimates } from "./useBudgetEstimates";
@@ -64,9 +64,6 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const [billingDialogOpen, setBillingDialogOpen] = useState(false);
   const [accessCheckComplete, setAccessCheckComplete] = useState(false);
   const [breakerClaimed, setBreakerClaimed] = useState(false);
-  // Risk tolerance and the limit steps chart imported history, so the wizard
-  // holds at alert levels until the initial import finishes.
-  const [importRunning, setImportRunning] = useState(true);
   // Chart guide card between alert levels and risk tolerance: it appears
   // when the levels step's Continue is pressed on a first-run wizard, the
   // tolerance step unlocks when it finishes or is skipped, and the card stays
@@ -76,18 +73,25 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
   const targets = useNotificationTargets(token);
   const channelReady = targets.targets.length > 0;
   const navigation = useWizardNavigation(STEPS.length, initialStep, editing);
+  const initialIngestion = useInitialIngestion(token);
+  const readiness = useMemo(() => initialIngestion.ingestion?.readiness ?? {
+    billing: "pending" as const,
+    account: "pending" as const,
+    products: {},
+  }, [initialIngestion.ingestion]);
+  const accountReady = editing || readiness.account !== "pending";
   const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels, data.planTier);
   const save = useOnboardingSave(token, data, policy, integrations, editing, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
   const billingConnected = estimates.estimates?.access.billing.state === "connected";
   const billingState = estimates.estimates ? billingConnected : undefined;
-  const currentData = estimates.estimates
+  const currentData = useMemo(() => estimates.estimates
     ? {
         ...data,
         planTier: estimates.estimates.planTier ?? data.planTier,
         planTierSource: estimates.estimates.planTierSource ?? data.planTierSource,
       }
-    : data;
+    : data, [data, estimates.estimates]);
   const planTier = effectivePlanTier(currentData);
   const billingRequired = planTier !== "free" && planTier !== "enterprise";
   const billingFlow = useBillingSuccessFlow(billingState, billingRequired && !editing && navigation.unlocked === 0, navigation.advance);
@@ -113,11 +117,11 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     />,
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
-    importRunning && !editing
+    !accountReady
       ? <ImportHoldStep />
       : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={currentData.planTier} />,
-    <ProductLimitsStep token={token} data={currentData} policy={policy} levels={board.levels} setPolicy={setPolicy} />,
+    <ProductLimitsStep token={token} data={currentData} policy={policy} levels={board.levels} setPolicy={setPolicy} readiness={readiness.products} />,
     <RuntimeStep assets={data.scopedAssets} />,
     <VerifyStep assets={data.scopedAssets} token={token} integrations={integrations} onChange={setIntegrations} autoRun={breakerClaimed && !editing} />,
   ];
@@ -162,7 +166,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     busy={save.busy || (index === 0 && estimates.busy)}
                     blocked={
                       index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue."
-                      : index === stepIndex("tolerance") && importRunning && !editing ? "This step opens when the account history import finishes."
+                      : index === stepIndex("tolerance") && !accountReady ? "This step opens when Billing and account history reach final states."
                       : ""
                     }
                     firstStep={index === 0}
@@ -196,7 +200,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
           </Fragment>)}
         </div>
       </div>
-      {navigation.unlocked >= 1 && <ImportProgress token={token} billingConnected={billingConnected} onRunningChange={setImportRunning} />}
+      {navigation.unlocked >= 1 && <ImportProgress {...initialIngestion} billingConnected={billingConnected} />}
     </main>
   );
 }
@@ -246,7 +250,7 @@ function WizardStepper({ active, unlocked, onSelect }: {
   );
 }
 
-/** Step 4 body while the account history import runs: tolerance charts real usage, so the step holds until the data exists. */
+/** Step 4 body while Billing or account history remains unsettled. */
 function ImportHoldStep() {
   return <>
     <StepIntro title="Risk tolerance">
@@ -254,8 +258,8 @@ function ImportHoldStep() {
     </StepIntro>
     <div className="grid justify-items-center gap-3 rounded-panel border border-dashed border-line px-6 py-14 text-center">
       <Spinner />
-      <strong className="text-[14px] text-ink">Importing your account history…</strong>
-      <p className="max-w-[46ch] text-[12.5px] leading-normal text-muted">Risk tolerance is set against your real usage. This step opens when the import finishes.</p>
+      <strong className="text-[14px] text-ink">Importing Billing and account history…</strong>
+      <p className="max-w-[46ch] text-[12.5px] leading-normal text-muted">Risk tolerance will open when Billing and account history reach final states.</p>
     </div>
   </>;
 }
