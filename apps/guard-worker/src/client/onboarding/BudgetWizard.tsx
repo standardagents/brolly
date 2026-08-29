@@ -79,7 +79,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     account: "pending" as const,
     products: {},
   }, [initialIngestion.ingestion]);
-  const accountReady = editing || readiness.account !== "pending";
+  const billingReady = editing || readiness.billing !== "pending";
   const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels, data.planTier);
   const save = useOnboardingSave(token, data, policy, integrations, editing, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
@@ -117,7 +117,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     />,
     <AlertsStep token={token} targets={targets} />,
     <AlertLevelsStep token={token} targets={targets} board={board} />,
-    !accountReady
+    !billingReady
       ? <ImportHoldStep />
       : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
     <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={currentData.planTier} />,
@@ -153,6 +153,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
             : (
               <section
                 ref={element => { navigation.sectionRefs.current[index] = element; }}
+                data-step={step.key}
+                data-step-ready={step.key === "tolerance" ? billingReady : undefined}
                 className="min-w-0 scroll-mt-[76px] rounded-[12px] border border-line bg-panel p-[clamp(26px,4vw,48px)] shadow-panel max-md:scroll-mt-[116px] max-md:px-4 max-md:py-[22px]"
               >
                 <Eyebrow tone="orange">Step {index + 1} of {STEPS.length}</Eyebrow>
@@ -166,7 +168,7 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
                     busy={save.busy || (index === 0 && estimates.busy)}
                     blocked={
                       index === stepIndex("alerts") && !channelReady ? "Add at least one alert channel to continue."
-                      : index === stepIndex("tolerance") && !accountReady ? "This step opens when Billing and account history reach final states."
+                      : index === stepIndex("tolerance") && !billingReady ? "This step opens when Billing history reaches a final state."
                       : ""
                     }
                     firstStep={index === 0}
@@ -250,16 +252,16 @@ function WizardStepper({ active, unlocked, onSelect }: {
   );
 }
 
-/** Step 4 body while Billing or account history remains unsettled. */
+/** Step 4 body while Billing history remains unsettled. */
 function ImportHoldStep() {
   return <>
     <StepIntro title="Risk tolerance">
       Set how far above your usual daily spend each alert level starts.
     </StepIntro>
-    <div className="grid justify-items-center gap-3 rounded-panel border border-dashed border-line px-6 py-14 text-center">
+    <div data-import-hold className="grid justify-items-center gap-3 rounded-panel border border-dashed border-line px-6 py-14 text-center">
       <Spinner />
-      <strong className="text-[14px] text-ink">Importing Billing and account history…</strong>
-      <p className="max-w-[46ch] text-[12.5px] leading-normal text-muted">Risk tolerance will open when Billing and account history reach final states.</p>
+      <strong className="text-[14px] text-ink">Importing Billing history…</strong>
+      <p className="max-w-[46ch] text-[12.5px] leading-normal text-muted">Risk tolerance will open when Billing history reaches a final state.</p>
     </div>
   </>;
 }

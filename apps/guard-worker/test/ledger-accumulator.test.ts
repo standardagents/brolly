@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { UsageObservation } from "@standardagents/brolly-core";
+import { LedgerRunBudget, type UsageObservation } from "@standardagents/brolly-core";
 import { applyAccumulatorObservations, type AccumulatorPayload } from "../src/ledger-accumulator.js";
-import { aggregateDailyResource } from "../src/ledger-store.js";
+import { aggregateDailyResource, LedgerStore } from "../src/ledger-store.js";
+import { createTestD1 } from "./d1.js";
 
 function observation(value: number, end = 300_000): UsageObservation {
   return {
@@ -39,6 +40,42 @@ describe("usage accumulator", () => {
     }
     expect(payload!.resources.resource!.metrics["durable_objects:rows_read"]!.baseline).toHaveLength(12);
     expect(Object.keys(payload!.resources.resource!.windows)).toHaveLength(16);
+  });
+
+  it("updates accumulator payloads without allocating change records", () => {
+    const item = observation(100);
+    const result = applyAccumulatorObservations(
+      null,
+      [item],
+      new Map([[item, "resource"]]),
+      new Map([["durable_objects:rows_read", "sum"]]),
+      new Map(),
+      { emitChanges: false },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.payload.resources.resource?.metrics["durable_objects:rows_read"]?.day).toBe(100);
+  });
+
+  it("persists historical payloads within a minimal read budget when reconciliation is disabled", async () => {
+    const testD1 = createTestD1();
+    try {
+      const budget = new LedgerRunBudget({ d1RowsRead: 1 });
+      const changes = await new LedgerStore(testD1.db, budget).applyObservations(
+        [observation(100)],
+        "UTC",
+        { reconcileChanges: false },
+      );
+      const shard = await testD1.db.prepare(
+        `SELECT payload_json FROM usage_accumulator_shards LIMIT 1`,
+      ).first<{ payload_json: string }>();
+
+      expect(changes).toEqual([]);
+      expect(budget.usage.d1RowsRead).toBeLessThanOrEqual(1);
+      expect(shard?.payload_json).toContain("durable_objects:rows_read");
+    } finally {
+      testD1.close();
+    }
   });
 
   it("combines local-day totals that cross a billing-cycle boundary", () => {

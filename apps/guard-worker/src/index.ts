@@ -26,18 +26,12 @@ export default {
       const activeEnv = await configuredEnv(env);
       if (!activeEnv) return;
       const state = await initialIngestionSchedulingState(activeEnv.DB, activeEnv.BROLLY_ACCOUNT_ID);
-      if (state.importActive && !state.onboardingComplete) {
+      if (state.importActive) {
         await resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error));
         return;
       }
       if (state.onboardingComplete) {
-        await Promise.all([
-          runMonitor(activeEnv, { deferCapabilityDiscovery: state.importActive })
-            .catch(error => console.error("[Brolly] monitor failed", error)),
-          state.importActive
-            ? resumeInitialIngestion(activeEnv).catch(error => console.error("[Brolly] initial import failed", error))
-            : Promise.resolve(),
-        ]);
+        await runMonitor(activeEnv).catch(error => console.error("[Brolly] monitor failed", error));
       }
     })());
   },

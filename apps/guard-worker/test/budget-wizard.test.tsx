@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BudgetWizard, ContinueFooter } from "../src/client/onboarding/BudgetWizard";
-import type { OnboardingData } from "../src/client/types";
+import type { InitialIngestionResponse, OnboardingData } from "../src/client/types";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,7 +22,9 @@ const data: OnboardingData = {
 };
 
 let root: Root | null = null;
+let ingestionReadiness: InitialIngestionResponse["readiness"] = { billing: "ready", account: "ready", products: {} };
 beforeEach(() => {
+  ingestionReadiness = { billing: "ready", account: "ready", products: {} };
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = new URL(String(input), "https://brolly.test").pathname;
     if (path === "/api/targets") return json({ credentialStorageReady: true, targets: [{ id: "target", kind: "discord", label: "Ops", providerId: null, enabled: true, createdAt: 1, updatedAt: 1, lastDeliveryAt: null, lastDeliveryOk: null, lastDeliveryError: null }] });
@@ -41,7 +43,7 @@ beforeEach(() => {
       job: { id: "done", status: "complete", startedAt: 1, updatedAt: 1 },
       days: { total: 90, complete: 90, pending: 0, gaps: 0, failedWindows: 0, errors: [] },
       collectors: [],
-      readiness: { billing: "ready", account: "ready", products: {} },
+      readiness: ingestionReadiness,
     });
     if (path === "/api/onboarding/estimates") return json({
       generatedAt: 1, windowStartAt: 1, windowEndAt: 1, cached: true, apiCalls: 0,
@@ -105,6 +107,19 @@ describe("BudgetWizard", () => {
     ]);
     // Fixture data (the account name supplied to the wizard) reaches the page.
     expect(container.textContent).toContain("test-account");
+  });
+
+  it("opens risk tolerance when Billing is ready while Analytics remains pending", async () => {
+    ingestionReadiness = { billing: "ready", account: "pending", products: {} };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<BudgetWizard data={data} token="test" editing={false} initialStep={3} onLogout={() => {}} onSaved={async () => {}} />);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(container.querySelector("section[data-step='tolerance']")?.getAttribute("data-step-ready")).toBe("true"));
+    expect(container.querySelector("section[data-step='tolerance'] [data-import-hold]")).toBeNull();
   });
 
   it("saves the balanced risk tolerance for an existing policy", async () => {

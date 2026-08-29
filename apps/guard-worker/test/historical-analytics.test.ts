@@ -11,10 +11,10 @@ afterEach(() => vi.unstubAllGlobals());
 describe("historical Analytics collection", () => {
   it("uses nested account zone batches and reports an absent zone node", async () => {
     let request: Request | undefined;
-    const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
+    const rateBudget = { admit: vi.fn(async () => undefined), observe: vi.fn(), pauseUntil: vi.fn() };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       request = new Request(input, init);
-      return Response.json({ data: { viewer: { accounts: [{ zones: [] }] } } });
+      return Response.json({ data: { cost: 3, viewer: { budget: 217, accounts: [{ zones: [] }] } } });
     }));
     const zoneId = "a".repeat(32);
     const client = new HistoricalAnalyticsClient(
@@ -38,8 +38,14 @@ describe("historical Analytics collection", () => {
     expect(request!.headers.get("x-rate-limit-type")).toBe("account-based");
     expect(body.query).toContain("accounts(filter: { accountTag: $account })");
     expect(body.query).toContain("zoneTag_in: $zones");
+    expect(body.query).toContain("cost viewer { budget");
     expect(body.variables).toMatchObject({ account: "account-1", zones: [zoneId] });
-    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "account" }, 1);
+    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "account" }, 1, "httpRequestsAdaptiveGroups", 2);
+    expect(rateBudget.observe).toHaveBeenCalledWith(
+      { kind: "account" },
+      1,
+      expect.objectContaining({ cost: 3, remaining: 217, pageSize: 2 }),
+    );
     expect(result).toMatchObject({
       complete: false,
       rows: 0,
@@ -134,6 +140,53 @@ describe("historical Analytics collection", () => {
     ]);
   });
 
+  it("sizes daily-only dataset pages to the requested days plus one truncation row", async () => {
+    const queries: string[] = [];
+    const rateBudget = { admit: vi.fn(async () => undefined), observe: vi.fn(), pauseUntil: vi.fn() };
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      queries.push(String(JSON.parse(String(init?.body)).query));
+      return Response.json({ data: { cost: 111, viewer: { budget: 30_000, accounts: [{ imagesTransformationsAdaptiveGroups: [] }] } } });
+    }));
+    const client = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", undefined,
+      { accountBasedRateLimit: true, rateBudget },
+    );
+
+    await client.collect({
+      dataset: "imagesTransformationsAdaptiveGroups",
+      startsAt: Date.UTC(2026, 6, 30),
+      endsAt: Date.UTC(2026, 7, 28),
+      maxPageSize: 10_000,
+    });
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("imagesTransformationsAdaptiveGroups(limit: 30,");
+    expect(rateBudget.admit).toHaveBeenCalledWith(
+      { kind: "account" }, 1, "imagesTransformationsAdaptiveGroups", 30,
+    );
+    expect(rateBudget.observe).toHaveBeenCalledWith(
+      { kind: "account" }, 1, expect.objectContaining({ pageSize: 30 }),
+    );
+  });
+
+  it("retains the discovered page ceiling for resource-dimensional datasets", async () => {
+    let query = "";
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      query = String(JSON.parse(String(init?.body)).query);
+      return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } });
+    }));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    await client.collect({
+      dataset: "workersInvocationsAdaptive",
+      startsAt: Date.UTC(2026, 6, 30),
+      endsAt: Date.UTC(2026, 7, 28),
+      maxPageSize: 10_000,
+    });
+
+    expect(query).toContain("workersInvocationsAdaptive(limit: 10000,");
+  });
+
   it("marks a range incomplete when a dataset reaches its returned row limit", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
       workersInvocationsAdaptive: [
@@ -156,7 +209,7 @@ describe("historical Analytics collection", () => {
 });
 
 describe("historical Analytics capability discovery", () => {
-  it("resumes capability discovery from persisted progress after a shared window fills", async () => {
+  it("resumes capability discovery from persisted progress after a query epoch fills", async () => {
     const zoneIds = Array.from({ length: 55 }, (_, index) => (index + 1).toString(16).padStart(32, "0"));
     const settings = Object.fromEntries(HISTORICAL_DATASETS.map(spec => [spec.dataset, setting()]));
     let phase = 1;
@@ -174,7 +227,7 @@ describe("historical Analytics capability discovery", () => {
       return {
         admit: vi.fn(async (_scope: unknown, logicalQueries: number) => {
           if (used + logicalQueries > limit) {
-            throw new HistoricalRateLimitError(429, Date.now() + 300_000, "test shared window is full");
+            throw new HistoricalRateLimitError(429, Date.now() + 300_000, "test query epoch is full");
           }
           used += logicalQueries;
         }),

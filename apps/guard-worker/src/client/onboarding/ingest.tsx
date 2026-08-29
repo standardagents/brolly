@@ -94,11 +94,13 @@ export function ImportProgressView({
   if (ingestion && !running && !error && !hasGaps) return null;
   const storagePaused = isStoragePaused(ingestion?.job?.status);
   const resumeAt = ingestion?.job?.resumeAt ?? null;
-  const rateLimited = running && resumeAt !== null && resumeAt > now;
-  const paused = storagePaused || rateLimited;
+  const waiting = running && resumeAt !== null && resumeAt > now;
+  const pacing = waiting && ingestion?.job?.waitReason === "pacing";
+  const quotaWaiting = waiting && !pacing;
+  const paused = storagePaused || quotaWaiting;
   const days = ingestion?.days ?? null;
   const planning = running && (!ingestion?.job || ingestion.job.status === "planning" || !days);
-  const state = error ? "error" : rateLimited ? "rate_limited" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
+  const state = error ? "error" : quotaWaiting ? "rate_limited" : pacing ? "pacing" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
   const overall = ingestion && days ? initialIngestionOverallProgress(ingestion, now) : null;
 
   return (
@@ -125,10 +127,10 @@ export function ImportProgressView({
           <Icon name="chevron" className={`size-3.5 transition-transform ${detailsOpen ? "rotate-180" : "-rotate-90"}`} />
           {(planning || running) && !paused && <Spinner />}
           <span>{planning ? "Preparing 90-day history import" : "90-day history import"}</span>
-          {rateLimited && (
-            <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">Cloudflare wait {formatRemainingTime(resumeAt - now)} · {overall?.estimatedRemainingMs ? formatRemainingTime(overall.estimatedRemainingMs) : formatRemainingTime(resumeAt - now)} total</span>
+          {waiting && (
+            <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">{pacing ? "Cloudflare pacing" : "Cloudflare wait"} {formatAdmissionWait(resumeAt - now)} · {overall?.estimatedRemainingMs ? formatRemainingTime(overall.estimatedRemainingMs) : formatRemainingTime(resumeAt - now)} total</span>
           )}
-          {!rateLimited && overall?.estimatedRemainingMs !== null && overall?.estimatedRemainingMs !== undefined && (
+          {!waiting && overall?.estimatedRemainingMs !== null && overall?.estimatedRemainingMs !== undefined && (
             <span className="whitespace-nowrap text-[11px] font-normal tabular-nums text-muted">{formatRemainingTime(overall.estimatedRemainingMs)} remaining</span>
           )}
         </button>
@@ -198,16 +200,17 @@ export function initialIngestionOverallProgress(
   const remainingUnits = totalUnits - processedUnits;
   const startedAt = ingestion.job?.startedAt ?? now;
   const elapsedMs = Math.max(0, now - startedAt);
-  const active = ingestion.job?.status === "pending" || ingestion.job?.status === "running";
-  const fallback = ingestion.job?.limiterMode === "shared-fallback";
-  const fallbackPending = ingestion.collectors.reduce((total, collector) => total + collector.pending, 0);
-  const fallbackLimit = Math.max(1, ingestion.job?.sharedQueryLimit ?? 200);
+  const active = ingestion.job?.status === "planning" || ingestion.job?.status === "pending" || ingestion.job?.status === "running";
+  const pendingRequests = ingestion.collectors.reduce((total, collector) => total + collector.pending, 0);
+  const queryIntervalMs = Math.max(1, ingestion.job?.queryIntervalMs ?? 1_000);
   const waitMs = Math.max(0, (ingestion.job?.resumeAt ?? now) - now);
-  const estimatedRemainingMs = fallback && active && fallbackPending > 0
-    ? waitMs + fallbackPending * Math.ceil(5 * 60_000 / fallbackLimit)
-    : active && elapsedMs >= 10_000 && processedUnits > 0 && remainingUnits > 0
-      ? Math.max(60_000, Math.min(24 * 60 * 60_000, elapsedMs * remainingUnits / processedUnits))
-      : null;
+  const pacingFloorMs = waitMs + Math.max(0, pendingRequests - (waitMs > 0 ? 1 : 0)) * queryIntervalMs;
+  const observedRemainingMs = elapsedMs >= 10_000 && processedUnits > 0 && remainingUnits > 0
+    ? elapsedMs * remainingUnits / processedUnits
+    : 0;
+  const estimatedRemainingMs = active && remainingUnits > 0 && (pendingRequests > 0 || observedRemainingMs > 0)
+    ? Math.max(pacingFloorMs, observedRemainingMs)
+    : null;
   return { percentage, estimatedRemainingMs, processedUnits, totalUnits };
 }
 
@@ -216,6 +219,11 @@ export function formatRemainingTime(milliseconds: number): string {
   if (minutes < 60) return `~${minutes} min`;
   const hours = Math.ceil(minutes / 60);
   return `~${hours} hr`;
+}
+
+function formatAdmissionWait(milliseconds: number): string {
+  if (milliseconds < 60_000) return `~${Math.max(1, Math.ceil(milliseconds / 1_000))} sec`;
+  return formatRemainingTime(milliseconds);
 }
 
 function ImportOverallBar({ days, overall, paused }: {

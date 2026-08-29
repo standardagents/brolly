@@ -27,7 +27,7 @@ export default defineConfig(({ command }) => {
       configPath: "../../wrangler.jsonc",
       persistState: accountDevelopment ? { path: path.join(repositoryRoot, ".wrangler/state/account-dev") } : undefined,
       remoteBindings: accountDevelopment ? false : undefined,
-      tunnel: accountDevelopment ? { autoStart: true } : undefined,
+      tunnel: accountDevelopment && process.env.BROLLY_ACCOUNT_DEV_NO_TUNNEL !== "1" ? { autoStart: true } : undefined,
     })],
     build: { rollupOptions: { output: { assetFileNames: "assets/[name][extname]" } } },
     server: {

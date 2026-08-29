@@ -37,13 +37,13 @@ export const MAX_LEDGER_RUN_LIMITS: LedgerRunLimits = {
 };
 
 /**
- * Per-run logical query-cost budget for the onboarding import. The guard
- * Worker applies a separate physical request ceiling for Cloudflare
- * subrequests.
+ * Per-run Analytics work-unit budget for the onboarding import. The guard
+ * Worker applies Cloudflare's server-reported GraphQL budget and a separate
+ * physical request ceiling across invocations.
  */
 export const INITIAL_INGESTION_LIMITS: LedgerRunLimits = {
   ...MAX_LEDGER_RUN_LIMITS,
-  graphqlQueries: 200,
+  graphqlQueries: 300,
   // Billing may require the v2 request, a Paygo fallback, and an aligned
   // Paygo retry. Reserve three requests for each of the three ranges.
   restRequests: 9,

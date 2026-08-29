@@ -5,6 +5,8 @@ import {
   initialIngestionProgress,
   initialIngestionSchedulingState,
   initialIngestionSlicePlan,
+  prioritizeInitialIngestionSlices,
+  resourceAwarePageSize,
   runInitialIngestion,
   type InitialIngestionSlicePlan,
 } from "../src/initial-ingestion.js";
@@ -20,6 +22,11 @@ const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 7, 17, 12);
 
 describe("initial ingestion slice plan", () => {
+  it("bounds date-based resource pages with headroom and a truncation sentinel", () => {
+    expect(resourceAwarePageSize(10_000, 30, 28)).toBe(1_009);
+    expect(resourceAwarePageSize(10_000, 30, 2_000)).toBe(10_000);
+  });
+
   it("covers each account dataset with a small number of newest-first bounded ranges", () => {
     const slices = initialIngestionSlicePlan(NOW, false, accountCapabilities());
     const workers = datasetSlices(slices, "workersInvocationsAdaptive");
@@ -30,6 +37,16 @@ describe("initial ingestion slice plan", () => {
     expect(workers.every((slice, index) => index === 0 || slice.endsAt === workers[index - 1]!.startsAt)).toBe(true);
     expect(workers.reduce((sum, slice) => sum + metadata(slice).units, 0)).toBe(90);
     expect(slices.length).toBeLessThan(100);
+  });
+
+  it("reserves fresh GraphQL windows for scan-heavy daily aggregates", () => {
+    const slices = initialIngestionSlicePlan(NOW, false, accountCapabilities());
+    const transformations = datasetSlices(slices, "imagesTransformationsAdaptiveGroups");
+    const requests = datasetSlices(slices, "imagesRequestsAdaptiveGroups");
+
+    expect(transformations.length).toBeGreaterThan(0);
+    expect(transformations.every(slice => metadata(slice).freshGraphqlBudgetRequired === true)).toBe(true);
+    expect(requests.every(slice => metadata(slice).freshGraphqlBudgetRequired !== true)).toBe(true);
   });
 
   it("plans zones in bounded batches for account-based rate limiting", () => {
@@ -89,6 +106,19 @@ describe("initial ingestion slice plan", () => {
     expect(children[0]?.endsAt).toBe(children[1]?.startsAt);
     expect(children[1]?.endsAt).toBe(NOW);
     expect(children.reduce((sum, child) => sum + child.units, 0)).toBe(33 * 10);
+  });
+
+  it("prioritizes Durable Objects, Workers, then remaining families by billed cost", () => {
+    const prioritized = prioritizeInitialIngestionSlices(
+      initialIngestionSlicePlan(NOW, false, accountCapabilities()),
+      { kv: 9_000, r2: 4_000, d1: 2_000 },
+    );
+    const priority = (collector: string) => metadata(prioritized.find(slice => slice.collector === collector)!).priority;
+
+    expect(priority("graphql:durable-objects")).toBeLessThan(priority("graphql:workers")!);
+    expect(priority("graphql:workers")).toBeLessThan(priority("graphql:kv")!);
+    expect(priority("graphql:kv")).toBeLessThan(priority("graphql:r2")!);
+    expect(priority("graphql:r2")).toBeLessThan(priority("graphql:d1")!);
   });
 
 });
@@ -169,7 +199,12 @@ describe("initial ingestion progress", () => {
 
     const progress = await initialIngestionProgress(testD1.db, "account-1");
 
-    expect(progress.job).toMatchObject({ id: "job", status: "running" });
+    expect(progress.job).toMatchObject({
+      id: "job",
+      status: "running",
+      sharedQueryLimit: 270,
+      queryIntervalMs: 1_200,
+    });
     expect(progress.collectors).toMatchObject([{
       collector: "graphql:workers",
       total: 3,
@@ -303,7 +338,40 @@ describe("initial ingestion progress", () => {
     expect(progress.days).toMatchObject({ gaps: 0, failedWindows: 0, errors: [] });
   });
 
-  it("paces physical Analytics requests through one shared lane", async () => {
+  it("reports the earliest candidate deadline across pacing and capacity waits", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 12);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('earliest-wait-job','account-1','initial_v2',?1,?2,'running',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('earliest-wait-slice','earliest-wait-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "earliest-wait-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          capacityWaitUntil: now + 160_000,
+          sharedNextAdmissionAt: now + 47_000,
+          admissions: [],
+        }), now),
+    ]);
+
+    expect((await initialIngestionProgress(testD1.db, "account-1")).job).toMatchObject({
+      resumeAt: now + 47_000,
+      waitReason: "pacing",
+    });
+  });
+
+  it("paces physical Analytics requests through one shared account lane", async () => {
     vi.useFakeTimers();
     testD1 = createTestD1();
     const now = Date.UTC(2026, 7, 27, 12);
@@ -336,11 +404,57 @@ describe("initial ingestion progress", () => {
     await run;
 
     expect(requestTimes).toHaveLength(7);
-    expect(requestTimes.slice(1).every((time, index) => time - requestTimes[index]! >= 1_000)).toBe(true);
+    expect(requestTimes.slice(1).every((time, index) => time - requestTimes[index]! >= 1_200)).toBe(true);
     const completed = await testD1.db.prepare(
       `SELECT COUNT(*) AS count FROM backfill_slices WHERE backfill_job_id='parallel-job' AND status='complete'`,
     ).first<{ count: number }>();
     expect(completed?.count).toBe(7);
+  });
+
+  it("shrinks later date-resource pages after the first slice discovers cardinality", async () => {
+    vi.useFakeTimers();
+    testD1 = createTestD1();
+    const now = Date.UTC(2026, 7, 27, 13);
+    vi.setSystemTime(now);
+    const metadata = JSON.stringify({
+      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('page-hint-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 2 * DAY_MS, now),
+      ...[0, 1].map(index => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'page-hint-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(`page-hint-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
+    ]);
+    const queries: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { query: string; variables: { since: string } };
+      queries.push(body.query);
+      return Response.json({ data: {
+        cost: 111,
+        viewer: {
+          budget: queries.length === 1 ? 33_000 : 32_800,
+          accounts: [{ workersInvocationsAdaptive: [{
+            dimensions: { date: body.variables.since.slice(0, 10), scriptName: "worker-a" },
+            sum: { requests: 1, cpuTimeUs: 1 },
+          }] }],
+        },
+      } });
+    }));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "page-hint-job",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0]).toContain("workersInvocationsAdaptive(limit: 10000,");
+    expect(queries[1]).toContain("workersInvocationsAdaptive(limit: 11,");
   });
 
   it("paces repeated zone requests through the shared lane", async () => {
@@ -369,7 +483,7 @@ describe("initial ingestion progress", () => {
     );
 
     expect(requestTimes).toHaveLength(2);
-    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_200);
   });
 
   it("persists account pacing across resumed importer instances", async () => {
@@ -407,7 +521,7 @@ describe("initial ingestion progress", () => {
     await runInitialIngestion(env, "persisted-pace-job");
 
     expect(requestTimes).toHaveLength(2);
-    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(950);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_200);
   });
 
   it("requeues a persistence overflow before splitting it on a fresh-budget attempt", async () => {
@@ -466,7 +580,7 @@ describe("initial ingestion progress", () => {
     expect(slices.results.find(slice => slice.status === "superseded")).toMatchObject({ starts_at: startsAt, ends_at: endsAt });
   });
 
-  it("requeues a wall-time stop without marking or splitting the range", async () => {
+  it("does not start remote work inside the invocation wall-time reserve", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 27, 18);
     vi.setSystemTime(now);
@@ -482,38 +596,42 @@ describe("initial ingestion progress", () => {
       ).bind(JSON.stringify({
         version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 2,
       }), now - 2 * DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`).bind(
+        "initial_ingestion_quota:account-1",
+        JSON.stringify({
+          jobId: "wall-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 33_000,
+          reportedAt: now,
+          reportedForRequestAt: now,
+          observedCapacity: 33_144,
+          sharedNextAdmissionAt: now + 44_000,
+          admissions: [],
+        }),
+        now,
+      ),
     ]);
-    const baseDb = testD1.db;
-    let movedClock = false;
-    const elapsedDb = {
-      prepare: baseDb.prepare.bind(baseDb),
-      async batch(statements: D1PreparedStatement[]) {
-        const results = await baseDb.batch(statements);
-        if (!movedClock) {
-          movedClock = true;
-          vi.setSystemTime(now + 56_000);
-        }
-        return results;
-      },
-    } as unknown as D1Database;
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+    const fetchMock = vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
       workersInvocationsAdaptive: [{
         dimensions: { date: "2026-08-26", scriptName: "worker" }, sum: { requests: 1, cpuTimeUs: 1 },
       }],
-    }] } } })));
+    }] } } }));
+    vi.stubGlobal("fetch", fetchMock);
 
     await runInitialIngestion(
-      { DB: elapsedDb, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
       "wall-job",
     );
 
-    const slices = await baseDb.prepare(
+    const slices = await testD1.db.prepare(
       `SELECT status,scope_key,next_eligible_at FROM backfill_slices WHERE backfill_job_id='wall-job'`,
     ).all<{ status: string; scope_key: string; next_eligible_at: number | null }>();
     expect(slices.results).toHaveLength(1);
     expect(slices.results[0]?.status).toBe("pending");
-    expect(slices.results[0]?.next_eligible_at).toBe(now + 116_000);
+    expect(slices.results[0]?.next_eligible_at).toBeNull();
     expect(JSON.parse(slices.results[0]!.scope_key)).not.toHaveProperty("persistenceRetry");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("holds one D1 lease across overlapping import invocations", async () => {
@@ -649,9 +767,9 @@ describe("initial ingestion progress", () => {
   });
 
   it.each([
-    ["HTTP 429", () => Response.json({ errors: [{ message: "too many requests" }] }, { status: 429 })],
-    ["GraphQL budget error", () => Response.json({ errors: [{ message: "query budget exceeded", extensions: { code: "budget" } }] })],
-  ])("defers %s without consuming a retry", async (_name, response) => {
+    ["HTTP 429", () => Response.json({ errors: [{ message: "too many requests" }] }, { status: 429 }), 0],
+    ["GraphQL budget error", () => Response.json({ errors: [{ message: "query budget exceeded", extensions: { code: "budget" } }] }), 0],
+  ])("defers a one-day %s with bounded retry accounting", async (_name, response, expectedRetries) => {
     testD1 = createTestD1();
     const now = Date.now();
     await testD1.db.batch([
@@ -677,8 +795,360 @@ describe("initial ingestion progress", () => {
       `SELECT status,retry_count,next_eligible_at FROM backfill_slices WHERE id='rate-slice'`,
     ).first<{ status: string; retry_count: number; next_eligible_at: number | null }>();
     expect(slice?.status).toBe("pending");
-    expect(slice?.retry_count).toBe(0);
+    expect(slice?.retry_count).toBe(expectedRetries);
     expect(slice?.next_eligible_at).toBeGreaterThan(now);
+  });
+
+  it("retries a tail-window GraphQL budget failure with fresh capacity before splitting", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "imagesTransformationsAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 31,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('fresh-retry-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 31 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,coverage_status,updated_at)
+         VALUES('fresh-retry-slice','fresh-retry-job','graphql:images',?1,?2,?3,'pending',0,'missing',?3)`,
+      ).bind(metadata, now - 31 * DAY_MS, now),
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    })));
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "fresh-retry-job",
+    );
+
+    const rows = await testD1.db.prepare(
+      `SELECT status,retry_count,scope_key,next_eligible_at FROM backfill_slices WHERE backfill_job_id='fresh-retry-job'`,
+    ).all<{ status: string; retry_count: number; scope_key: string; next_eligible_at: number | null }>();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0]?.status).toBe("pending");
+    expect(rows.results[0]?.retry_count).toBe(0);
+    expect(rows.results[0]?.next_eligible_at).toBeGreaterThan(now);
+    expect(JSON.parse(rows.results[0]?.scope_key ?? "{}").freshGraphqlBudgetRequired).toBe(true);
+    expect(JSON.parse(rows.results[0]?.scope_key ?? "{}").graphqlBudgetFailures).toBeUndefined();
+  });
+
+  it("returns fresh-window siblings to measured pacing after one bounded success", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 35);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2,
+      dataset: "imagesTransformationsAdaptiveGroups",
+      zoneIds: [],
+      maxPageSize: 10_000,
+      units: 1,
+      freshGraphqlBudgetRequired: true,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('measured-siblings-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 2 * DAY_MS, now),
+      ...[0, 1].map(index => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'measured-siblings-job','graphql:images',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(`measured-sibling-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
+    ]);
+    const requestTimes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requestTimes.push(Date.now());
+      return Response.json({
+        data: {
+          cost: 111,
+          viewer: {
+            budget: requestTimes.length === 1 ? 33_000 : 32_889,
+            accounts: [{ imagesTransformationsAdaptiveGroups: [] }],
+          },
+        },
+      });
+    }));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "measured-siblings-job",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+
+    expect(requestTimes).toHaveLength(2);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeLessThan(5_000);
+    const slices = await testD1.db.prepare(
+      `SELECT status,scope_key FROM backfill_slices WHERE backfill_job_id='measured-siblings-job'`,
+    ).all<{ status: string; scope_key: string }>();
+    expect(slices.results.every(slice => slice.status === "complete")).toBe(true);
+  });
+
+  it("continues smaller queued work while a failed dataset waits for a fresh budget", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 40);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('fresh-wait-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('fresh-wait-large','fresh-wait-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "imagesTransformationsAdaptiveGroups",
+        zoneIds: [],
+        maxPageSize: 10_000,
+        units: 1,
+        priority: 10,
+        freshGraphqlBudgetRequired: true,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('fresh-wait-small','fresh-wait-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "imagesRequestsAdaptiveGroups",
+        zoneIds: [],
+        maxPageSize: 10_000,
+        units: 1,
+        priority: 11,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "fresh-wait-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 1_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {},
+          admissions: [{
+            admittedAt: now - 1_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "previousDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: { cost: 111, viewer: { budget: 800, accounts: [{ imagesRequestsAdaptiveGroups: [] }] } },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "fresh-wait-job",
+    );
+    await vi.advanceTimersByTimeAsync(55_000);
+    await run;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const rows = await testD1.db.prepare(
+      `SELECT id,status FROM backfill_slices WHERE backfill_job_id='fresh-wait-job' ORDER BY id`,
+    ).all<{ id: string; status: string }>();
+    expect(rows.results).toEqual([
+      { id: "fresh-wait-large", status: "pending" },
+      { id: "fresh-wait-small", status: "complete" },
+    ]);
+  });
+
+  it("fills a high-cost Workers pacing gap with eligible lower-cost work", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 42);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('priority-wait-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('priority-workers','priority-wait-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "workersInvocationsAdaptive",
+        zoneIds: [],
+        maxPageSize: 10_000,
+        units: 1,
+        priority: 1,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('priority-images','priority-wait-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "imagesRequestsAdaptiveGroups",
+        zoneIds: [],
+        maxPageSize: 10_000,
+        units: 1,
+        priority: 10,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "priority-wait-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 2_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {
+            workersInvocationsAdaptive: 9_500,
+            imagesRequestsAdaptiveGroups: 111,
+          },
+          admissions: [{
+            admittedAt: now - 50_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "previousDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: { cost: 111, viewer: { budget: 1_000, accounts: [{ imagesRequestsAdaptiveGroups: [] }] } },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "priority-wait-job",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const rows = await testD1.db.prepare(
+      `SELECT id,status FROM backfill_slices WHERE backfill_job_id='priority-wait-job' ORDER BY id`,
+    ).all<{ id: string; status: string }>();
+    expect(rows.results).toEqual([
+      { id: "priority-images", status: "complete" },
+      { id: "priority-workers", status: "pending" },
+    ]);
+  });
+
+  it("splits a query that exhausts a fresh GraphQL budget", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "imagesTransformationsAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 31,
+      freshGraphqlBudgetRequired: true,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('oversized-query-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 31 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,coverage_status,updated_at)
+         VALUES('oversized-query-slice','oversized-query-job','graphql:images',?1,?2,?3,'pending',0,'missing',?3)`,
+      ).bind(metadata, now - 31 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at)
+         VALUES('oversized-query-peer','oversized-query-job','graphql:images-peer',?1,?2,?3,'pending',0,?4,'missing',?3)`,
+      ).bind(metadata, now - 31 * DAY_MS, now, now + 60_000),
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    })));
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "oversized-query-job",
+    );
+
+    const rows = await testD1.db.prepare(
+      `SELECT status,retry_count,starts_at,ends_at,scope_key FROM backfill_slices
+       WHERE backfill_job_id='oversized-query-job' ORDER BY starts_at`,
+    ).all<{ status: string; retry_count: number; starts_at: number; ends_at: number; scope_key: string }>();
+    expect(rows.results).toHaveLength(10);
+    expect(rows.results.filter(row => row.status === "superseded")).toHaveLength(2);
+    expect(rows.results.filter(row => row.status === "pending").map(row => row.retry_count)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(rows.results.filter(row => row.status === "pending").map(row => JSON.parse(row.scope_key).graphqlBudgetFailures))
+      .toEqual([1, 1, 1, 1, 1, 1, 1, 1]);
+    expect(rows.results.filter(row => row.status === "pending").reduce(
+      (days, row) => days + Math.ceil((row.ends_at - row.starts_at) / DAY_MS),
+      0,
+    )).toBe(62);
+  });
+
+  it("stops a dataset after four progressively smaller full-window budget failures", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    const failedMetadata = JSON.stringify({
+      version: 2,
+      dataset: "imagesTransformationsAdaptiveGroups",
+      zoneIds: [],
+      maxPageSize: 10_000,
+      units: 4,
+      graphqlBudgetFailures: 3,
+      freshGraphqlBudgetRequired: true,
+    });
+    const siblingMetadata = JSON.stringify({
+      version: 2,
+      dataset: "imagesTransformationsAdaptiveGroups",
+      zoneIds: [],
+      maxPageSize: 10_000,
+      units: 2,
+      graphqlBudgetFailures: 3,
+      freshGraphqlBudgetRequired: true,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('budget-circuit-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 6 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,coverage_status,updated_at)
+         VALUES('budget-circuit-current','budget-circuit-job','graphql:images',?1,?2,?3,'pending',0,'missing',?3)`,
+      ).bind(failedMetadata, now - 4 * DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at)
+         VALUES('budget-circuit-sibling','budget-circuit-job','graphql:images',?1,?2,?3,'pending',0,?4,'missing',?3)`,
+      ).bind(siblingMetadata, now - 6 * DAY_MS, now - 4 * DAY_MS, now + 60_000),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at)
+         VALUES('budget-circuit-other','budget-circuit-job','graphql:workers',?1,?2,?3,'pending',0,?4,'missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+      }), now - DAY_MS, now, now + 60_000),
+    ]);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    })));
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "budget-circuit-job",
+    );
+
+    const rows = await testD1.db.prepare(
+      `SELECT id,status,scope_key FROM backfill_slices WHERE backfill_job_id='budget-circuit-job' ORDER BY id`,
+    ).all<{ id: string; status: string; scope_key: string }>();
+    expect(rows.results.map(row => [row.id, row.status])).toEqual([
+      ["budget-circuit-current", "failed"],
+      ["budget-circuit-other", "pending"],
+      ["budget-circuit-sibling", "failed"],
+    ]);
+    expect(rows.results.filter(row => row.id !== "budget-circuit-other").every(row => (
+      JSON.parse(row.scope_key).terminalGap === true
+    ))).toBe(true);
   });
 
   it("persists a Retry-After pause longer than the normal five-minute window", async () => {
@@ -710,11 +1180,11 @@ describe("initial ingestion progress", () => {
     const state = JSON.parse(stored!.value) as { jobId?: string; limiterMode?: string; pausedUntil?: number; sharedUsed?: number };
 
     expect(state.pausedUntil).toBeGreaterThan(now + 9 * 60_000);
-    expect(state).toMatchObject({ jobId: "long-pause-job", limiterMode: "shared-fallback", sharedUsed: 60 });
+    expect(state).toMatchObject({ jobId: "long-pause-job", limiterMode: "shared-fallback", sharedUsed: 1 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("paces resumed work through the persisted shared fallback lane", async () => {
+  it("restores the normal paced lane after generic budget recovery", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 27, 16);
     vi.setSystemTime(now);
@@ -758,14 +1228,14 @@ describe("initial ingestion progress", () => {
     await resumed;
 
     expect(admissions).toHaveLength(3);
-    expect(admissions[1]! - admissions[0]!).toBeGreaterThanOrEqual(1_000);
-    expect(admissions[2]! - admissions[1]!).toBeGreaterThanOrEqual(1_000);
+    expect(admissions[1]! - admissions[0]!).toBeGreaterThanOrEqual(1_200);
+    expect(admissions[2]! - admissions[1]!).toBeGreaterThanOrEqual(1_200);
     const stored = await testD1.db.prepare(
       `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
     ).first<{ value: string }>();
     expect(JSON.parse(stored!.value)).toMatchObject({
       jobId: "fallback-job",
-      limiterMode: "shared-fallback",
+      limiterMode: "shared-paced",
       sharedUsed: 3,
     });
   });
@@ -867,8 +1337,8 @@ describe("initial ingestion progress", () => {
       ).bind(JSON.stringify({ version: 2, dataset: "httpRequestsAdaptiveGroups", zoneIds: [zoneId], maxPageSize: 10_000, units: 1 }), now - DAY_MS, now),
       testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
         .bind("initial_ingestion_quota:account-1", JSON.stringify({
-          jobId: "scoped-job", limiterMode: "shared-paced", windowStartedAt: now,
-          physicalUsed: 0, sharedUsed: 200, accountUsed: 0, zoneUsed: {},
+          jobId: "scoped-job", accounting: "logical_queries", limiterMode: "shared-paced", windowStartedAt: now,
+          physicalUsed: 0, sharedUsed: 300, accountUsed: 0, zoneUsed: {},
         }), now),
     ]);
     const fetchMock = vi.fn();
@@ -889,7 +1359,7 @@ describe("initial ingestion progress", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("carries logical GraphQL usage across resumed runs", async () => {
+  it("counts one query unit for each single-dataset request across resumed runs", async () => {
     testD1 = createTestD1();
     const now = Date.now();
     await testD1.db.batch([
@@ -913,10 +1383,10 @@ describe("initial ingestion progress", () => {
     await runInitialIngestion({ DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env, "quota-job");
 
     const quota = await testD1.db.prepare("SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'").first<{ value: string }>();
-    expect(JSON.parse(quota!.value)).toMatchObject({ windowStartedAt: now, physicalUsed: 40, sharedUsed: 200, accountUsed: 200 });
+    expect(JSON.parse(quota!.value)).toMatchObject({ windowStartedAt: now, physicalUsed: 40, sharedUsed: 40, accountUsed: 40 });
   });
 
-  it("resets persisted quota counters after a mid-run window rollover", async () => {
+  it("releases query usage as admissions leave the rolling five-minute window", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 7, 27, 18);
     vi.setSystemTime(now);
@@ -935,7 +1405,7 @@ describe("initial ingestion progress", () => {
       ).bind(`rollover-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
       testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
         .bind("initial_ingestion_quota:account-1", JSON.stringify({
-          jobId: "rollover-job", limiterMode: "shared-paced", windowStartedAt: now - 299_000,
+          jobId: "rollover-job", accounting: "logical_queries", limiterMode: "shared-paced", windowStartedAt: now - 299_000,
           physicalUsed: 39, sharedUsed: 199, accountUsed: 199, zoneUsed: {},
         }), now),
     ]);
@@ -945,20 +1415,602 @@ describe("initial ingestion progress", () => {
       return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: [] }] } } });
     }));
 
-    await runInitialIngestion(
+    const run = runInitialIngestion(
       { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
       "rollover-job",
     );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
 
     const quota = await testD1.db.prepare(
       `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
     ).first<{ value: string }>();
     expect(JSON.parse(quota!.value)).toMatchObject({
-      windowStartedAt: now + 2_000,
-      physicalUsed: 0,
-      sharedUsed: 0,
-      accountUsed: 0,
+      windowStartedAt: now,
+      physicalUsed: 2,
+      sharedUsed: 2,
+      accountUsed: 2,
     });
+  });
+
+  it("admits work as soon as the final reported-budget admission expires", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 30);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "imagesRequestsAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('expired-admission-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('expired-admission-slice','expired-admission-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "expired-admission-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 1_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {},
+          admissions: [{
+            admittedAt: now - 300_001,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 1_000,
+            budgetKey: "priorDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: {
+        cost: 111,
+        viewer: { budget: 30_000, accounts: [{ imagesRequestsAdaptiveGroups: [] }] },
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "expired-admission-job",
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const slice = await testD1.db.prepare(
+      `SELECT status FROM backfill_slices WHERE id='expired-admission-slice'`,
+    ).first<{ status: string }>();
+    expect(slice?.status).toBe("complete");
+  });
+
+  it("uses a bounded page shape to admit a small unseen dataset", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 45);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "imagesRequestsAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('small-page-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('small-page-slice','small-page-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "small-page-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 1_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {},
+          admissions: [{
+            admittedAt: now - 1_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "largeDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: {
+        cost: 111,
+        viewer: { budget: 800, accounts: [{ imagesRequestsAdaptiveGroups: [] }] },
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "small-page-job",
+    );
+    await vi.advanceTimersByTimeAsync(55_000);
+    await run;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const slice = await testD1.db.prepare(
+      `SELECT status FROM backfill_slices WHERE id='small-page-slice'`,
+    ).first<{ status: string }>();
+    expect(slice?.status).toBe("complete");
+  });
+
+  it("uses the observed p90 debit after enough datasets are measured", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 47);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const observedDebits = Object.fromEntries([
+      ["largest", 9_500],
+      ["second", 5_000],
+      ...Array.from({ length: 11 }, (_, index) => [`small-${index}`, 1_000] as const),
+    ]);
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('p90-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('p90-slice','p90-job','graphql:queues',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "queueMessageOperationsAdaptiveGroups",
+        zoneIds: [],
+        maxPageSize: 10_000,
+        units: 1,
+        priority: 10,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "p90-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 7_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits,
+          admissions: [{
+            admittedAt: now - 1_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "previousDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: { cost: 111, viewer: { budget: 6_000, accounts: [{ queueMessageOperationsAdaptiveGroups: [] }] } },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "p90-job",
+    );
+    await vi.advanceTimersByTimeAsync(75_000);
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "p90-job",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const slice = await testD1.db.prepare(`SELECT status FROM backfill_slices WHERE id='p90-slice'`)
+      .first<{ status: string }>();
+    expect(slice?.status).toBe("complete");
+  });
+
+  it("admits a zone batch with its exact logical query count", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 48);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const zoneIds = Array.from({ length: 10 }, (_, index) => (index + 1).toString(16).padStart(32, "0"));
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('zone-admission-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('zone-admission-slice','zone-admission-job','graphql:zones',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2,
+        dataset: "httpRequestsAdaptiveGroups",
+        zoneIds,
+        maxPageSize: 10_000,
+        units: 10,
+        priority: 10,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "zone-admission-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 500,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: { httpRequestsAdaptiveGroups: 500 },
+          observedDebitRates: { httpRequestsAdaptiveGroups: 0.05 },
+          admissions: [{
+            admittedAt: now - 1_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "previousDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "zone-admission-job",
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const slice = await testD1.db.prepare(`SELECT status FROM backfill_slices WHERE id='zone-admission-slice'`)
+      .first<{ status: string }>();
+    expect(slice?.status).toBe("pending");
+  });
+
+  it("fills residual quota with a bounded query beyond the first twenty priorities", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 18, 50);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const largeMetadata = JSON.stringify({
+      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1, priority: 10,
+    });
+    const smallMetadata = JSON.stringify({
+      version: 2, dataset: "imagesRequestsAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 1, priority: 99,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('fit-scan-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      ...Array.from({ length: 25 }, (_, index) => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'fit-scan-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(
+        `fit-large-${index}`,
+        JSON.stringify({ ...JSON.parse(largeMetadata), testIndex: index }),
+        now - DAY_MS,
+        now,
+      )),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('fit-small','fit-scan-job','graphql:images',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(smallMetadata, now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "fit-scan-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 1_000,
+          reportedAt: now - 1_000,
+          reportedForRequestAt: now - 1_000,
+          observedCapacity: 33_000,
+          observedMaxDebit: 9_500,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {},
+          admissions: [{
+            admittedAt: now - 1_000,
+            logicalQueries: 1,
+            physicalRequests: 1,
+            budgetDebit: 9_500,
+            budgetKey: "largeDataset",
+          }],
+        }), now),
+    ]);
+    const fetchMock = vi.fn(async () => Response.json({
+      data: { cost: 111, viewer: { budget: 800, accounts: [{ imagesRequestsAdaptiveGroups: [] }] } },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "fit-scan-job",
+    );
+    await vi.advanceTimersByTimeAsync(55_000);
+    await run;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const small = await testD1.db.prepare(`SELECT status FROM backfill_slices WHERE id='fit-small'`)
+      .first<{ status: string }>();
+    expect(small?.status).toBe("complete");
+  });
+
+  it("paces pending work from Cloudflare's reported GraphQL budget debits", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 19);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('reported-budget-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 3 * DAY_MS, now),
+      ...[0, 1].map(index => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'reported-budget-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(`reported-budget-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
+    ]);
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      data: {
+        cost: 111,
+        viewer: {
+          budget: ++calls === 1 ? 33_300 : 15_000,
+          accounts: [{ workersInvocationsAdaptive: [] }],
+        },
+      },
+    })));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "reported-budget-job",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('reported-budget-2','reported-budget-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - 3 * DAY_MS, now - 2 * DAY_MS),
+      testD1.db.prepare(`UPDATE backfill_jobs SET status='running',updated_at=?2 WHERE id=?1`)
+        .bind("reported-budget-job", Date.now()),
+    ]);
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "reported-budget-job",
+    );
+
+    const stored = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
+    ).first<{ value: string }>();
+    const quota = JSON.parse(stored!.value) as {
+      observedMaxDebit: number;
+      observedDebits: Record<string, number>;
+      capacityWaitUntil: number;
+    };
+    expect(calls).toBe(2);
+    expect(quota.observedMaxDebit).toBeGreaterThan(18_000);
+    expect(quota.observedDebits.workersInvocationsAdaptive).toBeGreaterThan(18_000);
+    expect(quota.capacityWaitUntil).toBeGreaterThan(now + 60_000);
+  });
+
+  it("spaces query starts by their measured share of the rolling GraphQL budget", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 19, 30);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('debit-paced-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 3 * DAY_MS, now),
+      ...[0, 1, 2].map(index => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'debit-paced-job','graphql:workers',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(`debit-paced-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
+    ]);
+    const requestTimes: number[] = [];
+    const budgets = [33_000, 30_000, 27_000];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requestTimes.push(Date.now());
+      return Response.json({
+        data: {
+          cost: 111,
+          viewer: {
+            budget: budgets[requestTimes.length - 1],
+            accounts: [{ workersInvocationsAdaptive: [] }],
+          },
+        },
+      });
+    }));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "debit-paced-job",
+    );
+    await vi.advanceTimersByTimeAsync(35_000);
+    await run;
+
+    expect(requestTimes).toHaveLength(3);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_200);
+    expect(requestTimes[2]! - requestTimes[1]!).toBeGreaterThanOrEqual(28_000);
+    expect(requestTimes[2]! - requestTimes[1]!).toBeLessThan(30_000);
+    expect((await initialIngestionProgress(testD1.db, "account-1")).job.status).toBe("complete");
+  });
+
+  it("paces from the previous request debit instead of its dataset maximum", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 19, 45);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('variable-debit-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('variable-periodic','variable-debit-job','graphql:durable-objects',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "durableObjectsPeriodicGroups", zoneIds: [], maxPageSize: 10_000, units: 1, priority: 0,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('variable-workers','variable-debit-job','graphql:workers',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(JSON.stringify({
+        version: 2, dataset: "workersInvocationsAdaptive", zoneIds: [], maxPageSize: 10_000, units: 1, priority: 1,
+      }), now - DAY_MS, now),
+      testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+        .bind("initial_ingestion_quota:account-1", JSON.stringify({
+          jobId: "variable-debit-job",
+          accounting: "logical_queries",
+          limiterMode: "shared-paced",
+          reportedRemaining: 30_000,
+          reportedAt: now,
+          reportedForRequestAt: now,
+          observedCapacity: 33_189,
+          observedMaxDebit: 9_306,
+          observedCostMultiplier: 111,
+          observedCosts: { "1": 111 },
+          observedDebits: {
+            durableObjectsPeriodicGroups: 9_306,
+            workersInvocationsAdaptive: 111,
+          },
+          admissions: [],
+        }), now),
+    ]);
+    const requestTimes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      requestTimes.push(Date.now());
+      return Response.json({
+        data: {
+          cost: 111,
+          viewer: {
+            budget: requestTimes.length === 1 ? 30_000 : 29_889,
+            accounts: [{ durableObjectsPeriodicGroups: [], workersInvocationsAdaptive: [] }],
+          },
+        },
+      });
+    }));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "variable-debit-job",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(requestTimes).toHaveLength(2);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeGreaterThanOrEqual(1_200);
+    expect(requestTimes[1]! - requestTimes[0]!).toBeLessThan(2_000);
+  });
+
+  it("requires a recovered window after a successful query exhausts the reported budget", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 20);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    const metadata = JSON.stringify({
+      version: 2, dataset: "hyperdriveQueriesAdaptiveGroups", zoneIds: [], maxPageSize: 10_000, units: 1,
+    });
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_jobs(id,account_id,kind,requested_start_at,requested_end_at,status,created_at,updated_at)
+         VALUES('exhausted-budget-job','account-1','initial_v2',?1,?2,'pending',?2,?2)`,
+      ).bind(now - 3 * DAY_MS, now),
+      ...[0, 1].map(index => testD1!.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES(?1,'exhausted-budget-job','graphql:hyperdrive',?2,?3,?4,'pending','missing',?4)`,
+      ).bind(`exhausted-budget-${index}`, metadata, now - (index + 1) * DAY_MS, now - index * DAY_MS)),
+    ]);
+    let calls = 0;
+    const budgets = [33_300, 0, 33_300];
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      data: {
+        cost: 111,
+        viewer: {
+          budget: budgets[calls++] ?? 33_300,
+          accounts: [{ hyperdriveQueriesAdaptiveGroups: [] }],
+        },
+      },
+    })));
+
+    const run = runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "exhausted-budget-job",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+    await testD1.db.batch([
+      testD1.db.prepare(
+        `INSERT INTO backfill_slices(id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,coverage_status,updated_at)
+         VALUES('exhausted-budget-2','exhausted-budget-job','graphql:hyperdrive',?1,?2,?3,'pending','missing',?3)`,
+      ).bind(metadata, now - 3 * DAY_MS, now - 2 * DAY_MS),
+      testD1.db.prepare(`UPDATE backfill_jobs SET status='running',updated_at=?2 WHERE id=?1`)
+        .bind("exhausted-budget-job", Date.now()),
+    ]);
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "exhausted-budget-job",
+    );
+
+    const stored = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
+    ).first<{ value: string }>();
+    const quota = JSON.parse(stored!.value) as {
+      observedCapacity: number;
+      observedMaxDebit: number;
+      observedDebits: Record<string, number>;
+      provisionalDebitKeys: Record<string, true>;
+      admissions: Array<{ budgetDebit: number }>;
+      capacityWaitUntil: number;
+    };
+    expect(calls).toBe(2);
+    expect(quota.observedCapacity).toBe(33_411);
+    expect(quota.observedMaxDebit).toBeLessThan(quota.observedCapacity);
+    expect(quota.observedDebits.hyperdriveQueriesAdaptiveGroups).toBeGreaterThan(30_000);
+    expect(quota.provisionalDebitKeys.hyperdriveQueriesAdaptiveGroups).toBe(true);
+    expect(quota.admissions.at(-1)?.budgetDebit).toBe(quota.observedCapacity);
+    expect(quota.capacityWaitUntil).toBeGreaterThan(now + 4 * 60_000);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    await runInitialIngestion(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      "exhausted-budget-job",
+    );
+    const corrected = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key='initial_ingestion_quota:account-1'`,
+    ).first<{ value: string }>();
+    const correctedQuota = JSON.parse(corrected!.value) as {
+      observedDebits: Record<string, number>;
+      provisionalDebitKeys: Record<string, true>;
+    };
+    expect(calls).toBe(3);
+    expect(correctedQuota.provisionalDebitKeys.hyperdriveQueriesAdaptiveGroups).toBeUndefined();
+    expect(correctedQuota.observedDebits.hyperdriveQueriesAdaptiveGroups).toBeLessThan(1_000);
   });
 
   it("keeps capability planning resumable when the shared query window is full", async () => {
@@ -974,8 +2026,63 @@ describe("initial ingestion progress", () => {
       { now, billingAvailable: false },
     );
 
-    expect(result).toMatchObject({ status: "planning", slices: 0 });
+    expect(result).toMatchObject({ status: "planning", slices: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("checkpoints capability planning before its final wall-time reserve", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 7, 27, 20, 30);
+    vi.setSystemTime(now);
+    testD1 = createTestD1();
+    let graphqlCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/graphql")) {
+        graphqlCalls += 1;
+        vi.setSystemTime(now + 34_000);
+        return Response.json({ data: { viewer: { accounts: [{ settings: {} }] } } });
+      }
+      return Response.json({ success: true, result: [], result_info: { page: 1, per_page: 50, total_pages: 1 } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ensureInitialIngestionJob(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      { now, billingAvailable: false },
+    );
+    const checkpoint = await testD1.db.prepare(
+      `SELECT value FROM settings WHERE key=?1`,
+    ).bind(`initial_ingestion_capabilities:${result.id}`).first<{ value: string }>();
+
+    expect(result.status).toBe("planning");
+    expect(graphqlCalls).toBe(1);
+    expect(JSON.parse(checkpoint!.value)).toHaveLength(12);
+  });
+
+  it("persists the exact rolling-budget wait when the next capability batch does not fit", async () => {
+    testD1 = createTestD1();
+    const now = Date.now();
+    await testD1.db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)`)
+      .bind("initial_ingestion_quota:account-1", JSON.stringify({
+        jobId: "prior-job",
+        accounting: "logical_queries",
+        limiterMode: "shared-paced",
+        admissions: [{ admittedAt: now, logicalQueries: 265, physicalRequests: 10 }],
+      }), now).run();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ensureInitialIngestionJob(
+      { DB: testD1.db, BROLLY_ACCOUNT_ID: "account-1", CLOUDFLARE_OAUTH_TOKEN: "token" } as Env,
+      { now, billingAvailable: false },
+    );
+    const progress = await initialIngestionProgress(testD1.db, "account-1");
+
+    expect(result).toMatchObject({ status: "planning", slices: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(progress.job.resumeAt).toBeGreaterThanOrEqual(now + 5 * 60_000);
+    expect(progress.job.logicalQueryUnitsUsed).toBe(265);
   });
 
   it("finishes planning from a persisted capability checkpoint", async () => {
@@ -1016,6 +2123,50 @@ describe("initial ingestion progress", () => {
     expect(await testD1.db.prepare(
       `SELECT value FROM settings WHERE key='initial_ingestion_capabilities:cached-plan'`,
     ).first()).toBeNull();
+  });
+
+  it("imports Billing history before capability discovery", async () => {
+    vi.useFakeTimers();
+    testD1 = createTestD1();
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const calls: string[] = [];
+    const analyticsTimes: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/graphql")) {
+        analyticsTimes.push(Date.now());
+        return Response.json({ data: { viewer: { accounts: [{ settings: {} }] } } });
+      }
+      if (url.includes("/zones?")) {
+        return Response.json({ success: true, result: [], result_info: { page: 1, per_page: 50, total_pages: 1 } });
+      }
+      return Response.json({ success: true, result: [] });
+    }));
+
+    const planning = ensureInitialIngestionJob(
+      {
+        DB: testD1.db,
+        BROLLY_ACCOUNT_ID: "account-1",
+        CLOUDFLARE_OAUTH_TOKEN: "token",
+        CLOUDFLARE_BILLING_TOKEN: "billing-token",
+      } as Env,
+      { now, billingAvailable: true },
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await planning;
+
+    const firstAnalytics = calls.findIndex(url => url.includes("/graphql"));
+    const billingCalls = calls.map((url, index) => ({ url, index })).filter(item => item.url.includes("/billable/usage"));
+    expect(billingCalls).toHaveLength(3);
+    expect(firstAnalytics).toBeGreaterThan(billingCalls.at(-1)!.index);
+    expect(analyticsTimes.length).toBeGreaterThan(1);
+    expect(analyticsTimes.slice(1).every((time, index) => {
+      const interval = time - analyticsTimes[index]!;
+      return interval >= 1_200 && interval < 1_500;
+    })).toBe(true);
+    expect((await initialIngestionProgress(testD1.db, "account-1")).readiness.billing).toBe("ready");
   });
 
   it("completes billing slices before Analytics fetches", async () => {
@@ -1151,8 +2302,8 @@ function datasetSlices(slices: InitialIngestionSlicePlan[], dataset: string): In
   return slices.filter(slice => metadata(slice).dataset === dataset);
 }
 
-function metadata(slice: InitialIngestionSlicePlan): { dataset: string; zoneIds: string[]; units: number } {
-  return JSON.parse(slice.scopeKey) as { dataset: string; zoneIds: string[]; units: number };
+function metadata(slice: InitialIngestionSlicePlan): { dataset: string; zoneIds: string[]; units: number; priority?: number } {
+  return JSON.parse(slice.scopeKey) as { dataset: string; zoneIds: string[]; units: number; priority?: number };
 }
 
 function progressSlice(db: D1Database, status: string, units: number, error: string | null, endsAt: number): D1PreparedStatement {

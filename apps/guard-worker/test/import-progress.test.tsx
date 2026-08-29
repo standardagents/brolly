@@ -79,7 +79,7 @@ describe("initial import progress", () => {
     expect(document.body.querySelector("[role='dialog']")).not.toBeNull();
   });
 
-  it("shows the Cloudflare retry countdown and fallback ETA while rate limited", async () => {
+  it("includes an exact capacity wait in the total ETA", async () => {
     const now = 1_000_000;
     const ingestion: InitialIngestionResponse = {
       job: {
@@ -87,9 +87,11 @@ describe("initial import progress", () => {
         status: "running",
         startedAt: now - 60_000,
         updatedAt: now,
-        limiterMode: "shared-fallback",
+        limiterMode: "shared-paced",
         resumeAt: now + 4 * 60_000,
-        sharedQueryLimit: 60,
+        waitReason: "capacity",
+        sharedQueryLimit: 300,
+        queryIntervalMs: 1_000,
       },
       days: { total: 90, complete: 45, pending: 45, gaps: 0, failedWindows: 0, errors: [] },
       collectors: [collector(100, 50)],
@@ -98,9 +100,35 @@ describe("initial import progress", () => {
     const container = await render({ ingestion, running: true, error: "", billingConnected: true, now });
     const panel = container.querySelector<HTMLElement>("[data-import-state='rate_limited']");
 
-    expect(panel?.dataset).toMatchObject({ importLimiterMode: "shared-fallback", importResumeAt: String(now + 4 * 60_000) });
-    expect(panel?.textContent).toContain("Cloudflare wait ~4 min · ~5 min total");
+    expect(panel?.dataset).toMatchObject({ importLimiterMode: "shared-paced", importResumeAt: String(now + 4 * 60_000) });
+    expect(panel?.textContent).toContain("Cloudflare wait ~4 min · ~4 min total");
     expect(panel?.querySelector("[aria-label='Import paused']")).not.toBeNull();
+    expect(initialIngestionOverallProgress(ingestion, now).estimatedRemainingMs).toBe(240_000);
+  });
+
+  it("shows scheduled GraphQL pacing as active collection", async () => {
+    const now = 1_000_000;
+    const ingestion: InitialIngestionResponse = {
+      job: {
+        id: "job",
+        status: "running",
+        startedAt: now - 60_000,
+        updatedAt: now,
+        limiterMode: "shared-paced",
+        resumeAt: now + 30_000,
+        waitReason: "pacing",
+        sharedQueryLimit: 300,
+        queryIntervalMs: 30_000,
+      },
+      days: { total: 90, complete: 45, pending: 45, gaps: 0, failedWindows: 0, errors: [] },
+      collectors: [collector(100, 50)],
+      readiness: pendingReadiness(),
+    };
+    const container = await render({ ingestion, running: true, error: "", billingConnected: true, now });
+    const panel = container.querySelector<HTMLElement>("[data-import-state='pacing']");
+
+    expect(panel?.textContent).toContain("Cloudflare pacing ~30 sec · ~1 min total");
+    expect(panel?.querySelector("[aria-label='Import paused']")).toBeNull();
   });
 
   it("keeps terminal coverage gaps visible and hides a fully successful import", async () => {

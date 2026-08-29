@@ -72,8 +72,8 @@ describe("automatic action evidence", () => {
 
 describe("ledger run budget", () => {
   it("gives bootstrap a bounded account-based GraphQL allowance", () => {
-    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBe(200);
-    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBeLessThan(DEFAULT_LEDGER_RUN_LIMITS.graphqlQueries);
+    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBe(300);
+    expect(INITIAL_INGESTION_LIMITS.graphqlQueries).toBe(DEFAULT_LEDGER_RUN_LIMITS.graphqlQueries);
     expect(INITIAL_INGESTION_LIMITS.restRequests).toBe(9);
     expect(INITIAL_INGESTION_LIMITS.backfillSlices).toBe(100);
     expect(INITIAL_INGESTION_LIMITS.wallMs).toBe(55_000);

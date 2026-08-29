@@ -48,27 +48,62 @@ The first-run **Alert channels** step starts a one-shot 90-day ingestion job in
 the background and shows its progress while the operator connects channels.
 Usage collectors create daily slices within each dataset's available retention,
 up to 90 days. Billing Read creates three contiguous slices of no more than 31
-days. Initial ingestion uses Cloudflare's account-based Analytics limiter. Its
-persisted five-minute state applies one shared query-cost budget from the first
-request. First-run setup admits up to 200 counted units. Configured imports admit
-up to 160 counted units so monitoring retains capacity. Zone settings and usage
-are nested under the connected account in batches of at most ten zones. Physical
-requests use one shared lane at one request per second. Each invocation allows
-at most 40 GraphQL requests. One import lease covers browser and cron starts.
+days. Initial ingestion uses Cloudflare's account-based Analytics limiter. A
+persisted rolling ledger records Cloudflare's returned GraphQL budget and each
+observed five-minute debit. A known dataset reserves 110% of its measured
+page-unit rate. An unseen query with a bounded result page uses a conservative
+per-row estimate. After twelve measured query shapes, unseen work reserves 125%
+of the observed 90th-percentile debit. Earlier work uses the largest measured
+debit. A successful response that reaches zero marks its full-window estimate
+as provisional. The next clean measurement replaces that estimate with at
+least the account baseline. Queries without a bounded page use the same
+adaptive account baseline.
+All paths retain a small fixed reserve. Otherwise work resumes
+when the earliest recorded debit expires. Responses without budget telemetry
+use a conservative 270-unit fallback. Zone settings and usage are nested
+under the connected account in batches of at most ten zones. Physical requests
+use one shared lane with a 1.2-second minimum interval. Each interval uses the
+average of the previous measured debit and the next predicted debit. This
+centers expensive requests across the surrounding time and distributes
+lower-cost completions through the rolling window. Each zone in a batch consumes
+one logical query unit during admission. Each invocation allows at most
+300 physical GraphQL requests. One import lease covers browser and cron starts.
+Billing finishes before Analytics starts. Analytics candidates are ordered by
+Durable Objects, Workers, and billed family cost. A waiting candidate yields to
+eligible lower-cost work. The highest-priority eligible candidate runs first.
+When a smaller clean-window retry succeeds, pending slices for that dataset
+return to measured pacing from the observed debit.
+Capability discovery and collection retain a 12-second wall-time margin before
+starting a remote request. The next scheduled pass resumes from persisted state.
+Datasets grouped only by day request one row beyond the number of days in the
+range instead of Cloudflare's 10,000-row maximum. The extra row preserves
+truncation detection without reserving budget for impossible results.
+Date-based resource datasets use their discovered resource count to shrink
+later page limits. The bound includes 20% headroom, at least eight extra rows,
+and one truncation sentinel. A truncated result still follows the normal range
+split and retry path.
+Images Transformations waits for a fresh GraphQL window because its daily result
+size does not bound Cloudflare's underlying event-scan cost.
+When a successful HTTP response reports that one query exhausted the remaining
+GraphQL budget, the importer defers that dataset until a fully recovered
+window. Other eligible datasets can continue while it waits. A second failure
+against recovered capacity quarters ranges of four days or more, which avoids
+another predictable recovery cycle. Later failures bisect the range. A single-day range receives one
+fresh-window retry before becoming unavailable coverage. A successful smaller
+retry returns its pending siblings to measured pacing. A successful query that
+leaves zero budget records a provisional full-window estimate.
 Capability results are checkpointed after each successful discovery request.
-Planning resumes from that checkpoint in the next shared window.
+Planning resumes from that checkpoint when the rolling ledger has capacity.
 The producers use a two-result buffer before one
 serialized D1 consumer. Claimed work reserves D1 capacity. A fresh per-slice D1
 row-limit failure requeues the original range for one fresh-budget attempt before
 splitting it. Shared run and wall-time limits requeue unfinished slices unchanged.
 Cloudflare rate limits defer work without consuming an import retry. Billing receives reserved REST capacity.
-During first-run setup, scheduled passes serve the import exclusively. The
-minute monitor begins after setup records `onboarding_complete`. A generic
-credential-level budget response records Cloudflare's retry deadline and lowers
-the persisted shared allowance to 80 percent of the observed counted spend,
-with a floor of 60 units. A named account or zone response pauses that scope.
-Daily Analytics capability discovery is
-deferred until a configured re-import finishes.
+Scheduled passes serve an active initial import exclusively. The minute monitor
+begins after the import reaches a final state. A generic credential-level
+budget response starts Cloudflare's five-minute recovery interval. A named account or
+zone response pauses that scope.
+Daily Analytics capability discovery is deferred until the import finishes.
 Setup can continue while the scheduler finishes eligible slices. One progress
 row combines weighted work across every planned source
 partition. It shows the completed percentage and an estimated remaining time.
@@ -277,12 +312,13 @@ The setup sequence is:
 The history import starts when Alert channels opens. The sidebar shows one
 90-day account-history row until the import completes. The bar advances with
 weighted work across every planned source partition. The row shows an estimated
-remaining time after progress begins. The collapsed row opens to per-source
+remaining time after progress begins. Its quota countdown is combined with the
+larger of paced-request work and observed throughput, which avoids counting the
+same wait twice. The collapsed row opens to per-source
 progress. A counted warning control contains unavailable window details.
 During a Cloudflare rate-limit wait, the row shows the retry countdown and the
-fallback completion estimate.
-Risk tolerance and account limits open when Billing reaches a terminal state
-and account-root history is ready or limited.
+completion estimate.
+Risk tolerance and account limits open when Billing reaches a terminal state.
 Each product limit shows Importing, Ready, Ready with gaps, or Unavailable.
 Setup completion does not depend on every product import reaching a terminal state.
 

@@ -283,8 +283,13 @@ export class LedgerStore {
     return { id, startsAt, endsAt, approximate: true };
   }
 
-  async applyObservations(observations: UsageObservation[], timeZone: string): Promise<AccumulatorChange[]> {
+  async applyObservations(
+    observations: UsageObservation[],
+    timeZone: string,
+    options: { reconcileChanges?: boolean } = {},
+  ): Promise<AccumulatorChange[]> {
     if (!observations.length) return [];
+    const reconcileChanges = options.reconcileChanges !== false;
     const resourceIds = await this.saveResourceHierarchy(observations, true);
     const cyclesByTimestamp = new Map<number, Awaited<ReturnType<LedgerStore["currentBillingCycle"]>>>();
     for (const observation of observations) {
@@ -308,8 +313,10 @@ export class LedgerStore {
       quality?: DataQualityState;
       sampleInterval?: number | null;
     }>>>();
-    for (const cycleId of observationsByCycle.keys()) {
-      seedsByCycle.set(cycleId, await this.loadCycleSeeds(groups.filter(group => group.billingCycleId === cycleId), cycleId));
+    if (reconcileChanges) {
+      for (const cycleId of observationsByCycle.keys()) {
+        seedsByCycle.set(cycleId, await this.loadCycleSeeds(groups.filter(group => group.billingCycleId === cycleId), cycleId));
+      }
     }
     const aggregationKinds = new Map(METRIC_DEFINITIONS.map(definition => [definition.id, definition.aggregationKind]));
     const changes: AccumulatorChange[] = [];
@@ -322,6 +329,7 @@ export class LedgerStore {
         group.resourceIds,
         aggregationKinds,
         seedsByCycle.get(group.billingCycleId) ?? new Map(),
+        { emitChanges: reconcileChanges },
       );
       changes.push(...applied.changes.map(change => ({
         ...change,
@@ -352,6 +360,7 @@ export class LedgerStore {
       }
     }
     await this.writeBatches(writes);
+    if (!reconcileChanges) return [];
     const reconciled = await this.reconcilePeriodChanges(changes);
     return [...reconciled, ...costChanges(reconciled)];
   }

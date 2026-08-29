@@ -13,6 +13,7 @@
     "dev": "node scripts/dev-account.mjs",
     "dev:demo": "pnpm --filter @standardagents/brolly-core build && pnpm --filter @standardagents/brolly-notifiers build && pnpm --filter @standardagents/brolly-guard dev:demo",
     "probe:graphql": "node scripts/probe-graphql-rate-limit.mjs",
+    "test:import:account": "node scripts/test-initial-import.mjs",
     "release:runtime": "node scripts/release-runtime.mjs",
     "release:runtime:dev": "node scripts/release-runtime.mjs --tag=dev",
     "test": "vitest run",

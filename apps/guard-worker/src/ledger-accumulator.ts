@@ -73,9 +73,11 @@ export function applyAccumulatorObservations(
     quality?: DataQualityState;
     sampleInterval?: number | null;
   }>>,
+  options: { emitChanges?: boolean } = {},
 ): { payload: AccumulatorPayload; changes: AccumulatorChange[] } {
   const payload = input ?? { resources: {} };
   const changes = new Map<string, AccumulatorChange>();
+  const emitChanges = options.emitChanges !== false;
   for (const observation of observations) {
     const resourceId = requiredResourceId(resourceIds, observation);
     const metricDefinitionId = `${observation.sample.asset.family}:${observation.sample.metric}`;
@@ -144,28 +146,30 @@ export function applyAccumulatorObservations(
     metric.cycleQuality = worstQuality([metric.cycleSeedQuality ?? "complete", metric.quality]);
     metric.cycleSampleInterval = worstSampleInterval([metric.cycleSeedSampleInterval, metric.sampleInterval]);
     metric.watermarkAt = maximumWatermark(resource.windows, metricDefinitionId);
-    const changeKey = `${resourceId}:${metricDefinitionId}`;
-    const priorChange = changes.get(changeKey);
-    const latestEvidence = !priorChange || observation.sample.end >= priorChange.periodEndAt;
-    changes.set(changeKey, {
-      resourceId,
-      metricDefinitionId,
-      metricKey: observation.sample.metric,
-      intervalValue: latestEvidence ? next.value : priorChange.intervalValue,
-      dayValue: metric.day,
-      cycleValue: metric.cycle,
-      estimatedDayUsd: metric.estimatedDayUsd,
-      estimatedCycleUsd: metric.estimatedCycleUsd,
-      quality: metric.quality,
-      sampleInterval: latestEvidence ? next.sampleInterval : priorChange.sampleInterval,
-      cycleQuality: metric.cycleQuality,
-      cycleSampleInterval: metric.cycleSampleInterval,
-      watermarkAt: latestEvidence ? next.watermarkAt : priorChange.watermarkAt,
-      rollingBaseline: latestEvidence ? rollingBaseline : priorChange.rollingBaseline,
-      periodStartAt: latestEvidence ? observation.sample.start : priorChange.periodStartAt,
-      periodEndAt: latestEvidence ? observation.sample.end : priorChange.periodEndAt,
-      historical: latestEvidence ? observation.historical : priorChange.historical,
-    });
+    if (emitChanges) {
+      const changeKey = `${resourceId}:${metricDefinitionId}`;
+      const priorChange = changes.get(changeKey);
+      const latestEvidence = !priorChange || observation.sample.end >= priorChange.periodEndAt;
+      changes.set(changeKey, {
+        resourceId,
+        metricDefinitionId,
+        metricKey: observation.sample.metric,
+        intervalValue: latestEvidence ? next.value : priorChange.intervalValue,
+        dayValue: metric.day,
+        cycleValue: metric.cycle,
+        estimatedDayUsd: metric.estimatedDayUsd,
+        estimatedCycleUsd: metric.estimatedCycleUsd,
+        quality: metric.quality,
+        sampleInterval: latestEvidence ? next.sampleInterval : priorChange.sampleInterval,
+        cycleQuality: metric.cycleQuality,
+        cycleSampleInterval: metric.cycleSampleInterval,
+        watermarkAt: latestEvidence ? next.watermarkAt : priorChange.watermarkAt,
+        rollingBaseline: latestEvidence ? rollingBaseline : priorChange.rollingBaseline,
+        periodStartAt: latestEvidence ? observation.sample.start : priorChange.periodStartAt,
+        periodEndAt: latestEvidence ? observation.sample.end : priorChange.periodEndAt,
+        historical: latestEvidence ? observation.historical : priorChange.historical,
+      });
+    }
   }
   return { payload, changes: [...changes.values()] };
 }

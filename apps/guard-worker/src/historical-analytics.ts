@@ -28,8 +28,18 @@ const SETTINGS_BATCH = 12;
 
 export type HistoricalRateScope = { kind: "account" } | { kind: "zone"; zoneId: string };
 
+export interface HistoricalRateObservation {
+  cost: number;
+  remaining: number;
+  requestedAt: number;
+  observedAt: number;
+  budgetKey: string;
+  pageSize: number | null;
+}
+
 export interface HistoricalRateBudget {
-  admit(scope: HistoricalRateScope, logicalQueries: number): Promise<void>;
+  admit(scope: HistoricalRateScope, logicalQueries: number, budgetKey: string, pageSize?: number): Promise<void>;
+  observe?(scope: HistoricalRateScope, logicalQueries: number, observation: HistoricalRateObservation): void;
   pauseUntil(retryAt: number, scope: HistoricalRateScope | null): void;
 }
 
@@ -120,11 +130,11 @@ interface GraphqlPayload<T> {
 }
 
 const SPECIAL_DATASETS: HistoricalDatasetSpec[] = [
-  special("graphql:workers", "Workers", "workersInvocationsAdaptive", "workers", "resource", "workers"),
   special("graphql:durable-objects", "Durable Objects", "durableObjectsInvocationsAdaptiveGroups", "durable_objects", "object", "durable_invocations"),
   special("graphql:durable-objects", "Durable Objects", "durableObjectsPeriodicGroups", "durable_objects", "object", "durable_periodic"),
   special("graphql:durable-objects", "Durable Objects", "durableObjectsSqlStorageGroups", "durable_objects", "namespace", "durable_sql_storage"),
   special("graphql:durable-objects", "Durable Objects", "durableObjectsStorageGroups", "durable_objects", "account", "durable_kv_storage"),
+  special("graphql:workers", "Workers", "workersInvocationsAdaptive", "workers", "resource", "workers"),
 ];
 
 const PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap(product => product.datasets.map(source => ({
@@ -232,7 +242,7 @@ export class HistoricalAnalyticsClient {
   async collect(request: HistoricalUsageRequest): Promise<HistoricalUsageResult> {
     const spec = DATASET_BY_NAME.get(request.dataset);
     if (!spec) throw new Error(`Unknown historical Analytics dataset ${request.dataset}`);
-    const limit = boundedPageSize(request.maxPageSize);
+    const limit = historicalQueryPageSize(request);
     if (spec.kind === "product") return this.collectProduct(spec, request, limit);
     const query = specialQuery(spec, limit);
     const variables = {
@@ -240,7 +250,7 @@ export class HistoricalAnalyticsClient {
       since: new Date(request.startsAt).toISOString(),
       until: new Date(request.endsAt).toISOString(),
     };
-    const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>> } }>(query, variables, 1, { kind: "account" });
+    const payload = await this.graphql<{ viewer?: { accounts?: Array<Record<string, unknown>> } }>(query, variables, 1, { kind: "account" }, request.dataset, limit);
     const rows = arrayValue(payload.viewer?.accounts?.[0]?.[spec.dataset]);
     const samples = normalizeSpecial(spec, rows, this.env, request.startsAt, request.endsAt);
     return {
@@ -270,6 +280,8 @@ export class HistoricalAnalyticsClient {
         productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, []),
         1,
         { kind: "account" },
+        source.dataset,
+        limit,
       );
       roots = payload.viewer?.accounts ?? [];
     }
@@ -340,6 +352,8 @@ export class HistoricalAnalyticsClient {
           : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds),
         zoneIds.length,
         { kind: "account" },
+        source.dataset,
+        limit,
       );
       return {
         roots: this.options.accountBasedRateLimit
@@ -387,7 +401,7 @@ export class HistoricalAnalyticsClient {
   private async accountSettings(specs: readonly HistoricalDatasetSpec[]): Promise<Record<string, DatasetSetting | undefined>> {
     const fields = "enabled availableFields maxDuration maxPageSize notOlderThan";
     const query = `query BrollyAccountAnalyticsSettings($account: String!) { viewer { accounts(filter: { accountTag: $account }) { settings { ${specs.map(item => `${item.dataset} { ${fields} }`).join("\n")} } } } }`;
-    const payload = await this.graphql<{ viewer?: { accounts?: Array<{ settings?: Record<string, DatasetSetting> }> } }>(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length, { kind: "account" });
+    const payload = await this.graphql<{ viewer?: { accounts?: Array<{ settings?: Record<string, DatasetSetting> }> } }>(query, { account: this.env.BROLLY_ACCOUNT_ID }, specs.length, { kind: "account" }, `settings:account:${specs.map(item => item.dataset).join(",")}`);
     return payload.viewer?.accounts?.[0]?.settings ?? {};
   }
 
@@ -437,6 +451,7 @@ export class HistoricalAnalyticsClient {
         nested ? { account: this.env.BROLLY_ACCOUNT_ID, zones: zoneIds } : { zones: zoneIds },
         specs.length * zoneIds.length,
         { kind: "account" },
+        `settings:zones:${specs.map(item => item.dataset).join(",")}`,
       );
       const roots = nested ? payload.viewer?.accounts?.[0]?.zones ?? [] : payload.viewer?.zones ?? [];
       const returned = new Map(roots.flatMap(zone => zone.zoneTag ? [[zone.zoneTag, zone.settings ?? {}] as const] : []));
@@ -500,8 +515,11 @@ export class HistoricalAnalyticsClient {
     variables: Record<string, unknown>,
     logicalQueries: number,
     scope: HistoricalRateScope,
+    budgetKey: string,
+    pageSize?: number,
   ): Promise<T> {
-    await this.options.rateBudget?.admit(scope, logicalQueries);
+    await this.options.rateBudget?.admit(scope, logicalQueries, budgetKey, pageSize);
+    const requestedAt = Date.now();
     this.budget.charge("apiCalls");
     this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
     const response = await fetch(`${API}/graphql`, {
@@ -511,10 +529,12 @@ export class HistoricalAnalyticsClient {
         "content-type": "application/json",
         ...(this.options.accountBasedRateLimit ? { "x-rate-limit-type": "account-based" } : {}),
       },
-      body: JSON.stringify({ query, variables }),
+      body: JSON.stringify({ query: withBudgetTelemetry(query), variables }),
       signal: AbortSignal.any([this.budget.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     });
     const payload = await response.json().catch(() => ({})) as GraphqlPayload<T>;
+    const metering = graphqlBudgetTelemetry(payload.data, requestedAt, Date.now());
+    if (metering) this.options.rateBudget?.observe?.(scope, logicalQueries, { ...metering, budgetKey, pageSize: pageSize ?? null });
     if (response.status === 429 || isGraphqlRateLimit(payload.errors)) {
       const message = payload.errors?.map(item => item.message).filter(Boolean).join("; ") || "Cloudflare Analytics rate limit reached";
       const namedScope = namedRateLimitScope(message);
@@ -545,6 +565,24 @@ export class HistoricalAnalyticsClient {
     this.tokenPromise ??= this.tokenProvider();
     return this.tokenPromise;
   }
+}
+
+function withBudgetTelemetry(query: string): string {
+  return query.replace(/(\{\s*)viewer\s*\{/, "$1cost viewer { budget ");
+}
+
+function graphqlBudgetTelemetry(
+  value: unknown,
+  requestedAt: number,
+  observedAt: number,
+): Omit<HistoricalRateObservation, "budgetKey" | "pageSize"> | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as { cost?: unknown; viewer?: { budget?: unknown } };
+  const cost = Number(data.cost);
+  const remaining = Number(data.viewer?.budget);
+  return Number.isFinite(cost) && cost >= 0 && Number.isFinite(remaining) && remaining >= 0
+    ? { cost, remaining, requestedAt, observedAt }
+    : null;
 }
 
 /** Convert raw settings discovery into the monitor-owned coverage records. */
@@ -805,6 +843,21 @@ function unauthorizedZoneIds(message: string, candidates: string[]): string[] {
 }
 
 function boundedPageSize(value: number): number { return Math.max(1, Math.min(10_000, Math.floor(value))); }
+
+export function historicalQueryPageSize(request: HistoricalUsageRequest): number {
+  const spec = DATASET_BY_NAME.get(request.dataset);
+  const maximum = boundedPageSize(request.maxPageSize);
+  if (!spec) return maximum;
+  const dailyOnly = spec.kind === "durable_kv_storage"
+    || spec.kind === "product"
+      && !spec.source?.resourceDimension
+      && !spec.source?.parentDimension
+      && (spec.source?.dimensions?.length ?? 0) === 0;
+  if (!dailyOnly) return maximum;
+  const requestedDays = Math.max(1, Math.ceil((request.endsAt - request.startsAt) / 86_400_000));
+  // One extra row distinguishes a complete daily result from truncation.
+  return Math.min(maximum, requestedDays + 1);
+}
 function positive(value: number | undefined): number | null { return Number.isFinite(value) && Number(value) > 0 ? Number(value) : null; }
 function minimum(values: number[]): number | null { return values.length ? Math.min(...values) : null; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

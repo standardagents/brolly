@@ -131,11 +131,13 @@ export interface InitialIngestionJob {
   updatedAt: number;
   limiterMode?: "shared-paced" | "shared-fallback";
   resumeAt?: number | null;
+  waitReason?: "pacing" | "capacity" | "rate_limit" | null;
   sharedQueryLimit?: number;
   queryWindowStartedAt?: number;
   physicalRequestsUsed?: number;
   physicalRequestLimit?: number;
   logicalQueryUnitsUsed?: number;
+  queryIntervalMs?: number;
 }
 
 export interface InitialIngestionCollector {

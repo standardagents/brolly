@@ -103,28 +103,59 @@ instance is open and the aligned Cloudflare watermark has advanced. Inventory,
 billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
 budget left after active safeguards. First-run initial ingestion opts into
-Cloudflare's account-based Analytics limiter. A persisted five-minute window
-applies a shared query-cost budget from the first request. First-run setup uses
-200 counted units. Configured imports use 160 counted units to reserve capacity
-for monitoring. A separate 40-request ceiling bounds physical GraphQL
-subrequests. A persisted admission timestamp enforces one physical request per
-second across discovery, collection, and resumed invocations. Zone settings and
+Cloudflare's account-based Analytics limiter. A persisted admission ledger applies
+a rolling five-minute budget from the `cost` and `viewer.budget` fields returned
+by Cloudflare. Per-dataset and per-requested-row debit observations determine the earliest safe admission and
+the exact prior admission whose expiry restores enough capacity. A 270-unit
+fallback covers responses without budget telemetry. A separate 300-request
+ceiling bounds physical GraphQL subrequests. Persisted admission timestamps
+keep physical requests at least 1.2 seconds apart. Once Cloudflare reports its
+budget, the interval between two requests reflects the average of the previous
+measured debit and the next predicted debit. This centers expensive work across
+the surrounding intervals and gives lower-cost work earlier admission. The
+cadence persists across discovery, collection, and resumed invocations. Zone settings and
 usage requests nest batches of at most ten zones under the connected account.
-Capability planning checkpoints each successful batch in D1. A later shared
-window resumes with the remaining account and zone settings.
-Scheduled passes dedicate themselves to the import until first-run setup
-completes. Generic credential-budget errors persist a retry deadline and an
-adaptive shared allowance. The adaptive allowance uses 80 percent of observed
-counted spend with a floor of 60 units. Named account and zone errors pause their
-individual scope. One lease coordinates
+Admission reserves one logical query unit for each zone in the batch.
+Billing is the initial ingestion's hard first phase. Analytics candidates remain
+ordered by Durable Objects, Workers, and billed family cost. A paced or
+capacity-blocked candidate yields to lower-cost eligible work, and the
+highest-priority eligible candidate runs first.
+After a smaller clean-window retry succeeds, pending slices for that dataset
+return to pacing from its measured debit.
+Capability discovery and collection stop admitting remote work with less than
+12 seconds left in an invocation. Checkpointed work resumes on the next pass.
+Daily-only datasets use the requested day count plus one as their page size.
+After a date-based resource dataset discovers its cardinality, later slices use
+resource-days plus bounded headroom and one truncation sentinel as their page
+size. Other resource-dimensional datasets retain Cloudflare's discovered page
+ceiling. An unseen bounded page uses a conservative per-row debit reservation.
+After twelve measured query shapes, the account's observed 90th-percentile
+debit replaces a single outlier as the unseen-query baseline. The 25% margin
+and fresh-window retry remain in effect. A zero remainder records a provisional
+full-window estimate. A later clean measurement replaces that estimate with at
+least the account baseline.
+Images Transformations uses a fresh-window admission because Cloudflare charges
+its underlying event scan independently of the small daily result page.
+Capability planning checkpoints each successful batch in D1. A later query
+admission window resumes with the remaining account and zone settings.
+Scheduled passes dedicate themselves to an active initial import until it
+reaches a final state. Generic credential-budget errors use Cloudflare's
+five-minute recovery interval. Named account and
+zone errors pause their individual scope. One lease coordinates
 browser and cron starts. A two-result queue feeds one serialized D1 consumer.
 Each claimed slice reserves D1 capacity until persistence starts. Rate limits
-keep work pending until the reported reset. A fresh per-slice D1 row-limit
-failure requeues the range for a fresh-budget attempt before range splitting.
+keep work pending until the reported reset. A shared-budget failure near the
+end of a window requeues that dataset for a fully recovered window while other
+eligible datasets continue. A query that also exceeds the recovered budget has
+its range quartered when it spans at least four days. Later failures bisect the
+range before the next attempt. Single-day queries receive one
+fresh-window retry before becoming unavailable coverage. A successful smaller
+retry returns pending siblings to measured pacing. A
+fresh per-slice D1 row-limit failure requeues the range for a fresh-budget attempt before range splitting.
 Shared run limits requeue unfinished work without changing its range. Reserved REST capacity runs Billing Read before Analytics.
-A configured re-import runs beside the minute monitor. Daily Analytics
-capability discovery waits until the re-import finishes so its larger query
-burst does not compete with history collection. A lease takeover
+An active initial import owns scheduled collection until it reaches a final
+state. Daily Analytics capability discovery waits until the import finishes.
+A lease takeover
 returns interrupted running slices to the pending queue before work resumes.
 
 Active telemetry uses one fixed completed five-minute window and a fixed pass
@@ -186,10 +217,12 @@ every planned source partition. The row shows a percentage and an estimated
 remaining time. The collapsed row opens to show per-source progress and window
 counts. Unavailable windows appear as a count on a warning control. The control
 opens their details. A Cloudflare budget wait replaces the spinner with its retry
-countdown and fallback completion estimate. The import writes ledger
+countdown and completion estimate. The estimate combines the current quota wait
+with paced-request work and observed throughput without counting the wait twice.
+The import writes ledger
 history and coverage state without creating alert instances, notifications, or
 control actions. Risk tolerance and account limits open after Billing reaches
-a terminal state and account-root history is ready or limited. Product limits become editable independently as their
+a terminal state. Product limits become editable independently as their
 available slices reach a terminal usable state. Setup can finish while product
 imports continue.
 
