@@ -50,7 +50,176 @@ var RunBudget = class {
 };
 //#endregion
 //#region ../../packages/core/dist/catalog.js
-var METRIC_CATALOG_VERSION = "2026-08-17";
+var METRIC_CATALOG_VERSION = "2026-08-31.1";
+var PRICING_REFERENCES = {
+	workers: "https://developers.cloudflare.com/workers/platform/pricing/",
+	durable_objects: "https://developers.cloudflare.com/durable-objects/platform/pricing/",
+	workers_ai: "https://developers.cloudflare.com/workers-ai/platform/pricing/",
+	queues: "https://developers.cloudflare.com/queues/platform/pricing/",
+	d1: "https://developers.cloudflare.com/d1/platform/pricing/",
+	r2: "https://developers.cloudflare.com/r2/pricing/",
+	kv: "https://developers.cloudflare.com/kv/platform/pricing/",
+	pages: "https://developers.cloudflare.com/pages/functions/pricing/",
+	images: "https://developers.cloudflare.com/images/pricing/",
+	stream: "https://developers.cloudflare.com/stream/pricing/",
+	vectorize: "https://developers.cloudflare.com/vectorize/platform/pricing/",
+	hyperdrive: "https://developers.cloudflare.com/hyperdrive/platform/pricing/",
+	ai_gateway: "https://developers.cloudflare.com/ai-gateway/reference/pricing/",
+	containers: "https://developers.cloudflare.com/containers/platform/pricing/",
+	browser_rendering: "https://developers.cloudflare.com/browser-run/pricing/",
+	workflows: "https://developers.cloudflare.com/workflows/reference/pricing/",
+	worker_builds: "https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/",
+	analytics_engine: "https://developers.cloudflare.com/analytics/analytics-engine/pricing/",
+	log_explorer: "https://developers.cloudflare.com/log-explorer/pricing/",
+	email: "https://developers.cloudflare.com/email-service/platform/pricing/"
+};
+function createContract(family, metricKey, label, unit, role, productLimit, historySource, options = {}) {
+	const billingKind = options.billingKind ?? (role === "billable" ? "independent" : role === "shared_billing" ? "shared" : role === "quota" ? "quota_only" : role === "provider_cost" ? "provider" : "none");
+	return {
+		id: `${family}:${metricKey}`,
+		family,
+		metricKey,
+		label,
+		unit,
+		role,
+		productLimit,
+		historySource,
+		billingKind,
+		billingUnit: options.billingUnit ?? unit,
+		pricingReference: PRICING_REFERENCES[family],
+		...options.billingAliases?.length ? { billingAliases: options.billingAliases } : {},
+		...options.condition ? { condition: options.condition } : {},
+		...options.sharedBillingMetricId ? { sharedBillingMetricId: options.sharedBillingMetricId } : {}
+	};
+}
+function contract(family, metricKey, label, unit, role, historySource, options = {}) {
+	return createContract(family, metricKey, label, unit, role, true, historySource, options);
+}
+function supporting(family, metricKey, label, unit, historySource) {
+	return createContract(family, metricKey, label, unit, "supporting", false, historySource);
+}
+function providerCost(family, metricKey, label, unit, historySource) {
+	return createContract(family, metricKey, label, unit, "provider_cost", false, historySource);
+}
+/**
+* Account-independent Cloudflare meter contract. Product usage changes values
+* and coverage only. It never changes which limits Brolly offers.
+*/
+var PRODUCT_METRIC_CONTRACTS = [
+	contract("workers", "requests", "Requests", "requests", "billable", "graphql_or_billing", { billingAliases: ["workers_requests", "workers_standard_requests"] }),
+	contract("workers", "cpu_ms", "CPU time", "ms", "billable", "graphql_or_billing", { billingAliases: ["workers_cpu_time", "workers_standard_cpu_time"] }),
+	supporting("workers", "cache_requests", "Cache-served requests", "requests", "graphql"),
+	contract("durable_objects", "requests", "Requests", "requests", "billable", "graphql_or_billing", { billingAliases: ["durable_object_requests", "durable_objects_requests"] }),
+	contract("durable_objects", "duration_gb_seconds", "Compute duration", "GB-s", "billable", "graphql_or_billing"),
+	supporting("durable_objects", "incoming_websocket_messages", "WebSocket messages", "messages", "graphql"),
+	contract("durable_objects", "rows_read", "SQLite rows read", "rows", "billable", "graphql_or_billing"),
+	contract("durable_objects", "rows_written", "SQLite rows written", "rows", "billable", "graphql_or_billing"),
+	contract("durable_objects", "kv_read_units", "KV read units", "4 KiB units", "billable", "graphql_or_billing"),
+	contract("durable_objects", "kv_write_units", "KV write units", "4 KiB units", "billable", "graphql_or_billing"),
+	contract("durable_objects", "kv_delete_requests", "KV deletes", "requests", "billable", "graphql_or_billing"),
+	contract("durable_objects", "sql_storage_bytes", "SQLite storage", "bytes", "billable", "graphql_or_billing", { billingUnit: "GB-month" }),
+	contract("durable_objects", "kv_storage_bytes", "KV storage", "bytes", "billable", "graphql_or_billing", { billingUnit: "GB-month" }),
+	contract("workers_ai", "neurons", "Neurons", "neurons", "billable", "graphql_or_billing"),
+	supporting("workers_ai", "requests", "Inference requests", "requests", "graphql"),
+	contract("queues", "operations", "Billable operations", "operations", "billable", "graphql_or_billing", {
+		billingAliases: ["queue_operations"],
+		billingUnit: "64 KiB operation chunks"
+	}),
+	supporting("queues", "messages", "Messages", "messages", "graphql"),
+	supporting("queues", "bytes", "Message bytes", "bytes", "graphql"),
+	contract("d1", "rows_read", "Rows read", "rows", "billable", "graphql_or_billing"),
+	contract("d1", "rows_written", "Rows written", "rows", "billable", "graphql_or_billing"),
+	contract("d1", "storage_bytes", "Storage", "bytes", "billable", "graphql_or_billing", {
+		billingAliases: ["d1_storage"],
+		billingUnit: "GB-month"
+	}),
+	contract("r2", "class_a", "Class A operations", "operations", "billable", "graphql_or_billing", { billingAliases: ["class_a_operations"] }),
+	contract("r2", "class_b", "Class B operations", "operations", "billable", "graphql_or_billing", { billingAliases: ["class_b_operations"] }),
+	contract("r2", "storage_bytes", "Storage", "bytes", "billable", "graphql_or_billing", {
+		billingAliases: ["r2_storage"],
+		billingUnit: "GB-month"
+	}),
+	contract("r2", "retrieval_bytes", "Infrequent Access retrieval", "bytes", "billable", "billing", {
+		billingKind: "conditional",
+		billingUnit: "GB retrieved",
+		condition: "Applies to objects stored in Infrequent Access."
+	}),
+	supporting("r2", "egress_bytes", "Egress", "bytes", "graphql"),
+	contract("kv", "reads", "Reads", "operations", "billable", "graphql_or_billing"),
+	contract("kv", "writes", "Writes", "operations", "billable", "graphql_or_billing"),
+	contract("kv", "deletes", "Deletes", "operations", "billable", "graphql_or_billing"),
+	contract("kv", "lists", "Lists", "operations", "billable", "graphql_or_billing"),
+	contract("kv", "storage_bytes", "Storage", "bytes", "billable", "graphql_or_billing", { billingUnit: "GB-month" }),
+	contract("pages", "requests", "Function requests", "requests", "shared_billing", "graphql", { sharedBillingMetricId: "workers:requests" }),
+	contract("images", "transformations", "Unique transformations", "transformations", "billable", "graphql_or_billing"),
+	contract("images", "stored_images", "Stored images", "images", "billable", "billing", { billingUnit: "images stored per month" }),
+	contract("images", "delivery", "Images delivered", "images", "billable", "billing", { billingUnit: "images delivered" }),
+	contract("stream", "minutes_stored", "Video stored", "minutes", "billable", "billing", { billingUnit: "stored video minutes" }),
+	contract("stream", "minutes_delivered", "Video delivered", "minutes", "billable", "graphql_or_billing"),
+	contract("vectorize", "queried_dimensions", "Queried vector dimensions", "dimensions", "billable", "graphql_or_billing"),
+	contract("vectorize", "stored_dimensions", "Stored vector dimensions", "dimensions", "billable", "graphql_or_billing", { billingUnit: "stored dimensions per month" }),
+	contract("hyperdrive", "database_queries", "Database queries", "queries", "quota", "graphql"),
+	supporting("ai_gateway", "requests", "Gateway requests", "requests", "graphql"),
+	supporting("ai_gateway", "tokens", "Provider tokens", "tokens", "graphql"),
+	providerCost("ai_gateway", "cost_usd", "Provider-reported model cost", "USD", "graphql"),
+	contract("ai_gateway", "logpush_requests", "Logpush requests", "requests", "billable", "billing", {
+		billingKind: "conditional",
+		condition: "Applies when AI Gateway Logpush is enabled."
+	}),
+	contract("containers", "vcpu_seconds", "CPU time", "vCPU-s", "billable", "graphql_or_billing"),
+	contract("containers", "memory_gb_seconds", "Allocated memory", "GiB-s", "billable", "graphql_or_billing"),
+	contract("containers", "disk_gb_seconds", "Allocated disk", "GB-s", "billable", "graphql_or_billing"),
+	contract("containers", "egress_bytes", "Egress", "bytes", "billable", "graphql_or_billing", {
+		billingKind: "conditional",
+		billingUnit: "GB transferred",
+		condition: "Charges depend on region and included egress."
+	}),
+	contract("browser_rendering", "browser_hours", "Browser time", "browser-hours", "billable", "graphql_or_billing"),
+	contract("browser_rendering", "concurrent_browsers", "Concurrent browsers", "browsers", "quota", "billing", {
+		billingKind: "conditional",
+		billingUnit: "average concurrent browsers",
+		condition: "Charges apply above the plan's included concurrency."
+	}),
+	supporting("browser_rendering", "sessions", "Browser sessions", "sessions", "graphql"),
+	contract("workflows", "requests", "Workflow invocations", "requests", "shared_billing", "graphql", { sharedBillingMetricId: "workers:requests" }),
+	contract("workflows", "cpu_ms", "CPU time", "ms", "shared_billing", "billing", { sharedBillingMetricId: "workers:cpu_ms" }),
+	contract("workflows", "steps", "Workflow steps", "steps", "billable", "graphql_or_billing"),
+	contract("workflows", "storage_bytes", "Workflow state storage", "bytes", "billable", "billing", { billingUnit: "GB-month" }),
+	contract("worker_builds", "build_minutes", "Build time", "minutes", "billable", "graphql_or_billing"),
+	contract("analytics_engine", "data_points_written", "Data points written", "data points", "billable", "graphql_or_billing", {
+		billingKind: "announced",
+		condition: "Cloudflare publishes this rate but currently reports that charges are not active."
+	}),
+	contract("analytics_engine", "read_queries", "SQL read queries", "queries", "billable", "billing", {
+		billingKind: "announced",
+		billingUnit: "SQL API requests",
+		condition: "Cloudflare publishes this rate but currently reports that charges are not active."
+	}),
+	contract("log_explorer", "ingested_bytes", "Logs ingested", "bytes", "billable", "graphql_or_billing"),
+	contract("log_explorer", "storage_bytes", "Logs stored", "bytes", "billable", "billing", { billingUnit: "GB-month" }),
+	contract("email", "sent", "Outbound emails", "emails", "billable", "graphql_or_billing")
+];
+var PRODUCT_METRIC_CONTRACTS_BY_ID = new Map(PRODUCT_METRIC_CONTRACTS.map((metric) => [metric.id, metric]));
+var PRODUCT_LIMIT_METRICS = PRODUCT_METRIC_CONTRACTS.filter((metric) => metric.productLimit).map(({ id, family, label, unit, role, billingKind, condition, sharedBillingMetricId }) => ({
+	id,
+	family,
+	label,
+	unit,
+	role,
+	billingKind,
+	...condition ? { condition } : {},
+	...sharedBillingMetricId ? { sharedBillingMetricId } : {}
+}));
+var PRODUCT_LIMIT_METRICS_BY_ID = new Map(PRODUCT_LIMIT_METRICS.map((metric) => [metric.id, metric]));
+function productMetricContract(metricId) {
+	return PRODUCT_METRIC_CONTRACTS_BY_ID.get(metricId) ?? null;
+}
+function productMetricContractsForFamily(family) {
+	return PRODUCT_METRIC_CONTRACTS.filter((metric) => metric.family === family);
+}
+function productLimitMetric(metricId) {
+	return PRODUCT_LIMIT_METRICS_BY_ID.get(metricId) ?? null;
+}
 var METRIC_CATALOG = [
 	{
 		family: "workers",
@@ -116,6 +285,7 @@ var METRIC_CATALOG = [
 			"class_a",
 			"class_b",
 			"storage_bytes",
+			"retrieval_bytes",
 			"egress_bytes"
 		],
 		preferredScope: "resource",
@@ -137,7 +307,7 @@ var METRIC_CATALOG = [
 	},
 	{
 		family: "pages",
-		metrics: ["requests", "builds"],
+		metrics: ["requests"],
 		preferredScope: "resource",
 		fastSource: "graphql",
 		billingSource: true
@@ -179,7 +349,8 @@ var METRIC_CATALOG = [
 		metrics: [
 			"requests",
 			"tokens",
-			"cost_usd"
+			"cost_usd",
+			"logpush_requests"
 		],
 		preferredScope: "resource",
 		fastSource: "graphql",
@@ -199,7 +370,11 @@ var METRIC_CATALOG = [
 	},
 	{
 		family: "browser_rendering",
-		metrics: ["sessions", "session_minutes"],
+		metrics: [
+			"browser_hours",
+			"concurrent_browsers",
+			"sessions"
+		],
 		preferredScope: "account",
 		fastSource: "graphql",
 		billingSource: true
@@ -225,37 +400,21 @@ var METRIC_CATALOG = [
 	},
 	{
 		family: "analytics_engine",
-		metrics: [
-			"data_points_written",
-			"data_points_read",
-			"queries",
-			"storage_bytes"
-		],
+		metrics: ["data_points_written", "read_queries"],
 		preferredScope: "resource",
 		fastSource: "graphql",
 		billingSource: true
 	},
 	{
 		family: "log_explorer",
-		metrics: [
-			"ingested_bytes",
-			"queries",
-			"storage_bytes"
-		],
+		metrics: ["ingested_bytes", "storage_bytes"],
 		preferredScope: "resource",
 		fastSource: "graphql",
 		billingSource: true
 	},
 	{
-		family: "zones",
-		metrics: ["requests", "bandwidth_bytes"],
-		preferredScope: "zone",
-		fastSource: "graphql",
-		billingSource: true
-	},
-	{
 		family: "email",
-		metrics: ["sent", "routed"],
+		metrics: ["sent"],
 		preferredScope: "zone",
 		fastSource: "graphql",
 		billingSource: true
@@ -285,18 +444,26 @@ var MAXIMUM_METRICS = /* @__PURE__ */ new Set([
 	"kv_storage_bytes",
 	"stored_dimensions"
 ]);
-var USAGE_METRIC_DEFINITIONS = METRIC_CATALOG.flatMap((product) => product.metrics.map((metricKey) => ({
-	id: `${product.family}:${metricKey}`,
-	productFamily: product.family,
-	metricKey,
-	displayName: DISPLAY_NAMES[metricKey] ?? metricKey.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase()),
-	unit: metricUnit(metricKey),
-	aggregationKind: MAXIMUM_METRICS.has(metricKey) ? "maximum" : "sum",
-	billingMapping: product.billingSource ? metricKey : null,
-	collectorKey: product.fastSource ? `${product.fastSource}:${product.family}` : "billing:catchall",
-	finestScope: product.preferredScope,
-	active: true
-})));
+var USAGE_METRIC_DEFINITIONS = METRIC_CATALOG.flatMap((product) => product.metrics.map((metricKey) => {
+	const id = `${product.family}:${metricKey}`;
+	const metricContract = productMetricContract(id);
+	return {
+		id,
+		productFamily: product.family,
+		metricKey,
+		displayName: metricContract?.label ?? DISPLAY_NAMES[metricKey] ?? metricKey.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase()),
+		unit: metricUnit(metricKey),
+		aggregationKind: MAXIMUM_METRICS.has(metricKey) || metricKey === "concurrent_browsers" ? "maximum" : "sum",
+		billingMapping: metricContract && [
+			"independent",
+			"conditional",
+			"announced"
+		].includes(metricContract.billingKind) && product.billingSource ? metricKey : null,
+		collectorKey: metricContract?.historySource === "billing" ? "billing:billable-usage" : product.fastSource ? `${product.fastSource}:${product.family}` : "billing:catchall",
+		finestScope: product.preferredScope,
+		active: true
+	};
+}));
 var COST_METRIC_DEFINITIONS = [
 	{
 		id: "account:estimated_cost_usd",
@@ -354,7 +521,7 @@ function metricUnit(metric) {
 	if (metric.includes("row")) return "rows";
 	if (metric.includes("request")) return "requests";
 	if (metric.includes("duration_gb")) return "gb_seconds";
-	if (metric.includes("cpu") || metric.includes("minute") || metric.includes("second")) return "milliseconds";
+	if (metric.includes("cpu_ms")) return "milliseconds";
 	return "count";
 }
 //#endregion
@@ -379,7 +546,6 @@ var DEFAULT_FAMILY_DAILY_SPEND = Object.fromEntries([
 	"worker_builds",
 	"analytics_engine",
 	"log_explorer",
-	"zones",
 	"email",
 	"unknown"
 ].map((family) => [family, {
@@ -1016,17 +1182,6 @@ var dataset = (name, timeKind, timeField, metrics, options = {}) => ({
 	metrics,
 	...options
 });
-var R2_CLASS_A_ACTIONS = [
-	"PutObject",
-	"CopyObject",
-	"ListBuckets",
-	"ListObjects",
-	"CreateMultipartUpload",
-	"UploadPart",
-	"CompleteMultipartUpload",
-	"AbortMultipartUpload",
-	"DeleteObject"
-];
 /**
 * Explicit billable-usage adapters for Cloudflare product datasets. Settings
 * discovery decides whether each dataset is enabled for the connected account.
@@ -1052,16 +1207,42 @@ var PRODUCT_USAGE_DEFINITIONS = [
 		resourceDimension: "databaseId"
 	})]),
 	definition("r2", "R2", 90, "resource", [dataset("r2OperationsAdaptiveGroups", "time", "datetime", [
-		metric$1("class_a", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
-		metric$1("class_b", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
+		metric$1("class_a", "count", "sum", ["requests"], { actions: [
+			"PutBucket",
+			"PutObject",
+			"CopyObject",
+			"ListBuckets",
+			"ListObjects",
+			"CreateMultipartUpload",
+			"UploadPart",
+			"UploadPartCopy",
+			"CompleteMultipartUpload",
+			"ListMultipartUploads",
+			"ListParts",
+			"PutBucketEncryption",
+			"PutBucketCors",
+			"PutBucketLifecycleConfiguration",
+			"LifecycleStorageTierTransition"
+		] }),
+		metric$1("class_b", "count", "sum", ["requests"], { actions: [
+			"HeadBucket",
+			"HeadObject",
+			"GetObject",
+			"GetBucketEncryption",
+			"GetBucketLocation",
+			"GetBucketCors",
+			"GetBucketLifecycleConfiguration"
+		] }),
 		metric$1("egress_bytes", "bytes", "sum", ["responseBytes"])
 	], {
 		dimensions: ["bucketName", "actionType"],
-		resourceDimension: "bucketName"
+		resourceDimension: "bucketName",
+		resourceDimensionIsName: true
 	}), dataset("r2StorageAdaptiveGroups", "time", "datetime", [metric$1("storage_bytes", "bytes", "max", ["payloadSize", "metadataSize"])], {
 		dimensions: ["bucketName"],
-		resourceDimension: "bucketName"
-	})]),
+		resourceDimension: "bucketName",
+		resourceDimensionIsName: true
+	})], ["retrieval_bytes"]),
 	definition("kv", "Workers KV", 90, "namespace", [dataset("kvOperationsAdaptiveGroups", "date", "date", [
 		metric$1("reads", "count", "sum", ["requests"], { actions: ["read"] }),
 		metric$1("writes", "count", "sum", ["requests"], { actions: ["write"] }),
@@ -1076,19 +1257,22 @@ var PRODUCT_USAGE_DEFINITIONS = [
 	})]),
 	definition("pages", "Pages Functions", 90, "resource", [dataset("pagesFunctionsInvocationsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "sum", ["requests"])], {
 		dimensions: ["scriptName"],
-		resourceDimension: "scriptName"
-	})], ["builds"]),
-	definition("images", "Images", 31, "account", [dataset("imagesRequestsAdaptiveGroups", "date", "date", [metric$1("delivery", "requests", "sum", ["requests"])]), dataset("imagesTransformationsAdaptiveGroups", "date", "date", [metric$1("transformations", "count", "sum", ["billableEventCount"])])], ["stored_images"]),
-	definition("stream", "Stream", 90, "resource", [dataset("streamMinutesViewedAdaptiveGroups", "date", "date", [metric$1("minutes_delivered", "milliseconds", "sum", ["minutesViewed"], { factor: 6e4 })], {
+		resourceDimension: "scriptName",
+		resourceDimensionIsName: true
+	})]),
+	definition("images", "Images", 31, "account", [dataset("imagesTransformationsAdaptiveGroups", "date", "date", [metric$1("transformations", "count", "sum", ["billableEventCount"])])], ["stored_images", "delivery"]),
+	definition("stream", "Stream", 90, "resource", [dataset("streamMinutesViewedAdaptiveGroups", "date", "date", [metric$1("minutes_delivered", "count", "sum", ["minutesViewed"])], {
 		dimensions: ["uid"],
 		resourceDimension: "uid"
 	})], ["minutes_stored"]),
 	definition("vectorize", "Vectorize", 32, "resource", [dataset("vectorizeV2QueriesAdaptiveGroups", "time", "datetime", [metric$1("queried_dimensions", "count", "sum", ["queriedVectorDimensions"])], {
 		dimensions: ["indexName"],
-		resourceDimension: "indexName"
+		resourceDimension: "indexName",
+		resourceDimensionIsName: true
 	}), dataset("vectorizeV2StorageAdaptiveGroups", "time", "datetime", [metric$1("stored_dimensions", "count", "max", ["storedVectorDimensions"])], {
 		dimensions: ["indexName"],
-		resourceDimension: "indexName"
+		resourceDimension: "indexName",
+		resourceDimensionIsName: true
 	})]),
 	definition("hyperdrive", "Hyperdrive", 32, "resource", [dataset("hyperdriveQueriesAdaptiveGroups", "time", "datetime", [metric$1("database_queries", "count", "count")], {
 		dimensions: ["configId"],
@@ -1105,10 +1289,11 @@ var PRODUCT_USAGE_DEFINITIONS = [
 		metric$1("cost_usd", "usd", "sum", ["cost"])
 	], {
 		dimensions: ["gateway"],
-		resourceDimension: "gateway"
-	})]),
+		resourceDimension: "gateway",
+		resourceDimensionIsName: true
+	})], ["logpush_requests"]),
 	definition("containers", "Containers", 32, "resource", [dataset("containersUsageAdaptiveGroups", "date", "date", [
-		metric$1("vcpu_seconds", "milliseconds", "sum", ["cpuTimeSec"], { factor: 1e3 }),
+		metric$1("vcpu_seconds", "count", "sum", ["cpuTimeSec"]),
 		metric$1("memory_gb_seconds", "gb_seconds", "sum", ["allocatedMemory"], { factor: 1 / 1e9 }),
 		metric$1("disk_gb_seconds", "gb_seconds", "sum", ["allocatedDisk"], { factor: 1 / 1e9 }),
 		metric$1("egress_bytes", "bytes", "sum", ["txBytes"])
@@ -1117,49 +1302,61 @@ var PRODUCT_USAGE_DEFINITIONS = [
 		resourceDimension: "instanceId",
 		parentDimension: "applicationId"
 	})]),
-	definition("browser_rendering", "Browser Rendering", 32, "account", [dataset("browserRenderingBrowserTimeUsageAdaptiveGroups", "time", "datetime", [metric$1("sessions", "count", "count"), metric$1("session_minutes", "milliseconds", "sum", ["totalSessionDurationMs"])])]),
-	definition("workflows", "Workflows", 32, "resource", [dataset("workflowsAdaptiveGroups", "time", "datetimeHour", [metric$1("requests", "requests", "count")], {
+	definition("browser_rendering", "Browser Rendering", 32, "account", [dataset("browserRenderingBrowserTimeUsageAdaptiveGroups", "time", "datetime", [metric$1("sessions", "count", "count"), metric$1("browser_hours", "count", "sum", ["totalSessionDurationMs"], { factor: 1 / 36e5 })])], ["concurrent_browsers"]),
+	definition("workflows", "Workflows", 32, "resource", [dataset("workflowsAdaptiveGroups", "time", "datetimeHour", [metric$1("requests", "requests", "count"), metric$1("steps", "count", "sum", ["stepCount"])], {
 		dimensions: ["workflowName"],
-		resourceDimension: "workflowName"
-	})], [
-		"cpu_ms",
-		"steps",
-		"storage_bytes"
-	]),
-	definition("worker_builds", "Worker Builds", 32, "account", [dataset("workersBuildsBuildMinutesAdaptiveGroups", "date", "date", [metric$1("build_minutes", "milliseconds", "sum", ["buildMinutes"], { factor: 6e4 })])]),
+		resourceDimension: "workflowName",
+		resourceDimensionIsName: true
+	})], ["cpu_ms", "storage_bytes"]),
+	definition("worker_builds", "Worker Builds", 32, "account", [dataset("workersBuildsBuildMinutesAdaptiveGroups", "date", "date", [metric$1("build_minutes", "count", "sum", ["buildMinutes"])])]),
 	definition("analytics_engine", "Analytics Engine", 31, "resource", [dataset("workersAnalyticsEngineAdaptiveGroups", "time", "datetime", [metric$1("data_points_written", "count", "count")], {
 		dimensions: ["dataset"],
-		resourceDimension: "dataset"
-	})], [
-		"data_points_read",
-		"queries",
-		"storage_bytes"
-	]),
+		resourceDimension: "dataset",
+		resourceDimensionIsName: true
+	})], ["read_queries"]),
 	definition("log_explorer", "Log Explorer", 32, "resource", [dataset("logExplorerIngestionAdaptiveGroups", "time", "datetime", [metric$1("ingested_bytes", "bytes", "sum", ["billableBytes"])], {
 		dimensions: ["dataset", "zoneTag"],
 		resourceDimension: "dataset",
+		resourceDimensionIsName: true,
 		parentDimension: "zoneTag"
-	})], ["queries", "storage_bytes"]),
-	definition("zones", "Zones", 30, "zone", [dataset("httpRequests1dGroups", "date", "date", [metric$1("requests", "requests", "sum", ["requests"]), metric$1("bandwidth_bytes", "bytes", "sum", ["bytes"])], { root: "zone" }), dataset("httpRequestsAdaptiveGroups", "time", "datetime", [metric$1("requests", "requests", "count"), metric$1("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"])], {
-		root: "zone",
-		fallbackFor: "httpRequests1dGroups"
-	})]),
-	definition("email", "Email", 30, "zone", [dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric$1("sent", "count", "count")], { root: "zone" }), dataset("emailRoutingAdaptiveGroups", "time", "datetime", [metric$1("routed", "count", "count")], { root: "zone" })])
+	})], ["storage_bytes"]),
+	definition("email", "Email", 30, "zone", [dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric$1("sent", "count", "count")], { root: "zone" })])
 ];
 var BY_COLLECTOR = new Map(PRODUCT_USAGE_DEFINITIONS.map((item) => [item.collector, item]));
 new Map(PRODUCT_USAGE_DEFINITIONS.flatMap((item) => item.datasets.map((value) => [value.dataset, item])));
 function productUsageDefinition(collector) {
 	return BY_COLLECTOR.get(collector);
 }
-function buildProductDatasetQuery(definition, source, limit = 1e4) {
-	const { selection, variableType } = productDatasetSelection(source, limit);
+/** Keep only aggregate fields Cloudflare reports for this account's live schema. */
+function projectProductDataset(source, availableFields) {
+	if (availableFields === void 0 || availableFields.length === 0) return source;
+	const normalizeField = (value) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+	const available = new Set(availableFields.map(normalizeField));
+	const metrics = source.metrics.flatMap((item) => {
+		if (item.aggregate === "count") return [item];
+		const fields = (item.fields ?? []).filter((field) => {
+			const normalized = normalizeField(field);
+			return available.has(normalized) || available.has(normalizeField(`${item.aggregate}_${field}`));
+		});
+		return fields.length ? [{
+			...item,
+			fields
+		}] : [];
+	});
+	return {
+		...source,
+		metrics: metrics.length ? metrics : source.metrics
+	};
+}
+function buildProductDatasetQuery(definition, source, limit = 1e4, aggregateOnly = false) {
+	const { selection, variableType } = productDatasetSelection(source, limit, aggregateOnly);
 	if ((source.root ?? "account") === "zone") return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
 	return `query BrollyProductUsage($account: String!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { ${selection} } } }`;
 }
 /** Build a bounded zone batch nested under the connected account. */
-function buildAccountZoneProductDatasetQuery(definition, source, limit = 1e4) {
+function buildAccountZoneProductDatasetQuery(definition, source, limit = 1e4, aggregateOnly = false) {
 	if ((source.root ?? "account") !== "zone") throw new TypeError(`${source.dataset} is not a zone dataset`);
-	const { selection, variableType } = productDatasetSelection(source, limit);
+	const { selection, variableType } = productDatasetSelection(source, limit, aggregateOnly);
 	return `query BrollyAccountZoneProductUsage($account: String!, $zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } } }`;
 }
 function accountZoneProductDatasetVariables(source, accountId, startsAt, endsAt, zoneIds) {
@@ -1168,12 +1365,14 @@ function accountZoneProductDatasetVariables(source, accountId, startsAt, endsAt,
 		account: accountId
 	};
 }
-function productDatasetSelection(source, limit) {
+function productDatasetSelection(source, limit, aggregateOnly = false) {
 	const variableType = source.timeKind === "date" ? "Date" : "Time";
 	const filter = source.timeKind === "date" ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end` : `${source.timeField}_geq: $start, ${source.timeField}_lt: $end`;
 	const aggregates = [...new Set(source.metrics.map((item) => item.aggregate))];
+	const probeDimensions = (source.dimensions ?? []).filter((dimension) => dimension === "actionType");
+	const dimensions = aggregateOnly ? probeDimensions : [.../* @__PURE__ */ new Set(["date", ...source.dimensions ?? []])];
 	const body = [
-		`dimensions { ${[.../* @__PURE__ */ new Set(["date", ...source.dimensions ?? []])].join(" ")} }`,
+		dimensions.length ? `dimensions { ${dimensions.join(" ")} }` : "",
 		aggregates.includes("count") ? "count" : "",
 		...["sum", "max"].map((aggregate) => {
 			const fields = [...new Set(source.metrics.filter((item) => item.aggregate === aggregate).flatMap((item) => item.fields ?? []))];
@@ -1216,7 +1415,10 @@ function normalizeProductDataset(definition, source, roots, accountId, startsAt,
 				accountId,
 				family: definition.family,
 				id,
-				name: id,
+				...source.resourceDimensionIsName ? {
+					name: id,
+					nameKind: "named"
+				} : { nameKind: "id_only" },
 				scope,
 				...parent ? { parentId: parent } : {},
 				tier: "unclassified"
@@ -1224,11 +1426,15 @@ function normalizeProductDataset(definition, source, roots, accountId, startsAt,
 			for (const item of source.metrics) {
 				if (item.actions?.length) {
 					const actions = item.actions.map((value) => value.toLowerCase());
-					const matches = action ? actions.includes(action) : false;
-					if (item.metric === "class_b" ? matches : !matches) continue;
+					if (!action || !actions.includes(action)) continue;
 				}
 				const aggregate = item.aggregate === "count" ? row : recordValue$1(row[item.aggregate]);
-				const value = (item.aggregate === "count" ? numberValue$1(row.count) : (item.fields ?? []).reduce((sum, field) => sum + numberValue$1(aggregate[field]), 0)) * (item.factor ?? 1);
+				const fields = item.fields ?? [];
+				if (item.aggregate === "count" && !Object.hasOwn(row, "count")) continue;
+				if (item.aggregate !== "count" && !fields.some((field) => Object.hasOwn(aggregate, field))) continue;
+				const present = (item.aggregate === "count" ? [numericValue$1(row.count)] : fields.map((field) => numericValue$1(aggregate[field]))).filter((value) => value !== void 0);
+				if (!present.length) continue;
+				const value = present.reduce((sum, value) => sum + value, 0) * (item.factor ?? 1);
 				if (!Number.isFinite(value)) continue;
 				const key = `${bounds.start}:${asset.scope}:${asset.id}:${item.metric}`;
 				const existing = samples.get(key);
@@ -1265,9 +1471,10 @@ function recordValue$1(value) {
 function stringValue$3(value) {
 	return typeof value === "string" && value.length ? value : void 0;
 }
-function numberValue$1(value) {
-	const parsed = Number(value ?? 0);
-	return Number.isFinite(parsed) ? parsed : 0;
+function numericValue$1(value) {
+	if (value === null || value === void 0 || value === "") return void 0;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : void 0;
 }
 function dailyBounds$1(day, startsAt, endsAt) {
 	if (!day) return {
@@ -1290,6 +1497,9 @@ var DAY_MS$2 = 864e5;
 var REQUEST_TIMEOUT_MS$1 = 8e3;
 var MAX_ZONE_BATCH$1 = 10;
 var SETTINGS_BATCH = 12;
+function requestRangeDays(request) {
+	return Math.max(1, Math.ceil((request.endsAt - request.startsAt) / DAY_MS$2));
+}
 var SPECIAL_DATASETS = [
 	special("graphql:durable-objects", "Durable Objects", "durableObjectsInvocationsAdaptiveGroups", "durable_objects", "object", "durable_invocations"),
 	special("graphql:durable-objects", "Durable Objects", "durableObjectsPeriodicGroups", "durable_objects", "object", "durable_periodic"),
@@ -1297,7 +1507,7 @@ var SPECIAL_DATASETS = [
 	special("graphql:durable-objects", "Durable Objects", "durableObjectsStorageGroups", "durable_objects", "account", "durable_kv_storage"),
 	special("graphql:workers", "Workers", "workersInvocationsAdaptive", "workers", "resource", "workers")
 ];
-var PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap((product) => product.datasets.map((source) => ({
+var PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap((product) => product.datasets.filter((source) => source.metrics.some((metric) => productMetricContract(`${product.family}:${metric.metric}`)?.productLimit === true)).map((source) => ({
 	collector: product.collector,
 	label: product.label,
 	dataset: source.dataset,
@@ -1307,7 +1517,10 @@ var PRODUCT_DATASETS = PRODUCT_USAGE_DEFINITIONS.flatMap((product) => product.da
 	retentionDays: product.retentionDays,
 	kind: "product",
 	product,
-	source,
+	source: {
+		...source,
+		metrics: source.metrics.filter((metric) => productMetricContract(`${product.family}:${metric.metric}`)?.productLimit === true)
+	},
 	fallbackFor: source.fallbackFor
 })));
 var HISTORICAL_DATASETS = [...SPECIAL_DATASETS, ...PRODUCT_DATASETS];
@@ -1402,29 +1615,33 @@ var HistoricalAnalyticsClient = class {
 			since: new Date(request.startsAt).toISOString(),
 			until: new Date(request.endsAt).toISOString()
 		};
-		const rows = arrayValue((await this.graphql(query, variables, 1, { kind: "account" }, request.dataset, limit)).viewer?.accounts?.[0]?.[spec.dataset]);
+		const account = (await this.graphql(query, variables, 1, { kind: "account" }, request.budgetKey ?? request.dataset, limit, requestRangeDays(request))).viewer?.accounts?.[0];
+		const rows = arrayValue(account?.[spec.dataset]);
 		const samples = normalizeSpecial(spec, rows, this.env, request.startsAt, request.endsAt);
 		return {
 			collector: spec.collector,
 			dataset: spec.dataset,
 			samples,
-			coverage: specialCoverage(spec, rows.length >= limit),
+			coverage: specialCoverage(spec, rows, rows.length >= limit, account !== void 0),
 			complete: rows.length < limit,
 			rows: rows.length
 		};
 	}
 	async collectProduct(spec, request, limit) {
 		const product = spec.product;
-		const source = spec.source;
+		const configuredSource = spec.source;
+		const source = projectProductDataset(configuredSource, request.availableFields);
+		const unavailableMetrics = configuredSource.metrics.filter((metric) => !source.metrics.some((candidate) => candidate.metric === metric.metric));
+		if (!source.metrics.length) throw new Error(`${source.dataset} exposes none of the fields required by Brolly's metric contract`);
 		const zoneIds = source.root === "zone" ? request.zoneIds ?? [] : [];
 		if (source.root === "zone" && !zoneIds.length) throw new Error(`${source.dataset} requires at least one authorized zone`);
 		const failedZones = [];
 		let roots;
 		if (source.root === "zone") {
-			const isolated = await this.collectProductZones(spec, request, limit, zoneIds);
+			const isolated = await this.collectProductZones(spec, source, request, limit, zoneIds);
 			roots = isolated.roots;
 			failedZones.push(...isolated.failed);
-		} else roots = (await this.graphql(buildProductDatasetQuery(product, source, limit), productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, []), 1, { kind: "account" }, source.dataset, limit)).viewer?.accounts ?? [];
+		} else roots = (await this.graphql(buildProductDatasetQuery(product, source, limit, request.activityProbe === true), productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, []), 1, { kind: "account" }, request.budgetKey ?? source.dataset, limit, requestRangeDays(request))).viewer?.accounts ?? [];
 		if (source.root === "zone") {
 			const returned = new Set(roots.flatMap((root) => stringValue$2(root.zoneTag) ? [stringValue$2(root.zoneTag)] : []));
 			for (const zoneId of zoneIds) if (!returned.has(zoneId) && !failedZones.some((item) => item.zoneId === zoneId)) failedZones.push({
@@ -1435,32 +1652,41 @@ var HistoricalAnalyticsClient = class {
 		}
 		const rows = roots.reduce((count, root) => count + arrayValue(root[source.alias]).length, 0);
 		const truncated = roots.some((root) => arrayValue(root[source.alias]).length >= limit);
+		const missingAccountRoot = source.root !== "zone" && roots.length === 0;
+		const responseMissingMetrics = rows > 0 ? source.metrics.filter((metric) => !productMetricHasResponseEvidence(source, metric, roots)) : [];
+		const responseMissingMetricIds = new Set(responseMissingMetrics.map((metric) => metric.metric));
 		const failedDetail = failedZones.length ? failedZones.map((item) => `${item.zoneId}: ${item.detail}`).join("; ") : void 0;
 		return {
 			collector: spec.collector,
 			dataset: spec.dataset,
 			samples: normalizeProductDataset(product, source, roots, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt),
-			coverage: source.metrics.map((item) => ({
+			coverage: [...source.metrics.map((item) => ({
 				family: product.family,
 				metric: item.metric,
 				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? product.scope : "account",
-				state: failedZones.length ? failedZones.some((item) => item.state === "permission_denied") ? "permission_denied" : failedZones.some((item) => item.state === "delayed") ? "delayed" : "unavailable" : truncated ? "delayed" : "healthy",
+				state: missingAccountRoot ? "unavailable" : responseMissingMetricIds.has(item.metric) ? "unavailable" : failedZones.length ? failedZones.some((item) => item.state === "permission_denied") ? "permission_denied" : failedZones.some((item) => item.state === "delayed") ? "delayed" : "unavailable" : truncated ? "delayed" : "healthy",
 				checkedAt: Date.now(),
-				detail: failedDetail ?? (truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : void 0)
-			})),
+				detail: missingAccountRoot ? `Cloudflare did not return the connected account for ${source.dataset}.` : responseMissingMetricIds.has(item.metric) ? `${source.dataset} returned rows without the aggregate field required for ${product.family}:${item.metric}.` : failedDetail ?? (truncated ? `${source.dataset} reached its bounded ${limit}-row range limit` : void 0)
+			})), ...unavailableMetrics.map((item) => ({
+				family: product.family,
+				metric: item.metric,
+				finestScope: source.root === "zone" ? "zone" : source.resourceDimension ? product.scope : "account",
+				state: "unavailable",
+				checkedAt: Date.now(),
+				detail: `${source.dataset} does not expose the required aggregate field in this account's live GraphQL schema.`
+			}))],
 			complete: !truncated && failedZones.length === 0,
 			rows,
 			zoneGaps: failedZones.length ? failedZones : void 0
 		};
 	}
-	async collectProductZones(spec, request, limit, zoneIds) {
-		const source = spec.source;
+	async collectProductZones(spec, source, request, limit, zoneIds) {
 		if (zoneIds.length > MAX_ZONE_BATCH$1) {
 			const roots = [];
 			const failed = [];
 			const batchSize = MAX_ZONE_BATCH$1;
 			for (let offset = 0; offset < zoneIds.length; offset += batchSize) {
-				const result = await this.collectProductZones(spec, request, limit, zoneIds.slice(offset, offset + batchSize));
+				const result = await this.collectProductZones(spec, source, request, limit, zoneIds.slice(offset, offset + batchSize));
 				roots.push(...result.roots);
 				failed.push(...result.failed);
 			}
@@ -1471,7 +1697,7 @@ var HistoricalAnalyticsClient = class {
 		}
 		try {
 			zoneIds[0];
-			const payload = await this.graphql(this.options.accountBasedRateLimit ? buildAccountZoneProductDatasetQuery(spec.product, source, limit) : buildProductDatasetQuery(spec.product, source, limit), this.options.accountBasedRateLimit ? accountZoneProductDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds) : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds), zoneIds.length, { kind: "account" }, source.dataset, limit);
+			const payload = await this.graphql(this.options.accountBasedRateLimit ? buildAccountZoneProductDatasetQuery(spec.product, source, limit, request.activityProbe === true) : buildProductDatasetQuery(spec.product, source, limit, request.activityProbe === true), this.options.accountBasedRateLimit ? accountZoneProductDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds) : productDatasetVariables(source, this.env.BROLLY_ACCOUNT_ID, request.startsAt, request.endsAt, zoneIds), zoneIds.length, { kind: "account" }, request.budgetKey ?? source.dataset, limit, requestRangeDays(request));
 			return {
 				roots: this.options.accountBasedRateLimit ? payload.viewer?.accounts?.[0]?.zones ?? [] : payload.viewer?.zones ?? [],
 				failed: []
@@ -1481,7 +1707,7 @@ var HistoricalAnalyticsClient = class {
 				const namedZone = zoneIds.find((candidate) => error.message.toLowerCase().includes(candidate.toLowerCase()));
 				if (namedZone && zoneIds.length > 1) {
 					const remaining = zoneIds.filter((candidate) => candidate !== namedZone);
-					const collected = await this.collectProductZones(spec, request, limit, remaining);
+					const collected = await this.collectProductZones(spec, source, request, limit, remaining);
 					return {
 						roots: collected.roots,
 						failed: [...collected.failed, {
@@ -1507,7 +1733,7 @@ var HistoricalAnalyticsClient = class {
 					roots: [],
 					failed
 				};
-				const collected = await this.collectProductZones(spec, request, limit, remaining);
+				const collected = await this.collectProductZones(spec, source, request, limit, remaining);
 				return {
 					roots: collected.roots,
 					failed: [...failed, ...collected.failed]
@@ -1515,8 +1741,8 @@ var HistoricalAnalyticsClient = class {
 			}
 			if (zoneIds.length > 1) {
 				const middle = Math.ceil(zoneIds.length / 2);
-				const left = await this.collectProductZones(spec, request, limit, zoneIds.slice(0, middle));
-				const right = await this.collectProductZones(spec, request, limit, zoneIds.slice(middle));
+				const left = await this.collectProductZones(spec, source, request, limit, zoneIds.slice(0, middle));
+				const right = await this.collectProductZones(spec, source, request, limit, zoneIds.slice(middle));
 				return {
 					roots: [...left.roots, ...right.roots],
 					failed: [...left.failed, ...right.failed]
@@ -1617,8 +1843,9 @@ var HistoricalAnalyticsClient = class {
 		} while (page <= totalPages);
 		return zoneIds;
 	}
-	async graphql(query, variables, logicalQueries, scope, budgetKey, pageSize) {
-		await this.options.rateBudget?.admit(scope, logicalQueries, budgetKey, pageSize);
+	async graphql(query, variables, logicalQueries, scope, budgetKey, pageSize, rangeDays) {
+		const zoneIds = Array.isArray(variables.zones) ? variables.zones.filter((value) => typeof value === "string") : [];
+		await this.options.rateBudget?.admit(scope, logicalQueries, budgetKey, pageSize, zoneIds, rangeDays);
 		const requestedAt = Date.now();
 		this.budget.charge("apiCalls");
 		this.ledgerBudget?.charge("graphqlQueries", logicalQueries);
@@ -1658,7 +1885,7 @@ var HistoricalAnalyticsClient = class {
 				rayId: response.headers.get("cf-ray")
 			};
 			const retryAt = rateLimitResetAt(response.headers, message, telemetry.occurredAt);
-			this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : namedScope ?? scope);
+			if (!(response.ok && telemetry.limiterScope === "shared")) this.options.rateBudget?.pauseUntil(retryAt, telemetry.limiterScope === "shared" ? null : namedScope ?? scope);
 			throw new HistoricalRateLimitError(response.status, retryAt, `${message}; ${rateLimitTelemetryDetail(telemetry)}`, telemetry, true);
 		}
 		if (!response.ok || payload.errors?.length) throw new HistoricalAnalyticsError(response.status, payload.errors?.map((item) => item.message).filter(Boolean).join("; ") || `Cloudflare Analytics request failed (${response.status})`);
@@ -1670,6 +1897,34 @@ var HistoricalAnalyticsClient = class {
 		return this.tokenPromise;
 	}
 };
+/**
+* A successful empty aggregate response is measured zero. Once Cloudflare
+* returns matching rows, the requested aggregate must occur in the payload;
+* otherwise that metric has unavailable evidence rather than a zero value.
+*/
+function productMetricHasResponseEvidence(source, metric, roots) {
+	const rows = roots.flatMap((root) => arrayValue(root[source.alias]));
+	if (!rows.length) return true;
+	const actions = metric.actions?.map((value) => value.toLowerCase());
+	if (actions?.length) {
+		const knownActions = new Set(source.metrics.flatMap((item) => item.actions ?? []).map((value) => value.toLowerCase()));
+		if (rows.some((row) => {
+			const action = stringValue$2(recordValue(row.dimensions).actionType)?.toLowerCase();
+			return action === void 0 || !knownActions.has(action);
+		})) return false;
+	}
+	const relevant = actions?.length ? rows.filter((row) => {
+		const action = stringValue$2(recordValue(row.dimensions).actionType)?.toLowerCase();
+		return action !== void 0 && actions.includes(action);
+	}) : rows;
+	if (!relevant.length) return true;
+	if (metric.aggregate === "count") return relevant.some((row) => numericValue(row.count) !== void 0);
+	const fields = metric.fields ?? [];
+	return relevant.some((row) => {
+		const aggregate = recordValue(row[metric.aggregate]);
+		return fields.some((field) => numericValue(aggregate[field]) !== void 0);
+	});
+}
 function withBudgetTelemetry(query) {
 	return query.replace(/(\{\s*)viewer\s*\{/, "$1cost viewer { budget ");
 }
@@ -1752,7 +2007,9 @@ function special(collector, label, dataset, family, scope, kind) {
 	};
 }
 function capability(spec, setting, zoneId) {
-	const enabled = setting?.enabled === true;
+	const availableFields = Array.isArray(setting?.availableFields) ? setting.availableFields.filter((value) => typeof value === "string") : void 0;
+	const projected = spec.kind === "product" ? projectProductDataset(spec.source, availableFields) : null;
+	const enabled = setting?.enabled === true && (projected === null || projected.metrics.length > 0);
 	return {
 		collector: spec.collector,
 		label: spec.label,
@@ -1765,8 +2022,9 @@ function capability(spec, setting, zoneId) {
 		maxDurationSeconds: positive(setting?.maxDuration) ?? spec.retentionDays * 86400,
 		notOlderThanSeconds: positive(setting?.notOlderThan) ?? spec.retentionDays * 86400,
 		maxPageSize: boundedPageSize(setting?.maxPageSize ?? 1e4),
+		...availableFields === void 0 ? {} : { availableFields },
 		state: enabled ? "healthy" : "unavailable",
-		detail: enabled ? "Available" : "Cloudflare reports this Analytics dataset as unavailable for the current token or plan."
+		detail: enabled ? "Available" : setting?.enabled === true ? "Cloudflare exposes none of the aggregate fields required by Brolly's metric contract." : "Cloudflare reports this Analytics dataset as unavailable for the current token or plan."
 	};
 }
 function unavailableCapability(spec, zoneId, detail, state = "unavailable") {
@@ -1804,34 +2062,41 @@ function normalizeSpecial(spec, rows, env, startsAt, endsAt) {
 				family: "workers",
 				id: scriptName,
 				name: scriptName,
+				nameKind: "named",
 				scope: "resource",
 				tier: isBrollyScript$1(scriptName, env.BROLLY_SELF_WORKER_NAME) ? "control_plane" : "unclassified"
 			};
-			addSample(samples, asset, "requests", "requests", numberValue(sum.requests), bounds, "sum");
-			addSample(samples, asset, "cpu_ms", "milliseconds", numberValue(sum.cpuTimeUs) / 1e3, bounds, "sum");
+			const requests = numericValue(sum.requests);
+			const cpuTimeUs = numericValue(sum.cpuTimeUs);
+			if (requests !== void 0) addSample(samples, asset, "requests", "requests", requests, bounds, "sum");
+			if (cpuTimeUs !== void 0) addSample(samples, asset, "cpu_ms", "milliseconds", cpuTimeUs / 1e3, bounds, "sum");
 			continue;
 		}
 		if (spec.kind === "durable_kv_storage") {
-			addSample(samples, {
+			const asset = {
 				accountId: env.BROLLY_ACCOUNT_ID,
 				family: "durable_objects",
 				id: "legacy-kv-storage",
 				name: "Legacy key-value Durable Object storage",
 				scope: "account",
 				tier: "control_plane"
-			}, "kv_storage_bytes", "bytes", numberValue(recordValue(row.max).storedBytes), bounds, "max");
+			};
+			const storedBytes = numericValue(recordValue(row.max).storedBytes);
+			if (storedBytes !== void 0) addSample(samples, asset, "kv_storage_bytes", "bytes", storedBytes, bounds, "max");
 			continue;
 		}
 		const namespaceId = stringValue$2(dimensions.namespaceId);
 		if (!namespaceId) continue;
 		if (spec.kind === "durable_sql_storage") {
-			addSample(samples, {
+			const asset = {
 				accountId: env.BROLLY_ACCOUNT_ID,
 				family: "durable_objects",
 				id: namespaceId,
 				scope: "namespace",
 				tier: "unclassified"
-			}, "sql_storage_bytes", "bytes", numberValue(recordValue(row.max).storedBytes), bounds, "max");
+			};
+			const storedBytes = numericValue(recordValue(row.max).storedBytes);
+			if (storedBytes !== void 0) addSample(samples, asset, "sql_storage_bytes", "bytes", storedBytes, bounds, "max");
 			continue;
 		}
 		const objectId = stringValue$2(dimensions.objectId);
@@ -1847,7 +2112,8 @@ function normalizeSpecial(spec, rows, env, startsAt, endsAt) {
 		const sum = recordValue(row.sum);
 		if (spec.kind === "durable_invocations") {
 			const hibernation = stringValue$2(dimensions.type) === "hibernation";
-			addSample(samples, asset, hibernation ? "incoming_websocket_messages" : "requests", hibernation ? "count" : "requests", numberValue(sum.requests), bounds, "sum");
+			const requests = numericValue(sum.requests);
+			if (requests !== void 0) addSample(samples, asset, hibernation ? "incoming_websocket_messages" : "requests", hibernation ? "count" : "requests", requests, bounds, "sum");
 			continue;
 		}
 		const metrics = [
@@ -1887,7 +2153,10 @@ function normalizeSpecial(spec, rows, env, startsAt, endsAt) {
 				sum.storageDeletes
 			]
 		];
-		for (const [metric, unit, value] of metrics) if (value !== void 0 && value !== null) addSample(samples, asset, metric, unit, numberValue(value), bounds, "sum");
+		for (const [metric, unit, value] of metrics) {
+			const numeric = numericValue(value);
+			if (numeric !== void 0) addSample(samples, asset, metric, unit, numeric, bounds, "sum");
+		}
 	}
 	return [...samples.values()];
 }
@@ -1917,7 +2186,7 @@ function estimatedCost(name, value, durationMs) {
 	const storage = name === "sql_storage_bytes" || name === "kv_storage_bytes" ? value / 1e9 * .2 * (durationMs / (30 * DAY_MS$2)) : 0;
 	return value * unitPrice + storage;
 }
-function specialCoverage(spec, truncated) {
+function specialCoverage(spec, rows, truncated, accountPresent) {
 	return (spec.kind === "workers" ? ["requests", "cpu_ms"] : spec.kind === "durable_invocations" ? ["requests", "incoming_websocket_messages"] : spec.kind === "durable_periodic" ? [
 		"duration_gb_seconds",
 		"incoming_websocket_messages",
@@ -1930,10 +2199,24 @@ function specialCoverage(spec, truncated) {
 		family: spec.family,
 		metric,
 		finestScope: spec.scope,
-		state: truncated ? "delayed" : "healthy",
+		state: !accountPresent || !specialMetricHasResponseEvidence(spec, metric, rows) ? "unavailable" : truncated ? "delayed" : "healthy",
 		checkedAt: Date.now(),
-		detail: truncated ? `${spec.dataset} reached its bounded row limit` : void 0
+		detail: !accountPresent ? `Cloudflare did not return the connected account for ${spec.dataset}.` : !specialMetricHasResponseEvidence(spec, metric, rows) ? `${spec.dataset} returned rows without the aggregate field required for ${spec.family}:${metric}.` : truncated ? `${spec.dataset} reached its bounded row limit` : void 0
 	}));
+}
+function specialMetricHasResponseEvidence(spec, metric, rows) {
+	if (!rows.length) return true;
+	let relevant = rows;
+	if (spec.kind === "durable_invocations") {
+		relevant = rows.filter((row) => {
+			const hibernation = stringValue$2(recordValue(row.dimensions).type) === "hibernation";
+			return metric === "incoming_websocket_messages" ? hibernation : !hibernation;
+		});
+		if (!relevant.length) return true;
+	}
+	const field = spec.kind === "workers" ? metric === "cpu_ms" ? "cpuTimeUs" : "requests" : spec.kind === "durable_kv_storage" || spec.kind === "durable_sql_storage" ? "storedBytes" : metric === "duration_gb_seconds" ? "duration" : metric === "incoming_websocket_messages" && spec.kind === "durable_periodic" ? "inboundWebsocketMsgCount" : metric === "rows_read" ? "rowsRead" : metric === "rows_written" ? "rowsWritten" : metric === "kv_read_units" ? "storageReadUnits" : metric === "kv_write_units" ? "storageWriteUnits" : metric === "kv_delete_requests" ? "storageDeletes" : "requests";
+	const aggregate = spec.kind === "durable_kv_storage" || spec.kind === "durable_sql_storage" ? "max" : "sum";
+	return relevant.some((row) => numericValue(recordValue(row[aggregate])[field]) !== void 0);
 }
 function catalogCapabilityGaps(accountId, checkedAt, coveredFamilies) {
 	return METRIC_CATALOG.filter((product) => !coveredFamilies.has(product.family)).map((product) => ({
@@ -2036,9 +2319,10 @@ function recordValue(value) {
 function stringValue$2(value) {
 	return typeof value === "string" && value.length ? value : void 0;
 }
-function numberValue(value) {
-	const parsed = Number(value ?? 0);
-	return Number.isFinite(parsed) ? parsed : 0;
+function numericValue(value) {
+	if (value === null || value === void 0 || value === "") return void 0;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : void 0;
 }
 function dailyBounds(day, startsAt, endsAt) {
 	if (!day) return {
@@ -2150,7 +2434,7 @@ var CloudflareClient = class {
 				for (const row of listed.rows) {
 					const id = stringValue$1(row.id) ?? stringValue$1(row.uuid) ?? stringValue$1(row.queue_id) ?? stringValue$1(row.name) ?? stringValue$1(row.namespace_id);
 					if (!id) continue;
-					const name = stringValue$1(row.name) ?? stringValue$1(row.queue_name) ?? stringValue$1(row.title) ?? id;
+					const name = stringValue$1(row.name) ?? stringValue$1(row.queue_name) ?? stringValue$1(row.title);
 					const tags = {};
 					if (family === "durable_objects") {
 						const workerScript = stringValue$1(row.script);
@@ -2169,9 +2453,12 @@ var CloudflareClient = class {
 						accountId: this.env.BROLLY_ACCOUNT_ID,
 						family,
 						id,
-						name,
+						...name ? {
+							name,
+							nameKind: "named"
+						} : { nameKind: "id_only" },
 						scope,
-						tier: family === "workers" && (isBrollyScript(id, this.env.BROLLY_SELF_WORKER_NAME) || isBrollyScript(name, this.env.BROLLY_SELF_WORKER_NAME)) ? "control_plane" : "unclassified",
+						tier: family === "workers" && (isBrollyScript(id, this.env.BROLLY_SELF_WORKER_NAME) || Boolean(name && isBrollyScript(name, this.env.BROLLY_SELF_WORKER_NAME))) ? "control_plane" : "unclassified",
 						tags
 					});
 				}
@@ -2882,6 +3169,7 @@ function workerMetric(accountId, scriptName, name, unit, value, start, end, samp
 			family: "workers",
 			id: scriptName,
 			name: scriptName,
+			nameKind: "named",
 			scope: "resource",
 			tier: isBrollyScript(scriptName, selfWorker) ? "control_plane" : "unclassified"
 		},
@@ -2952,13 +3240,19 @@ var Store = class {
 		const now = Date.now();
 		const statements = assets.map((asset) => this.db.prepare(`INSERT INTO assets(account_id,family,asset_id,parent_id,name,scope,tier,metadata_json,discovered_at,seen_at)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
-         ON CONFLICT(account_id,family,asset_id) DO UPDATE SET parent_id=excluded.parent_id,name=excluded.name,scope=excluded.scope,
+         ON CONFLICT(account_id,family,asset_id) DO UPDATE SET parent_id=excluded.parent_id,name=COALESCE(excluded.name,assets.name),scope=excluded.scope,
            tier=CASE WHEN excluded.tier='control_plane' THEN 'control_plane' ELSE assets.tier END,
            metadata_json=json_patch(assets.metadata_json,excluded.metadata_json),seen_at=excluded.seen_at
          WHERE (excluded.tier='control_plane' AND assets.tier!='control_plane')
             OR json_patch(assets.metadata_json,excluded.metadata_json) != assets.metadata_json
             OR assets.seen_at < excluded.seen_at - 3600000`).bind(asset.accountId, asset.family, asset.id, asset.parentId ?? null, asset.name ?? null, asset.scope, asset.tier, JSON.stringify(asset.tags ?? {}), now));
 		await this.runBatches(statements);
+		const suppliedNames = assets.filter((asset) => asset.nameKind === "named" && asset.name);
+		await this.runBatches(suppliedNames.map((asset) => this.db.prepare(`UPDATE resources SET display_name=?4,cloudflare_name=?4,name_kind='named',
+         metadata_json=json_patch(metadata_json,?5)
+       WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+         AND name_kind!='brolly'
+         AND (cloudflare_name IS NOT ?4 OR name_kind!='named' OR json_patch(metadata_json,?5)!=metadata_json)`).bind(asset.accountId, asset.family, asset.id, asset.name, JSON.stringify(asset.tags ?? {}))));
 	}
 	async saveCoverage(items) {
 		const statements = items.map((item) => this.db.prepare(`INSERT INTO metric_coverage(family,metric,finest_scope,state,detail,checked_at) VALUES(?1,?2,?3,?4,?5,?6)
@@ -3651,13 +3945,20 @@ var LedgerStore = class {
 		const orderedResources = [...resources.values()].sort((left, right) => resourceDepth(left) - resourceDepth(right));
 		this.budget?.observePeak("resourcesPerTransaction", Math.min(orderedResources.length, this.transactionLimit()));
 		const statements = orderedResources.map((resource) => this.db.prepare(`INSERT INTO resources(
-         id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,
+         id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,cloudflare_name,name_kind,
          first_seen_at,last_seen_at,last_active_at,coverage_status,control_capability,runtime_fuse_status,
          auto_quarantine_policy,tier,excluded,collector_key,dataset,metadata_json
-       ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
        ON CONFLICT(id) DO UPDATE SET
          parent_resource_id=COALESCE(excluded.parent_resource_id,resources.parent_resource_id),
-         display_name=excluded.display_name,last_seen_at=MAX(resources.last_seen_at,excluded.last_seen_at),
+         display_name=CASE WHEN excluded.name_kind IN ('named','brolly') THEN excluded.display_name ELSE resources.display_name END,
+         cloudflare_name=CASE WHEN excluded.name_kind='named' AND excluded.cloudflare_name IS NOT NULL THEN excluded.cloudflare_name ELSE resources.cloudflare_name END,
+         name_kind=CASE
+           WHEN resources.name_kind='brolly' OR excluded.name_kind='brolly' THEN 'brolly'
+           WHEN excluded.name_kind='named' AND excluded.cloudflare_name IS NOT NULL THEN 'named'
+           ELSE resources.name_kind
+         END,
+         last_seen_at=MAX(resources.last_seen_at,excluded.last_seen_at),
          last_active_at=CASE
            WHEN resources.last_active_at IS NULL THEN excluded.last_active_at
            WHEN excluded.last_active_at IS NULL THEN resources.last_active_at
@@ -3683,7 +3984,8 @@ var LedgerStore = class {
              AND resources.runtime_fuse_status!=excluded.runtime_fuse_status
           OR excluded.tier='control_plane' AND resources.tier!='control_plane'
           OR resources.excluded<excluded.excluded
-          OR json_patch(resources.metadata_json,excluded.metadata_json)!=resources.metadata_json`).bind(resource.id, resource.accountId, resource.parentResourceId, resource.productFamily, resource.resourceType, resource.cloudflareId, resource.displayName, resource.firstSeenAt, resource.lastSeenAt, resource.lastActiveAt, resource.coverageStatus, resource.controlCapability, resource.runtimeFuseStatus, resource.autoQuarantinePolicy, resource.tier, resource.excluded ? 1 : 0, observations.find((item) => observationIds.get(item) === resource.id)?.collectorKey ?? null, observations.find((item) => observationIds.get(item) === resource.id)?.dataset ?? null, JSON.stringify(resource.metadata)));
+          OR excluded.name_kind='named' AND (resources.name_kind!='named' OR resources.cloudflare_name IS NOT excluded.cloudflare_name)
+          OR json_patch(resources.metadata_json,excluded.metadata_json)!=resources.metadata_json`).bind(resource.id, resource.accountId, resource.parentResourceId, resource.productFamily, resource.resourceType, resource.cloudflareId, resource.cloudflareName ?? resource.cloudflareId, resource.cloudflareName, resource.nameKind, resource.firstSeenAt, resource.lastSeenAt, resource.lastActiveAt, resource.coverageStatus, resource.controlCapability, resource.runtimeFuseStatus, resource.autoQuarantinePolicy, resource.tier, resource.excluded ? 1 : 0, observations.find((item) => observationIds.get(item) === resource.id)?.collectorKey ?? null, observations.find((item) => observationIds.get(item) === resource.id)?.dataset ?? null, JSON.stringify(resource.metadata)));
 		await this.writeBatches(statements);
 		return observationIds;
 	}
@@ -4151,6 +4453,8 @@ function resourceFromAsset(asset, quality, activeAt) {
 	const controlCapability = asset.family === "queues" ? "queue_pause" : tags.brollyFuse === "true" && (asset.family === "workers" || asset.family === "durable_objects") ? "runtime_fuse" : "none";
 	const controlPlane = asset.tier === "control_plane" || tags.brollyControlPlane === "true";
 	const now = activeAt ?? Date.now();
+	const nameKind = asset.nameKind ?? (asset.name ? "named" : "id_only");
+	const cloudflareName = nameKind === "id_only" ? null : asset.name ?? null;
 	return {
 		id: resourceId(asset.accountId, canonicalFamily, type, asset.id),
 		accountId: asset.accountId,
@@ -4158,7 +4462,8 @@ function resourceFromAsset(asset, quality, activeAt) {
 		productFamily: canonicalFamily,
 		resourceType: type,
 		cloudflareId: asset.id,
-		displayName: asset.name ?? asset.id,
+		cloudflareName,
+		nameKind,
 		firstSeenAt: now,
 		lastSeenAt: now,
 		lastActiveAt: activeAt,
@@ -4179,6 +4484,7 @@ function parentResources(asset, quality, seenAt) {
 		name: "Cloudflare account",
 		scope: "account",
 		tier: "unclassified",
+		nameKind: "brolly",
 		tags: { ledgerLevel: "account" }
 	};
 	const product = {
@@ -4188,6 +4494,7 @@ function parentResources(asset, quality, seenAt) {
 		name: productName(asset.family),
 		scope: "account",
 		tier: "unclassified",
+		nameKind: "brolly",
 		tags: { ledgerLevel: "product" }
 	};
 	const parents = [resourceFromAsset(account, quality, seenAt), resourceFromAsset(product, quality, seenAt)];
@@ -4195,9 +4502,9 @@ function parentResources(asset, quality, seenAt) {
 		accountId: asset.accountId,
 		family: asset.family,
 		id: asset.parentId,
-		name: asset.parentId,
 		scope: "namespace",
 		tier: asset.tier,
+		nameKind: "id_only",
 		tags: asset.tags
 	}, quality, seenAt));
 	return parents;
@@ -4210,31 +4517,33 @@ function hierarchySamples(sample) {
 			accountId: sample.asset.accountId,
 			family: sample.asset.family,
 			id: sample.asset.parentId,
-			name: sample.asset.parentId,
 			scope: "namespace",
 			tier: sample.asset.tier,
+			nameKind: "id_only",
 			tags: sample.asset.tags
 		}
 	});
-	values.push({
+	if (sample.asset.scope !== "account" || sample.asset.id !== sample.asset.family) values.push({
 		...sample,
 		asset: {
 			accountId: sample.asset.accountId,
 			family: sample.asset.family,
 			id: sample.asset.family,
 			name: productName(sample.asset.family),
+			nameKind: "brolly",
 			scope: "account",
 			tier: "unclassified",
 			tags: { ledgerLevel: "product" }
 		}
 	});
-	values.push({
+	if (sample.asset.scope !== "account" || sample.asset.id !== sample.asset.accountId) values.push({
 		...sample,
 		asset: {
 			accountId: sample.asset.accountId,
 			family: sample.asset.family,
 			id: sample.asset.accountId,
 			name: "Cloudflare account",
+			nameKind: "brolly",
 			scope: "account",
 			tier: "unclassified",
 			tags: { ledgerLevel: "account" }
@@ -4412,7 +4721,7 @@ async function reconcileBilling(env, client, budget, now = Date.now(), window) {
 		const chargeStart = safeDate(record.ChargePeriodStart, now - 864e5);
 		const chargeEnd = safeDate(record.ChargePeriodEnd, now);
 		const startsAt = safeDate(record.BillingPeriodStart, Date.UTC(new Date(chargeStart).getUTCFullYear(), new Date(chargeStart).getUTCMonth(), 1));
-		const endsAt = safeDate(record.BillingPeriodEnd, Date.UTC(new Date(startsAt).getUTCFullYear(), new Date(startsAt).getUTCMonth() + 1, 1));
+		const endsAt = billingCycleEnd(startsAt, record.BillingPeriodEnd);
 		const currency = record.BillingCurrency ?? "USD";
 		const cycleId = `${env.BROLLY_ACCOUNT_ID}:${startsAt}:${endsAt}`;
 		const cost = record.BilledCost ?? record.EffectiveCost ?? record.ListCost ?? 0;
@@ -4565,6 +4874,20 @@ async function reconcileBilling(env, client, budget, now = Date.now(), window) {
 		alertChanges,
 		...truncated || gapDetail ? { error: [truncated ? `Billing reconciliation reached its 20,000-line limit from ${records.length} returned lines` : null, gapDetail].filter(Boolean).join("; ") } : {}
 	};
+}
+/**
+* Cloudflare's PayGo response supplies a cycle start without a corresponding
+* end. Preserve the account's anchor day when deriving the next monthly
+* boundary, clamping end-of-month anchors to the last day of the next month.
+*/
+function billingCycleEnd(startsAt, suppliedEnd) {
+	const parsed = suppliedEnd ? Date.parse(suppliedEnd) : NaN;
+	if (Number.isFinite(parsed) && parsed > startsAt) return parsed;
+	const start = new Date(startsAt);
+	const year = start.getUTCFullYear();
+	const month = start.getUTCMonth();
+	const lastDayNextMonth = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+	return Date.UTC(year, month + 1, Math.min(start.getUTCDate(), lastDayNextMonth));
 }
 function billingMissingRanges(records, startsAt, endsAt) {
 	const firstDay = utcDayStart(startsAt);
@@ -4758,9 +5081,16 @@ function normalizeMetric(value) {
 	return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "unknown";
 }
 function billingCatalogMetric(family, billingMetric) {
-	const product = METRIC_CATALOG.find((item) => item.family === family && item.family !== "unknown");
-	if (!product) return null;
-	return [...product.metrics].sort((left, right) => right.length - left.length).find((metric) => billingMetric === metric || billingMetric.includes(metric)) ?? null;
+	const normalized = normalizeMetric(billingMetric);
+	return productMetricContractsForFamily(family).find((metric) => [
+		"independent",
+		"conditional",
+		"announced"
+	].includes(metric.billingKind) && [
+		metric.metricKey,
+		`${family}_${metric.metricKey}`,
+		...metric.billingAliases ?? []
+	].some((alias) => normalizeMetric(alias) === normalized))?.metricKey ?? null;
 }
 function displayFamily$1(family) {
 	return family.replaceAll("_", " ").replace(/\b\w/g, (value) => value.toUpperCase());
@@ -4778,11 +5108,11 @@ var SPECIAL_METRIC_SOURCES = {
 		root: "account"
 	}],
 	"workers:requests": [{
-		alternatives: ["workersInvocationsAdaptive"],
+		alternatives: [metricCoverageDataset("workersInvocationsAdaptive", "requests")],
 		root: "account"
 	}],
 	"workers:cpu_ms": [{
-		alternatives: ["workersInvocationsAdaptive"],
+		alternatives: [metricCoverageDataset("workersInvocationsAdaptive", "cpu_ms")],
 		root: "account"
 	}],
 	"workers:cache_requests": [{
@@ -4790,65 +5120,73 @@ var SPECIAL_METRIC_SOURCES = {
 		root: "account"
 	}],
 	"durable_objects:requests": [{
-		alternatives: ["durableObjectsInvocationsAdaptiveGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsInvocationsAdaptiveGroups", "requests")],
 		root: "account"
 	}],
 	"durable_objects:duration_gb_seconds": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "duration_gb_seconds")],
 		root: "account"
 	}],
 	"durable_objects:incoming_websocket_messages": [{
-		alternatives: ["durableObjectsInvocationsAdaptiveGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsInvocationsAdaptiveGroups", "incoming_websocket_messages")],
 		root: "account"
 	}, {
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "incoming_websocket_messages")],
 		root: "account"
 	}],
 	"durable_objects:rows_read": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "rows_read")],
 		root: "account"
 	}],
 	"durable_objects:rows_written": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "rows_written")],
 		root: "account"
 	}],
 	"durable_objects:kv_read_units": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_read_units")],
 		root: "account"
 	}],
 	"durable_objects:kv_write_units": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_write_units")],
 		root: "account"
 	}],
 	"durable_objects:kv_delete_requests": [{
-		alternatives: ["durableObjectsPeriodicGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_delete_requests")],
 		root: "account"
 	}],
 	"durable_objects:sql_storage_bytes": [{
-		alternatives: ["durableObjectsSqlStorageGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsSqlStorageGroups", "sql_storage_bytes")],
 		root: "account"
 	}],
 	"durable_objects:kv_storage_bytes": [{
-		alternatives: ["durableObjectsStorageGroups"],
+		alternatives: [metricCoverageDataset("durableObjectsStorageGroups", "kv_storage_bytes")],
 		root: "account"
 	}]
 };
+function metricCoverageDataset(dataset, metric) {
+	return `${dataset}#${metric}`;
+}
 var PRODUCT_METRIC_SOURCES = /* @__PURE__ */ new Map();
 for (const product of PRODUCT_USAGE_DEFINITIONS) {
 	for (const source of product.datasets) for (const metric of source.metrics) {
 		const id = `${product.family}:${metric.metric}`;
 		const groups = PRODUCT_METRIC_SOURCES.get(id) ?? [];
 		if (source.fallbackFor) {
-			const group = groups.find((item) => item.alternatives.includes(source.fallbackFor));
-			if (group) group.alternatives.push(source.dataset);
+			const preferred = metricCoverageDataset(source.fallbackFor, metric.metric);
+			const fallback = metricCoverageDataset(source.dataset, metric.metric);
+			const group = groups.find((item) => item.alternatives.includes(preferred));
+			if (group) group.alternatives.push(fallback);
 			else groups.push({
-				alternatives: [source.fallbackFor, source.dataset],
+				alternatives: [preferred, fallback],
 				root: source.root ?? "account"
 			});
-		} else if (!groups.some((item) => item.alternatives.includes(source.dataset))) groups.push({
-			alternatives: [source.dataset],
-			root: source.root ?? "account"
-		});
+		} else {
+			const dataset = metricCoverageDataset(source.dataset, metric.metric);
+			if (!groups.some((item) => item.alternatives.includes(dataset))) groups.push({
+				alternatives: [dataset],
+				root: source.root ?? "account"
+			});
+		}
 		PRODUCT_METRIC_SOURCES.set(id, groups);
 	}
 	for (const metric of product.billingOnlyMetrics) PRODUCT_METRIC_SOURCES.set(`${product.family}:${metric}`, [{
@@ -4968,14 +5306,15 @@ function chargeMeta$3(budget, meta) {
 	budget.charge("d1RowsWritten", Number(meta.rows_written ?? meta.changes ?? 0));
 }
 function groupState(group, startsAt, endsAt, intervals, pending, requestedZone) {
-	const scopes = group.root === "account" ? [""] : requestedZone ? [requestedZone] : [.../* @__PURE__ */ new Set([...intervals.filter((row) => group.alternatives.includes(row.dataset) && row.scope_key).map((row) => row.scope_key), ...pending.filter((row) => group.alternatives.includes(row.dataset)).flatMap((row) => row.scopeKeys).filter(Boolean)])];
+	const scopes = group.root === "account" ? [""] : requestedZone ? [requestedZone] : [.../* @__PURE__ */ new Set([...intervals.filter((row) => group.alternatives.some((alternative) => coverageDatasetBase(alternative) === coverageDatasetBase(row.dataset)) && row.scope_key).map((row) => row.scope_key), ...pending.filter((row) => group.alternatives.some((alternative) => coverageDatasetBase(alternative) === row.dataset)).flatMap((row) => row.scopeKeys).filter(Boolean)])];
 	if (!scopes.length) return {
 		state: "unavailable",
 		reason: "Cloudflare did not expose coverage for this dataset."
 	};
 	return combinePartitions(scopes.map((scopeKey) => {
-		const candidates = intervals.filter((row) => group.alternatives.includes(row.dataset) && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
-		const active = pending.some((row) => group.alternatives.includes(row.dataset) && row.scopeKeys.includes(scopeKey) && row.startsAt < endsAt && row.endsAt > startsAt);
+		const exactCandidates = intervals.filter((row) => group.alternatives.includes(row.dataset) && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
+		const candidates = exactCandidates.length ? exactCandidates : intervals.filter((row) => group.alternatives.some((alternative) => coverageDatasetBase(alternative) === row.dataset) && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
+		const active = pending.some((row) => group.alternatives.some((alternative) => coverageDatasetBase(alternative) === row.dataset) && row.scopeKeys.includes(scopeKey) && row.startsAt < endsAt && row.endsAt > startsAt);
 		if (candidates.find((row) => row.state === "measured")) return { state: "measured" };
 		const partial = candidates.find((row) => row.state === "partial");
 		if (partial) return {
@@ -4992,6 +5331,10 @@ function groupState(group, startsAt, endsAt, intervals, pending, requestedZone) 
 			reason: "No collection evidence was recorded for this interval."
 		};
 	}));
+}
+function coverageDatasetBase(dataset) {
+	const separator = dataset.indexOf("#");
+	return separator < 0 ? dataset : dataset.slice(0, separator);
 }
 function combinePartitions(values) {
 	if (values.every((value) => value.state === "measured")) return { state: "measured" };
@@ -5100,7 +5443,7 @@ async function ingestWindow(options) {
 }
 function collectorCoverageIntervals(options, result, definition) {
 	const coverage = result.coverage;
-	if (options.collector === "graphql:workers") return [interval(options, "workersInvocationsAdaptive", coverage.filter((item) => item.metric !== "cache_requests"))];
+	if (options.collector === "graphql:workers") return coverage.filter((item) => item.metric !== "cache_requests").map((item) => interval(options, metricCoverageDataset("workersInvocationsAdaptive", item.metric), [item]));
 	if (options.collector === "graphql:durable-objects") return [
 		["durableObjectsInvocationsAdaptiveGroups", ["requests", "incoming_websocket_messages"]],
 		["durableObjectsPeriodicGroups", [
@@ -5114,18 +5457,22 @@ function collectorCoverageIntervals(options, result, definition) {
 		]],
 		["durableObjectsSqlStorageGroups", ["sql_storage_bytes"]],
 		["durableObjectsStorageGroups", ["kv_storage_bytes"]]
-	].map(([dataset, metrics]) => interval(options, dataset, coverage.filter((item) => metrics.includes(item.metric))));
+	].flatMap(([dataset, metrics]) => coverage.filter((item) => metrics.includes(item.metric)).map((item) => interval(options, metricCoverageDataset(dataset, item.metric), [item])));
 	if (!definition) return [];
-	if ("datasetCoverage" in result) return result.datasetCoverage.flatMap((item) => item.scopeKeys.map((scopeKey) => ({
-		accountId: options.env.BROLLY_ACCOUNT_ID,
-		dataset: item.dataset,
-		scopeKey,
-		startsAt: options.startsAt,
-		endsAt: options.endsAt,
-		state: item.state,
-		reason: item.reason
-	})));
-	return definition.datasets.map((source) => interval(options, source.dataset, coverage.filter((item) => source.metrics.some((metric) => metric.metric === item.metric))));
+	if ("datasetCoverage" in result) return result.datasetCoverage.flatMap((item) => {
+		const source = definition.datasets.find((candidate) => candidate.dataset === item.dataset);
+		if (!source) return [];
+		return source.metrics.flatMap((metric) => item.scopeKeys.map((scopeKey) => ({
+			accountId: options.env.BROLLY_ACCOUNT_ID,
+			dataset: metricCoverageDataset(item.dataset, metric.metric),
+			scopeKey,
+			startsAt: options.startsAt,
+			endsAt: options.endsAt,
+			state: item.state,
+			reason: item.reason
+		})));
+	});
+	return definition.datasets.flatMap((source) => coverage.filter((item) => source.metrics.some((metric) => metric.metric === item.metric)).map((item) => interval(options, metricCoverageDataset(source.dataset, item.metric), [item])));
 }
 function interval(options, dataset, coverage) {
 	return {
@@ -5629,7 +5976,7 @@ async function prepareAggregateContributorAction(db, instance, changes, resource
 	}
 	const resource = resources.get(selected.resourceId);
 	if ((resource ? actionMode(resource.productFamily, effective) : null) !== "auto") {
-		if (resource && manualActionEligible(resource, instance) && !await hasDeniedAncestor(db, resource.id, budget)) await insertPreparedAction(db, instance, resource, now, false, `${resource.displayName} is the leading contributor; operator approval is required`, budget);
+		if (resource && manualActionEligible(resource, instance) && !await hasDeniedAncestor(db, resource.id, budget)) await insertPreparedAction(db, instance, resource, now, false, `${resourceLabel(resource)} is the leading contributor; operator approval is required`, budget);
 		return null;
 	}
 	const watermark = applicable.find((item) => item.resource.id === selected.resourceId)?.change.watermarkAt ?? now;
@@ -5659,7 +6006,7 @@ async function prepareAggregateContributorAction(db, instance, changes, resource
 		confirmationSatisfied: true
 	})) return null;
 	if (activeAction) return Number(activeAction.automatic) === 1 && activeAction.state === "prepared" ? actionFromStoredRow(activeAction, resource) : null;
-	return insertPreparedAction(db, instance, resource, now, true, `${resource.displayName} was the deterministic top contributor in two consecutive complete scans`, budget);
+	return insertPreparedAction(db, instance, resource, now, true, `${resourceLabel(resource)} was the deterministic top contributor in two consecutive complete scans`, budget);
 }
 async function auditAmbiguousContributors(db, instance, evidence, now, budget) {
 	const top = [...evidence].sort((left, right) => right.latestIntervalValue - left.latestIntervalValue).slice(0, 5);
@@ -5680,7 +6027,7 @@ async function prepareAmbiguousContributorApproval(db, instance, applicable, evi
 	for (const candidate of ranked.slice(0, 5)) {
 		const resource = byResource.get(candidate.resourceId);
 		if (!resource || actionMode(resource.productFamily, effective) !== "prepare" || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
-		await insertPreparedAction(db, instance, resource, now, false, `${resource.displayName} is among the leading contributors; attribution requires operator review`, budget);
+		await insertPreparedAction(db, instance, resource, now, false, `${resourceLabel(resource)} is among the leading contributors; attribution requires operator review`, budget);
 		return;
 	}
 }
@@ -5860,7 +6207,8 @@ function resourceFromRow(row) {
 		productFamily: row.product_family,
 		resourceType: row.resource_type,
 		cloudflareId: row.cloudflare_id,
-		displayName: row.display_name,
+		cloudflareName: row.cloudflare_name,
+		nameKind: row.name_kind,
 		firstSeenAt: row.first_seen_at,
 		lastSeenAt: row.last_seen_at,
 		lastActiveAt: row.last_active_at,
@@ -5880,11 +6228,21 @@ function assetFromResource(resource) {
 		family: resource.productFamily,
 		id: resource.cloudflareId,
 		parentId: resource.parentResourceId ?? void 0,
-		name: resource.displayName,
+		...resource.cloudflareName ? { name: resource.cloudflareName } : {},
+		nameKind: resource.nameKind,
 		scope: scope === "object" || scope === "namespace" || scope === "resource" || scope === "zone" || scope === "account" ? scope : "resource",
 		tier: resource.tier,
 		tags: resource.metadata
 	};
+}
+function resourceLabel(resource) {
+	const id = compactCloudflareId(resource.cloudflareId);
+	if (resource.cloudflareName) return `${resource.cloudflareName} (${id})`;
+	if (resource.productFamily === "durable_objects" && resource.resourceType.endsWith(":object")) return `${resource.metadata.durableObjectClass ?? "Durable Object"} ${id}`;
+	return `${resource.productFamily.replaceAll("_", " ")} ${id}`;
+}
+function compactCloudflareId(value) {
+	return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 function actionFromStoredRow(row, resource) {
 	return {
@@ -6654,17 +7012,11 @@ var WORKERS_PAID_QUEUES = [{
 	includedPerCycle: 1e6,
 	unit: "count"
 }];
-/**
-* Metrics that have no meter of their own but bill into another metric's
-* shared allotment. `ratio` source units count as one billed unit of the
-* target meter. The dashboard shows this as a note on the source row, and
-* the billable-cost estimator folds the converted quantity into the target
-* meter's cycle consumption.
-*/
+/** Explicit source-meter conversions that are safe to fold into another meter. */
 var BILLED_VIA = { "durable_objects:incoming_websocket_messages": {
 	metricId: "durable_objects:requests",
 	ratio: 20,
-	label: "Durable Objects request"
+	label: "20 incoming WebSocket messages count as one request"
 } };
 var WORKERS_PAID_INCLUDED = [
 	...WORKERS_PAID_WORKERS,
@@ -6847,6 +7199,174 @@ function validTier(value) {
 	return value === "free" || value === "paid" || value === "enterprise" || value === "unknown";
 }
 //#endregion
+//#region src/product-activity-monitor.ts
+var STATE_KEY = "product_activity_monitor_v1";
+var PROBES_PER_RUN = 10;
+var ACTIVE_DATASETS_PER_RUN = 4;
+var MIN_QUERY_INTERVAL_MS = 1200;
+var FAILURE_BACKOFF_MS = [6e5, 18e5];
+/**
+* Rotate cheap aggregate probes across inactive product datasets. A positive
+* probe promotes that dataset to bounded detailed collection on later monitor
+* runs. This keeps newly used products discoverable without repeatedly
+* backfilling inactive products.
+*/
+async function monitorProductActivity(env, client, ledger, budget, timeZone, startsAt, endsAt) {
+	const specs = HISTORICAL_DATASETS.filter((spec) => spec.kind === "product" && spec.root === "account" && !spec.fallbackFor).sort((left, right) => left.dataset.localeCompare(right.dataset));
+	const state = await loadState(env.DB, budget);
+	const validDatasets = new Set(specs.map((spec) => spec.dataset));
+	const active = new Set(state.activeDatasets.filter((dataset) => validDatasets.has(dataset)));
+	const now = Date.now();
+	if ((state.pauseUntil ?? 0) > now) return {
+		changes: [],
+		samples: 0
+	};
+	const eligible = (dataset) => (state.failures[dataset]?.nextEligibleAt ?? 0) <= now;
+	const inactiveSpecs = specs.filter((spec) => !active.has(spec.dataset) && eligible(spec.dataset));
+	const activeSpecs = specs.filter((spec) => active.has(spec.dataset) && eligible(spec.dataset));
+	const probes = rotatingSlice(inactiveSpecs, state.probeCursor, PROBES_PER_RUN);
+	const detailed = rotatingSlice(activeSpecs, state.activeCursor, ACTIVE_DATASETS_PER_RUN);
+	const changes = [];
+	let samples = 0;
+	let queried = 0;
+	for (const target of [...probes.map((spec) => ({
+		spec,
+		probe: true
+	})), ...detailed.map((spec) => ({
+		spec,
+		probe: false
+	}))]) {
+		if (budget.remaining("graphqlQueries") < 1 || budget.remaining("wallMs") < 8e3) break;
+		if (queried > 0) await new Promise((resolve) => setTimeout(resolve, MIN_QUERY_INTERVAL_MS));
+		try {
+			const result = await client.historicalUsage({
+				dataset: target.spec.dataset,
+				startsAt,
+				endsAt,
+				maxPageSize: target.probe ? 1 : 1e4,
+				activityProbe: target.probe
+			});
+			queried += 1;
+			await saveProductCoverage(env, budget, result, startsAt, endsAt);
+			if (!result.coverage.some((item) => item.state === "healthy" || item.state === "delayed")) {
+				recordFailure(state, target.spec.dataset, result.coverage[0]?.detail ?? "Cloudflare returned no usable metric coverage.");
+				continue;
+			}
+			delete state.failures[target.spec.dataset];
+			if (target.probe) {
+				if (!result.complete || result.samples.some((sample) => Math.abs(sample.value) > 0)) {
+					active.add(target.spec.dataset);
+					console.info("brolly.product_activity_detected", JSON.stringify({ dataset: target.spec.dataset }));
+				}
+				continue;
+			}
+			const observations = expandUsageObservations(result.samples, result.collector, result.dataset, result.complete ? "complete" : "partial", { watermarkAt: endsAt });
+			changes.push(...await ledger.applyObservations(observations, timeZone));
+			samples += result.samples.length;
+		} catch (error) {
+			queried += 1;
+			if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) throw error;
+			const detail = error instanceof Error ? error.message : String(error);
+			recordFailure(state, target.spec.dataset, detail);
+			if (isHistoricalRateLimitError(error)) {
+				state.pauseUntil = Math.max(state.pauseUntil ?? 0, error.retryAt);
+				await saveState(env.DB, budget, {
+					...state,
+					activeDatasets: [...active].sort()
+				});
+				throw error;
+			}
+			console.warn("brolly.product_activity_probe_failed", JSON.stringify({
+				dataset: target.spec.dataset,
+				detail
+			}));
+		}
+	}
+	await saveState(env.DB, budget, {
+		version: 1,
+		probeCursor: advanceCursor(state.probeCursor, probes.length, inactiveSpecs.length),
+		activeCursor: advanceCursor(state.activeCursor, detailed.length, activeSpecs.length),
+		activeDatasets: [...active].sort(),
+		failures: state.failures,
+		pauseUntil: null
+	});
+	return {
+		changes,
+		samples
+	};
+}
+async function saveProductCoverage(env, budget, result, startsAt, endsAt) {
+	await saveCoverageIntervals(env.DB, result.coverage.map((item) => ({
+		accountId: env.BROLLY_ACCOUNT_ID,
+		dataset: metricCoverageDataset(result.dataset, item.metric),
+		startsAt,
+		endsAt,
+		state: item.state === "healthy" ? "measured" : item.state === "delayed" ? "partial" : "unavailable",
+		reason: item.detail
+	})), budget);
+}
+function rotatingSlice(values, cursor, limit) {
+	if (!values.length) return [];
+	return Array.from({ length: Math.min(limit, values.length) }, (_, index) => values[(cursor + index) % values.length]);
+}
+function advanceCursor(cursor, amount, length) {
+	return length > 0 ? (cursor + amount) % length : 0;
+}
+async function loadState(db, budget) {
+	const row = await db.prepare(`SELECT value FROM settings WHERE key=?1 LIMIT 1`).bind(STATE_KEY).first();
+	budget.charge("d1RowsRead", row ? 1 : 0);
+	if (!row) return emptyState();
+	try {
+		const parsed = JSON.parse(row.value);
+		return {
+			version: 1,
+			probeCursor: Number.isFinite(parsed.probeCursor) ? Math.max(0, Math.floor(parsed.probeCursor)) : 0,
+			activeCursor: Number.isFinite(parsed.activeCursor) ? Math.max(0, Math.floor(parsed.activeCursor)) : 0,
+			activeDatasets: Array.isArray(parsed.activeDatasets) ? parsed.activeDatasets.filter((value) => typeof value === "string") : [],
+			failures: parseFailures(parsed.failures),
+			pauseUntil: Number.isFinite(parsed.pauseUntil) ? Math.max(0, Number(parsed.pauseUntil)) : null
+		};
+	} catch {
+		return emptyState();
+	}
+}
+function emptyState() {
+	return {
+		version: 1,
+		probeCursor: 0,
+		activeCursor: 0,
+		activeDatasets: [],
+		failures: {},
+		pauseUntil: null
+	};
+}
+function parseFailures(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return Object.fromEntries(Object.entries(value).flatMap(([dataset, candidate]) => {
+		if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+		const parsed = candidate;
+		if (!Number.isFinite(parsed.count) || !Number.isFinite(parsed.nextEligibleAt)) return [];
+		return [[dataset, {
+			count: Math.max(1, Math.floor(Number(parsed.count))),
+			nextEligibleAt: Math.max(0, Number(parsed.nextEligibleAt)),
+			detail: typeof parsed.detail === "string" ? parsed.detail : "Cloudflare dataset query failed."
+		}]];
+	}));
+}
+function recordFailure(state, dataset, detail) {
+	const count = Math.min(FAILURE_BACKOFF_MS.length, (state.failures[dataset]?.count ?? 0) + 1);
+	state.failures[dataset] = {
+		count,
+		nextEligibleAt: Date.now() + FAILURE_BACKOFF_MS[count - 1],
+		detail: detail.slice(0, 1e3)
+	};
+}
+async function saveState(db, budget, state) {
+	const result = await db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,?3)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`).bind(STATE_KEY, JSON.stringify(state), Date.now()).run();
+	budget.charge("d1RowsWritten", Number(result.meta.rows_written ?? result.meta.changes ?? 0));
+}
+//#endregion
 //#region src/monitor.ts
 async function runMonitor(env, options = {}) {
 	const ledgerBudget = new LedgerRunBudget(await configuredLedgerRunLimits(env.DB));
@@ -7007,6 +7527,9 @@ async function runMonitor(env, options = {}) {
 			...workers.coverageIntervals,
 			...workerCorrections.coverageIntervals
 		], ledgerBudget);
+		const productActivity = await monitorProductActivity(env, client, ledger, ledgerBudget, timeZone, since, collectionEnd);
+		ledgerChanges.push(...productActivity.changes);
+		normalizedSamples += productActivity.samples;
 		const billingCycle = await ledger.currentBillingCycle(env.BROLLY_ACCOUNT_ID, collectionEnd);
 		const alertResult = await evaluateUsageAlerts(env, ledgerChanges, {
 			timeZone,
@@ -7605,44 +8128,82 @@ async function onboardingData(env) {
 }
 async function assetList(request, env) {
 	const url = new URL(request.url);
-	const clauses = ["account_id=?1"];
+	const clauses = ["a.account_id=?1"];
 	const values = [env.BROLLY_ACCOUNT_ID];
 	const family = url.searchParams.get("family");
 	const tier = url.searchParams.get("tier");
 	const search = url.searchParams.get("search")?.trim();
 	if (family) {
 		values.push(family);
-		clauses.push(`family=?${values.length}`);
+		clauses.push(`a.family=?${values.length}`);
 	}
 	if (tier) {
 		values.push(tier);
-		clauses.push(`tier=?${values.length}`);
+		clauses.push(`a.tier=?${values.length}`);
 	}
 	if (search) {
 		values.push(`%${search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
-		clauses.push(`(name LIKE ?${values.length} ESCAPE '\\' OR asset_id LIKE ?${values.length} ESCAPE '\\')`);
+		clauses.push(`(a.name LIKE ?${values.length} ESCAPE '\\' OR a.asset_id LIKE ?${values.length} ESCAPE '\\')`);
 	}
+	const cursor = parseAssetCursor(url.searchParams.get("cursor"));
+	const cursorStart = values.length + 1;
+	values.push(cursor?.[0] ?? null, cursor?.[1] ?? null, cursor?.[2] ?? null, cursor?.[3] ?? null);
 	const requestedLimit = Number(url.searchParams.get("limit") ?? 100);
 	const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(250, Math.floor(requestedLimit))) : 100;
-	values.push(limit);
-	return { assets: (await env.DB.prepare(`SELECT a.*,
-      (SELECT COUNT(*) FROM incidents i WHERE i.account_id=a.account_id AND i.family=a.family AND i.asset_id=a.asset_id AND i.status!='resolved' AND i.metric!='telemetry_coverage') AS incident_count,
-      (SELECT MAX(end_at) FROM metric_samples s WHERE s.account_id=a.account_id AND s.family=a.family AND s.asset_id=a.asset_id) AS last_signal_at
-     FROM assets a WHERE ${clauses.join(" AND ")}
-     ORDER BY incident_count DESC,seen_at DESC LIMIT ?${values.length}`).bind(...values).all()).results.map((row) => ({
-		accountId: String(row.account_id),
-		family: String(row.family),
-		id: String(row.asset_id),
-		parentId: row.parent_id == null ? null : String(row.parent_id),
-		name: row.name == null ? null : String(row.name),
-		scope: String(row.scope),
-		tier: String(row.tier),
-		tags: parseJson(String(row.metadata_json ?? "{}")),
-		discoveredAt: Number(row.discovered_at),
-		seenAt: Number(row.seen_at),
-		incidentCount: Number(row.incident_count),
-		lastSignalAt: row.last_signal_at == null ? null : Number(row.last_signal_at)
-	})) };
+	values.push(limit + 1);
+	const result = await env.DB.prepare(`WITH listed AS (
+       SELECT a.*,parent.name AS parent_name,
+         (SELECT COUNT(*) FROM incidents i WHERE i.account_id=a.account_id AND i.family=a.family AND i.asset_id=a.asset_id AND i.status!='resolved' AND i.metric!='telemetry_coverage') AS incident_count,
+         (SELECT MAX(end_at) FROM metric_samples s WHERE s.account_id=a.account_id AND s.family=a.family AND s.asset_id=a.asset_id) AS last_signal_at
+       FROM assets a LEFT JOIN assets parent
+         ON parent.account_id=a.account_id AND parent.family=a.family AND parent.asset_id=a.parent_id
+       WHERE ${clauses.join(" AND ")}
+     ) SELECT * FROM listed
+     WHERE (?${cursorStart} IS NULL
+       OR incident_count < ?${cursorStart}
+       OR incident_count = ?${cursorStart} AND seen_at < ?${cursorStart + 1}
+       OR incident_count = ?${cursorStart} AND seen_at = ?${cursorStart + 1} AND family > ?${cursorStart + 2}
+       OR incident_count = ?${cursorStart} AND seen_at = ?${cursorStart + 1} AND family = ?${cursorStart + 2} AND asset_id > ?${cursorStart + 3})
+     ORDER BY incident_count DESC,seen_at DESC,family,asset_id LIMIT ?${values.length}`).bind(...values).all();
+	const page = result.results.slice(0, limit);
+	const last = page.at(-1);
+	return {
+		assets: page.map((row) => ({
+			accountId: String(row.account_id),
+			family: String(row.family),
+			id: String(row.asset_id),
+			parentId: row.parent_id == null ? null : String(row.parent_id),
+			parentName: row.parent_name == null ? null : String(row.parent_name),
+			name: row.name == null ? null : String(row.name),
+			scope: String(row.scope),
+			tier: String(row.tier),
+			tags: parseJson(String(row.metadata_json ?? "{}")),
+			discoveredAt: Number(row.discovered_at),
+			seenAt: Number(row.seen_at),
+			incidentCount: Number(row.incident_count),
+			lastSignalAt: row.last_signal_at == null ? null : Number(row.last_signal_at)
+		})),
+		nextCursor: result.results.length > limit && last ? JSON.stringify([
+			Number(last.incident_count),
+			Number(last.seen_at),
+			String(last.family),
+			String(last.asset_id)
+		]) : null
+	};
+}
+function parseAssetCursor(value) {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value);
+		return Array.isArray(parsed) && parsed.length === 4 && Number.isFinite(parsed[0]) && Number.isFinite(parsed[1]) && typeof parsed[2] === "string" && typeof parsed[3] === "string" ? [
+			Number(parsed[0]),
+			Number(parsed[1]),
+			parsed[2],
+			parsed[3]
+		] : null;
+	} catch {
+		return null;
+	}
 }
 function incidentView(row) {
 	const metric = String(row.metric);
@@ -7836,7 +8397,6 @@ function familyLabel(family) {
 		vectorize: "Vectorize",
 		hyperdrive: "Hyperdrive",
 		pages: "Pages",
-		zones: "Zones",
 		images: "Images",
 		stream: "Stream",
 		email: "Email",
@@ -8743,7 +9303,6 @@ function billingFamily(row) {
 		["worker_builds", /worker builds?|build minutes?/],
 		["analytics_engine", /analytics engine/],
 		["log_explorer", /log explorer/],
-		["zones", /zone analytics|bandwidth/],
 		["email", /email routing|email service|email sent/],
 		["workers", /\bworkers?\b/]
 	].find(([, pattern]) => pattern.test(value))?.[0] ?? null;
@@ -8902,6 +9461,7 @@ function emptyStatus(repository, extra) {
 }
 //#endregion
 //#region src/estimated-billable-cost.ts
+var SHARED_BILLING_METERS = Object.fromEntries(PRODUCT_METRIC_CONTRACTS.flatMap((metric) => metric.billingKind === "shared" && metric.sharedBillingMetricId ? [[metric.id, metric.sharedBillingMetricId]] : []));
 /**
 * Gross unit prices used by the existing Workers and Durable Objects
 * collectors in cloudflare.ts. These are deliberately keyed by the full
@@ -8992,7 +9552,6 @@ function estimatedBillableCostBreakdownSeries(points, cycles, allotments, planTi
 * WebSocket messages, for example, consume Durable Objects requests at 20:1.
 */
 function foldBilledVia(metrics) {
-	if (!Object.keys(metrics).some((metricId) => BILLED_VIA[metricId])) return { ...metrics };
 	const folded = { ...metrics };
 	for (const [metricId, target] of Object.entries(BILLED_VIA)) {
 		const value = folded[metricId];
@@ -9000,6 +9559,12 @@ function foldBilledVia(metrics) {
 		delete folded[metricId];
 		const converted = Math.max(0, Number.isFinite(value) ? value : 0) / target.ratio;
 		folded[target.metricId] = (folded[target.metricId] ?? 0) + converted;
+	}
+	for (const [metricId, targetMetricId] of Object.entries(SHARED_BILLING_METERS)) {
+		const value = folded[metricId];
+		if (value === void 0) continue;
+		delete folded[metricId];
+		folded[targetMetricId] = (folded[targetMetricId] ?? 0) + Math.max(0, Number.isFinite(value) ? value : 0);
 	}
 	return folded;
 }
@@ -9029,7 +9594,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const scope = url.searchParams.get("scope") ?? "account";
 	const id = scopeResourceId(accountId, scope);
 	if (!id) return Response.json({ error: "scope must be account, family:<family>, or asset:<family>:<scope>:<id>" }, { status: 400 });
-	const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 120)));
+	const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 90)));
 	const today = new Date(now).toISOString().slice(0, 10);
 	const from = (/* @__PURE__ */ new Date(now - days * 864e5)).toISOString().slice(0, 10);
 	const shard = shardLocation(id);
@@ -9041,7 +9606,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
        WHERE account_id=?1 AND product_family=?2 AND scope_type=?3
          AND resource_hash_bucket=?4 AND local_day>=?5 AND local_day<=?6
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`).bind(accountId, shard.productFamily, shard.scopeType, shard.bucket, from, today).all(),
-		db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping FROM metric_definitions WHERE active=1`).all(),
+		db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key FROM metric_definitions WHERE active=1`).all(),
 		db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`).bind(accountId, now - (days + 31) * 864e5).all(),
 		readPlanState(db)
 	]);
@@ -9076,32 +9641,43 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 	const familyAllotments = family ? includedAllotments.filter((item) => metricFamily(item.metricId) === family) : [];
 	const includedByMetric = new Map(familyAllotments.map((item) => [item.metricId, item.includedPerCycle]));
 	const scopeFamily = family ?? scope.match(/^asset:([^:]+):/)?.[1] ?? null;
-	const visibleDefinitions = definitions.results.filter((definition) => present.has(definition.id) || scope === "account" || definition.id.startsWith(`${scopeFamily}:`));
-	const coverage = await coverageSpansForMetrics(db, accountId, visibleDefinitions.map((item) => item.id), from, today, scope);
+	const scopedDefinitions = definitions.results.filter((definition) => present.has(definition.id) || scope === "account" || definition.id.startsWith(`${scopeFamily}:`));
+	const presentationOrder = new Map(PRODUCT_LIMIT_METRICS.map((metric, index) => [metric.id, index]));
+	const visibleDefinitions = scopedDefinitions.filter((definition) => Boolean(productLimitMetric(definition.id))).sort((left, right) => (presentationOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (presentationOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+	const estimatedCostMetricIds = scopedDefinitions.filter((item) => item.collector_key !== "billing:billable-usage" && !item.metric_key.includes("cost_usd")).map((item) => item.id);
+	const estimatedCoverage = await coverageSpansForMetrics(db, accountId, estimatedCostMetricIds, from, today, scope);
+	const coverage = Object.fromEntries(visibleDefinitions.map((definition) => [definition.id, estimatedCoverage[definition.id] ?? []]));
 	const billingCoverage = (await coverageSpansForMetrics(db, accountId, ["billing:authoritative_usage"], from, today, scope))["billing:authoritative_usage"] ?? [];
 	const metrics = Object.fromEntries(visibleDefinitions.map((definition) => {
+		const presentation = productLimitMetric(definition.id);
 		const included = includedByMetric.get(definition.id);
 		return [definition.id, {
 			key: definition.metric_key,
-			label: definition.display_name,
-			unit: definition.unit,
+			label: presentation.label,
+			unit: presentation.unit,
 			aggregationKind: definition.aggregation_kind,
-			billable: Boolean(definition.billing_mapping) || Boolean(BILLED_VIA[definition.id]),
+			role: presentation.role,
+			productLimit: true,
+			billingKind: presentation.billingKind,
+			...presentation.condition ? { condition: presentation.condition } : {},
+			...presentation.sharedBillingMetricId ? { sharedBillingMetricId: presentation.sharedBillingMetricId } : {},
+			billable: presentation.role === "billable" || presentation.role === "shared_billing",
 			...included === void 0 ? {} : { includedPerCycle: included },
 			...BILLED_VIA[definition.id] ? { billedVia: BILLED_VIA[definition.id] } : {}
 		}];
 	}));
-	const cycleRows = cycles.results.map((cycle) => ({
-		startsAt: cycle.starts_at,
-		endsAt: cycle.ends_at,
-		approximate: cycle.approximate === 1
-	}));
+	const cycleRows = resolvedBillingCycles(cycles.results);
 	const billableCost = scope === "account" || family ? estimatedBillableCostBreakdownSeries(series, cycleRows, scope === "account" ? includedAllotments : familyAllotments, planState.planTier) : {
 		total: [],
 		byMetric: {}
 	};
-	const estimatedCostCoverage = combineCoverageSpans(coverage, visibleDefinitions.filter((item) => Boolean(item.billing_mapping) || Boolean(BILLED_VIA[item.id])).map((item) => item.id), from, today);
+	const estimatedCostCoverage = combineCoverageSpans(estimatedCoverage, estimatedCostMetricIds, from, today);
 	const costCoverage = scope.startsWith("asset:") ? estimatedCostCoverage : alternativeCoverageSpans([billingCoverage, estimatedCostCoverage], from, today);
+	const visibleMetricIds = new Set(visibleDefinitions.map((item) => item.id));
+	const visibleSeries = series.map((point) => ({
+		...point,
+		metrics: Object.fromEntries(Object.entries(point.metrics).filter(([metricId]) => visibleMetricIds.has(metricId)))
+	}));
 	const body = {
 		scope,
 		resourceId: id,
@@ -9109,7 +9685,7 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		today,
 		fromDay: from,
 		metrics,
-		series,
+		series: visibleSeries,
 		coverage,
 		costCoverage,
 		estimatedBillableCostSeries: billableCost.total,
@@ -9120,6 +9696,33 @@ async function usageSeriesResponse(db, accountId, url, now = Date.now()) {
 		planTierSource: planState.planTierSource
 	};
 	return Response.json(body);
+}
+/**
+* Prefer Cloudflare cycle boundaries over provisional calendar cycles. Older
+* Brolly versions derived a missing PayGo end as the next month boundary,
+* which shortened anchor-day cycles. Repair that recognizable shape while
+* reading so existing installations do not draw or calculate overlapping
+* cycles.
+*/
+function resolvedBillingCycles(rows) {
+	const normalized = rows.map((row) => {
+		const startsAt = Number(row.starts_at);
+		let endsAt = Number(row.ends_at);
+		const start = new Date(startsAt);
+		const legacyEnd = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1);
+		if (row.approximate === 0 && start.getUTCDate() !== 1 && endsAt === legacyEnd) {
+			const lastDayNextMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 2, 0)).getUTCDate();
+			endsAt = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(start.getUTCDate(), lastDayNextMonth));
+		}
+		return {
+			startsAt,
+			endsAt,
+			approximate: row.approximate === 1
+		};
+	}).filter((cycle) => Number.isFinite(cycle.startsAt) && Number.isFinite(cycle.endsAt) && cycle.endsAt > cycle.startsAt);
+	const authoritative = normalized.filter((cycle) => !cycle.approximate);
+	const selected = normalized.filter((cycle) => !cycle.approximate || !authoritative.some((exact) => cycle.startsAt < exact.endsAt && cycle.endsAt > exact.startsAt));
+	return [...new Map(selected.map((cycle) => [`${cycle.startsAt}:${cycle.endsAt}`, cycle])).values()].sort((left, right) => left.startsAt - right.startsAt || left.endsAt - right.endsAt);
 }
 function shardLocation(id) {
 	const [, encodedFamily, encodedScope] = id.split(":");
@@ -9193,7 +9796,10 @@ async function usageResponse(db, url) {
 	const from = validDay(url.searchParams.get("from")) ?? "0000-01-01";
 	const to = validDay(url.searchParams.get("to")) ?? "9999-12-31";
 	const [resource, daily, current, definitions, oldest] = await Promise.all([
-		db.prepare(`SELECT * FROM resources WHERE id=?1 LIMIT 1`).bind(resourceId).first(),
+		db.prepare(`SELECT r.*,parent.cloudflare_id AS parent_cloudflare_id,parent.cloudflare_name AS parent_cloudflare_name,
+         parent.name_kind AS parent_name_kind,parent.resource_type AS parent_resource_type
+       FROM resources r LEFT JOIN resources parent ON parent.id=r.parent_resource_id
+       WHERE r.id=?1 LIMIT 1`).bind(resourceId).first(),
 		db.prepare(`SELECT local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,
          authoritative_allocated_cost_usd,completeness,sampling_json,sealed,revision,revised_at
        FROM usage_daily WHERE resource_id=?1 AND local_day>=?2 AND local_day<=?3
@@ -9274,21 +9880,22 @@ async function resourcesResponse(db, accountId, url) {
 	const query = url.searchParams.get("q")?.trim().toLowerCase();
 	const limit = Math.min(MAX_PAGE, Math.max(1, Number(url.searchParams.get("limit") ?? 250)));
 	const cursor = parseResourceCursor(url.searchParams.get("cursor"));
-	const [result, families] = await Promise.all([db.prepare(`SELECT r.*,
+	const [result, families] = await Promise.all([db.prepare(`SELECT r.*,parent.cloudflare_id AS parent_cloudflare_id,parent.cloudflare_name AS parent_cloudflare_name,
+       parent.name_kind AS parent_name_kind,parent.resource_type AS parent_resource_type,
        (SELECT COUNT(*) FROM resources child WHERE child.parent_resource_id=r.id) AS child_count,
        (SELECT MAX(u.revised_at) FROM usage_daily u WHERE u.resource_id=r.id) AS usage_updated_at,
        (SELECT MIN(u.local_day) FROM usage_daily u WHERE u.resource_id=r.id) AS oldest_day,
        (SELECT COUNT(*) FROM alert_instances i WHERE i.target_resource_id=r.id AND i.status='open') AS open_alerts
-     FROM resources r WHERE r.account_id=?1
+     FROM resources r LEFT JOIN resources parent ON parent.id=r.parent_resource_id WHERE r.account_id=?1
        AND (?2 IS NULL OR r.parent_resource_id=?2)
        AND (?3 IS NULL OR r.product_family=?3)
-       AND (?4 IS NULL OR lower(r.display_name) LIKE '%' || ?4 || '%' OR lower(r.cloudflare_id) LIKE '%' || ?4 || '%')
+       AND (?4 IS NULL OR lower(COALESCE(r.cloudflare_name,'')) LIKE '%' || ?4 || '%' OR lower(r.cloudflare_id) LIKE '%' || ?4 || '%')
        AND (?5 IS NULL
          OR r.product_family>?5
          OR r.product_family=?5 AND r.resource_type>?6
-         OR r.product_family=?5 AND r.resource_type=?6 AND r.display_name>?7
-         OR r.product_family=?5 AND r.resource_type=?6 AND r.display_name=?7 AND r.id>?8)
-     ORDER BY r.product_family,r.resource_type,r.display_name,r.id LIMIT ?9`).bind(accountId, parent, family, query, cursor?.[0] ?? null, cursor?.[1] ?? null, cursor?.[2] ?? null, cursor?.[3] ?? null, limit + 1).all(), db.prepare(`SELECT DISTINCT product_family FROM resources WHERE account_id=?1 AND product_family!='account' ORDER BY product_family`).bind(accountId).all()]);
+         OR r.product_family=?5 AND r.resource_type=?6 AND COALESCE(r.cloudflare_name,r.cloudflare_id)>?7
+         OR r.product_family=?5 AND r.resource_type=?6 AND COALESCE(r.cloudflare_name,r.cloudflare_id)=?7 AND r.id>?8)
+     ORDER BY r.product_family,r.resource_type,COALESCE(r.cloudflare_name,r.cloudflare_id),r.id LIMIT ?9`).bind(accountId, parent, family, query, cursor?.[0] ?? null, cursor?.[1] ?? null, cursor?.[2] ?? null, cursor?.[3] ?? null, limit + 1).all(), db.prepare(`SELECT DISTINCT product_family FROM resources WHERE account_id=?1 AND product_family!='account' ORDER BY product_family`).bind(accountId).all()]);
 	const page = result.results.slice(0, limit);
 	const last = page.at(-1);
 	return Response.json({
@@ -9296,7 +9903,7 @@ async function resourcesResponse(db, accountId, url) {
 		nextCursor: result.results.length > limit && last ? JSON.stringify([
 			last.product_family,
 			last.resource_type,
-			last.display_name,
+			last.cloudflare_name ?? last.cloudflare_id,
 			last.id
 		]) : null,
 		families: families.results.map((row) => row.product_family),
@@ -9415,8 +10022,13 @@ async function createBackfill(request, db, accountId, actor) {
 	}, { status: 201 });
 }
 async function rulesResponse(db, accountId) {
-	const [rules, lines] = await Promise.all([db.prepare(`SELECT r.*,target.display_name AS target_display_name,target.resource_type AS target_resource_type
+	const [rules, lines] = await Promise.all([db.prepare(`SELECT r.*,COALESCE(target.cloudflare_name,target.cloudflare_id) AS target_display_name,target.resource_type AS target_resource_type,
+         target.cloudflare_id AS target_cloudflare_id,target.cloudflare_name AS target_cloudflare_name,
+         target.name_kind AS target_name_kind,target.product_family AS target_product_family,
+         parent.cloudflare_id AS target_parent_cloudflare_id,parent.cloudflare_name AS target_parent_cloudflare_name,
+         parent.name_kind AS target_parent_name_kind,parent.resource_type AS target_parent_resource_type
        FROM alert_rules r LEFT JOIN resources target ON target.id=r.target_resource_id
+       LEFT JOIN resources parent ON parent.id=target.parent_resource_id
        WHERE r.account_id=?1 AND r.retired=0 ORDER BY r.created_at,r.id`).bind(accountId).all(), db.prepare(`SELECT l.* FROM alert_lines l JOIN alert_rules r ON r.id=l.alert_rule_id
        WHERE r.account_id=?1 AND r.retired=0 AND l.retired=0
        ORDER BY l.alert_rule_id,l.priority,l.created_at`).bind(accountId).all()]);
@@ -9484,7 +10096,8 @@ async function updateLine(request, db, id, actor) {
 }
 async function instancesResponse(db, accountId, url) {
 	const status = url.searchParams.get("status");
-	const result = await db.prepare(`SELECT i.*,r.metric_definition_id,l.label,l.color,l.priority,target.display_name,target.product_family,target.cloudflare_id
+	const result = await db.prepare(`SELECT i.*,r.metric_definition_id,l.label,l.color,l.priority,target.cloudflare_name,target.name_kind,
+       target.resource_type,target.product_family,target.cloudflare_id
      FROM alert_instances i JOIN alert_rules r ON r.id=i.alert_rule_id
      JOIN alert_lines l ON l.id=i.alert_line_id JOIN resources target ON target.id=i.target_resource_id
      WHERE r.account_id=?1 AND (?2 IS NULL OR i.status=?2)
@@ -9612,7 +10225,15 @@ function mapResource(row) {
 		productFamily: row.product_family,
 		resourceType: row.resource_type,
 		cloudflareId: row.cloudflare_id,
-		displayName: row.display_name,
+		cloudflareName: row.cloudflare_name ?? null,
+		nameKind: row.name_kind,
+		parentIdentity: row.parent_cloudflare_id == null ? null : {
+			cloudflareId: row.parent_cloudflare_id,
+			cloudflareName: row.parent_cloudflare_name ?? null,
+			nameKind: row.parent_name_kind,
+			resourceType: row.parent_resource_type,
+			productFamily: row.product_family
+		},
 		firstSeenAt: row.first_seen_at,
 		lastSeenAt: row.last_seen_at,
 		lastActiveAt: row.last_active_at,
@@ -9682,6 +10303,20 @@ function mapRule(row) {
 		targetResourceId: row.target_resource_id,
 		targetDisplayName: row.target_display_name ?? null,
 		targetResourceType: row.target_resource_type ?? null,
+		targetIdentity: row.target_cloudflare_id == null ? null : {
+			cloudflareId: row.target_cloudflare_id,
+			cloudflareName: row.target_cloudflare_name ?? null,
+			nameKind: row.target_name_kind,
+			resourceType: row.target_resource_type,
+			productFamily: row.target_product_family,
+			parentIdentity: row.target_parent_cloudflare_id == null ? null : {
+				cloudflareId: row.target_parent_cloudflare_id,
+				cloudflareName: row.target_parent_cloudflare_name ?? null,
+				nameKind: row.target_parent_name_kind,
+				resourceType: row.target_parent_resource_type,
+				productFamily: row.target_product_family
+			}
+		},
 		targetSelector: row.target_selector_json ? parseObject(String(row.target_selector_json)) : null,
 		metricDefinitionId: row.metric_definition_id,
 		measurement: row.measurement,
@@ -9793,6 +10428,12 @@ var GRAPHQL_REPORTED_BUDGET_RESERVE = 10;
 var GRAPHQL_BUDGET_DEBIT_SAFETY = 1.25;
 var DEFAULT_UNSEEN_PAGE_UNIT_DEBIT = 16;
 var FRESH_WINDOW_DATASETS = /* @__PURE__ */ new Set(["imagesTransformationsAdaptiveGroups"]);
+var RETIRED_INITIAL_DATASETS = [
+	"httpRequests1dGroups",
+	"httpRequestsAdaptiveGroups",
+	"imagesRequestsAdaptiveGroups",
+	"emailRoutingAdaptiveGroups"
+];
 var MAX_ZONE_BATCH = 10;
 var GRAPHQL_WINDOW_MS = 3e5;
 var INITIAL_LEASE_TTL_MS = 12e4;
@@ -9803,6 +10444,9 @@ var INITIAL_CAPABILITY_KEY_PREFIX = "initial_ingestion_capabilities:";
 var INITIAL_D1_READ_RESERVATION = 1e4;
 var INITIAL_D1_WRITE_RESERVATION = 1e3;
 var INITIAL_REMOTE_WORK_WALL_RESERVE_MS = 12e3;
+var ACTIVITY_PROBE_BUDGET_KEY_SUFFIX = ":activity_probe";
+var ACTIVITY_PROBE_REFERENCE_RANGE_DAYS = 32;
+var ACTIVITY_PROBE_UNKNOWN_CAPACITY_MIN_RANGE_DAYS = 8;
 /** Return whether a Billing Read credential is available without making a network request. */
 async function billingIngestionAvailable(env) {
 	try {
@@ -9885,7 +10529,7 @@ async function ensureInitialIngestionJob(env, options = {}) {
 				onProgress: (values) => saveInitialCapabilities(env.DB, jobId, values, discoveryLedger)
 			});
 			const familyCosts = await initialBillingFamilyCosts(env.DB, env.BROLLY_ACCOUNT_ID);
-			const slices = prioritizeInitialIngestionSlices(initialIngestionSlicePlan(now, billingAvailable, capabilities), familyCosts);
+			const slices = prioritizeInitialIngestionSlices(activityProbeInitialIngestionSlices(initialIngestionSlicePlan(now, billingAvailable, capabilities)), familyCosts);
 			await insertInitialSlices(env.DB, jobId, slices.filter((slice) => slice.collector !== "billing"), now);
 			await saveCoverageIntervals(env.DB, slices.filter((slice) => {
 				return parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt).availability === "unavailable";
@@ -9983,6 +10627,49 @@ function prioritizeInitialIngestionSlices(slices, familyCosts) {
 		};
 	});
 }
+/**
+* Expensive product datasets start with a one-row aggregate for each
+* Cloudflare-supported date range. A range with usage promotes every remaining
+* range for that dataset to detailed collection. Billing, Durable Objects, and
+* Workers retain their dedicated fast lanes.
+*/
+function activityProbeInitialIngestionSlices(slices) {
+	return slices.flatMap((slice) => {
+		if (slice.status !== "pending" || slice.collector === "billing" || slice.collector === "graphql:durable-objects" || slice.collector === "graphql:workers") return slice;
+		const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
+		if (metadata.availability === "unavailable" || metadata.expectedGap) return slice;
+		if (FRESH_WINDOW_DATASETS.has(metadata.dataset)) {
+			const partitions = Math.max(1, metadata.zoneIds.length);
+			const daily = [];
+			for (let endsAt = slice.endsAt; endsAt > slice.startsAt;) {
+				const startsAt = Math.max(slice.startsAt, startOfUtcDay(endsAt - 1));
+				daily.push({
+					...slice,
+					startsAt,
+					endsAt,
+					scopeKey: serializeMetadata({
+						...metadata,
+						units: calendarDays(startsAt, endsAt) * partitions,
+						pageSizeHint: 2,
+						freshGraphqlBudgetRequired: false,
+						activityProbe: true
+					})
+				});
+				endsAt = startsAt;
+			}
+			return daily;
+		}
+		return {
+			...slice,
+			scopeKey: serializeMetadata({
+				...metadata,
+				pageSizeHint: 1,
+				freshGraphqlBudgetRequired: false,
+				activityProbe: true
+			})
+		};
+	});
+}
 async function initialBillingFamilyCosts(db, accountId) {
 	const rows = await db.prepare(`SELECT product_family,SUM(COALESCE(billed_cost,effective_cost,list_cost,0)) AS cost
      FROM billing_line_items WHERE account_id=?1 GROUP BY product_family`).bind(accountId).all();
@@ -10052,6 +10739,7 @@ function capabilityGroups(values) {
 			value.maxDurationSeconds,
 			value.notOlderThanSeconds,
 			value.maxPageSize,
+			value.availableFields?.slice().sort() ?? null,
 			value.state,
 			value.detail
 		]);
@@ -10135,7 +10823,9 @@ async function runInitialIngestion(env, jobId) {
 	if (!await acquireInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder)) return;
 	let quota;
 	try {
+		await supersedeRetiredInitialSlices(env.DB, jobId);
 		await requeueRunningInitialSlices(env.DB, jobId);
+		await updateInitialJobStatus(env.DB, jobId);
 		quota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, jobId, Date.now());
 	} catch (error) {
 		await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
@@ -10335,20 +11025,59 @@ function isInitialClaimWait(result) {
 }
 async function claimInitialSlice(env, budget, quota, jobId, mode) {
 	const persistenceRetry = mode === "persistence_retry" ? 1 : 0;
-	const collectorPredicate = mode === "billing" ? "collector_key='billing'" : "collector_key!='billing'";
-	const candidates = await env.DB.prepare(`SELECT * FROM backfill_slices
-     WHERE backfill_job_id=?1 AND status='pending' AND (next_eligible_at IS NULL OR next_eligible_at<=?2)
+	const collectorPredicate = mode === "billing" ? "candidate.collector_key='billing'" : "candidate.collector_key!='billing'";
+	const eligibilityPredicate = mode === "analytics" ? `(candidate.next_eligible_at IS NULL OR candidate.next_eligible_at<=?2
+       OR COALESCE(json_extract(candidate.scope_key,'$.priority'),10000)<=1
+       OR (COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=1
+         AND COALESCE(json_extract(candidate.scope_key,'$.activityProbe'),0)=0))` : `(candidate.next_eligible_at IS NULL OR candidate.next_eligible_at<=?2)`;
+	const activityProbeEligibilityPredicate = `(
+    COALESCE(json_extract(candidate.scope_key,'$.activityProbe'),0)=0
+    OR NOT EXISTS (
+      SELECT 1 FROM backfill_slices AS active
+      WHERE active.backfill_job_id=candidate.backfill_job_id
+        AND active.status='running'
+        AND COALESCE(json_extract(active.scope_key,'$.activityProbe'),0)=1
+        AND json_extract(active.scope_key,'$.dataset')=json_extract(candidate.scope_key,'$.dataset')
+    )
+  )`;
+	let hasOrdinaryCandidate = false;
+	if (mode === "analytics") {
+		const ordinary = await env.DB.prepare(`SELECT 1 AS present FROM backfill_slices AS candidate
+       WHERE candidate.backfill_job_id=?1 AND candidate.status='pending' AND ${eligibilityPredicate}
+         AND ${collectorPredicate}
+         AND COALESCE(json_extract(candidate.scope_key,'$.persistenceRetry'),0)=?3
+         AND COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=0
+         AND COALESCE(json_extract(candidate.scope_key,'$.detailCalibrationRequired'),0)=0
+         AND ${activityProbeEligibilityPredicate}
+       LIMIT 1`).bind(jobId, Date.now(), persistenceRetry).first();
+		budget.charge("d1RowsRead");
+		hasOrdinaryCandidate = ordinary?.present === 1;
+	}
+	const freshCandidatePredicate = hasOrdinaryCandidate ? `AND (
+       COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=0
+       OR COALESCE(json_extract(candidate.scope_key,'$.detailCalibrationRequired'),0)=1
+       OR COALESCE(json_extract(candidate.scope_key,'$.priority'),10000)<=1
+     )` : "";
+	const candidates = await env.DB.prepare(`SELECT candidate.* FROM backfill_slices AS candidate
+     WHERE candidate.backfill_job_id=?1 AND candidate.status='pending' AND ${eligibilityPredicate}
        AND ${collectorPredicate}
-       AND COALESCE(json_extract(scope_key,'$.persistenceRetry'),0)=?3
-     ORDER BY COALESCE(json_extract(scope_key,'$.priority'),10000),
-       COALESCE(json_array_length(json_extract(scope_key,'$.zoneIds')),0),
-       ends_at DESC,collector_key LIMIT 100`).bind(jobId, Date.now(), persistenceRetry).all();
+       AND COALESCE(json_extract(candidate.scope_key,'$.persistenceRetry'),0)=?3
+       AND ${activityProbeEligibilityPredicate}
+       ${freshCandidatePredicate}
+     ORDER BY COALESCE(json_extract(candidate.scope_key,'$.priority'),10000),
+       COALESCE(json_array_length(json_extract(candidate.scope_key,'$.zoneIds')),0),
+       candidate.ends_at DESC,candidate.collector_key LIMIT 100`).bind(jobId, Date.now(), persistenceRetry).all();
 	budget.charge("d1RowsRead", candidates.results.length);
+	const preparedCandidates = candidates.results.map((candidate) => ({
+		candidate,
+		metadata: parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at)
+	}));
+	const protectedCandidate = mode === "analytics" ? preparedCandidates.find(({ metadata }) => (metadata.priority ?? Number.POSITIVE_INFINITY) <= 1) ?? preparedCandidates.find(({ metadata }) => metadata.detailCalibrationRequired === true && metadata.activityProbe !== true) ?? (!hasOrdinaryCandidate ? preparedCandidates.find(({ metadata }) => metadata.freshGraphqlBudgetRequired === true && metadata.activityProbe !== true) : void 0) : void 0;
+	if (mode === "analytics" && !protectedCandidate) quota.clearProtectedHead();
 	let slice;
 	let metadata;
 	let earliestAdmission;
-	for (const candidate of candidates.results) {
-		const parsed = parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at);
+	for (const { candidate, metadata: parsed } of preparedCandidates) {
 		if (mode !== "billing") {
 			const pageSize = historicalQueryPageSize({
 				dataset: parsed.dataset,
@@ -10358,14 +11087,38 @@ async function claimInitialSlice(env, budget, quota, jobId, mode) {
 				zoneIds: parsed.zoneIds
 			});
 			const logicalQueries = initialSliceLogicalQueries(parsed);
+			const budgetKey = initialGraphqlBudgetKey(parsed, candidate.starts_at, candidate.ends_at);
+			const rangeDays = rangeDurationDays(candidate.starts_at, candidate.ends_at);
+			const protectedHead = candidate.id === protectedCandidate?.candidate.id;
+			if (protectedHead && candidate.next_eligible_at !== null && candidate.next_eligible_at > Date.now()) {
+				quota.deferProtectedHead(candidate.id, logicalQueries, budgetKey, pageSize, candidate.next_eligible_at, rangeDays);
+				if (earliestAdmission !== null) earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, candidate.next_eligible_at);
+				continue;
+			}
 			if (parsed.freshGraphqlBudgetRequired) {
 				const freshAt = quota.freshBudgetAvailableAt;
 				if (freshAt > Date.now()) {
+					if (protectedHead) quota.reserveProtectedHead(candidate.id, logicalQueries, budgetKey, pageSize, freshAt, rangeDays);
 					if (earliestAdmission !== null) earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, freshAt);
 					continue;
 				}
 			}
-			const admission = quota.claimAdmission(rateScope(parsed), logicalQueries, parsed.zoneIds, parsed.dataset, pageSize);
+			if (!protectedHead && protectedCandidate && !quota.canAdmitResidual(logicalQueries, budgetKey, pageSize, rangeDays)) {
+				const protectedAt = quota.protectedHeadAdmitAt;
+				if (protectedAt !== null && earliestAdmission !== null) earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, protectedAt);
+				continue;
+			}
+			if (parsed.activityProbe && quota.shouldSplitActivityProbe(logicalQueries, budgetKey, pageSize)) {
+				await splitSlice(env.DB, candidate, parsed, "available Cloudflare GraphQL scan budget", budget);
+				console.info("brolly.initial_graphql_probe_split", JSON.stringify({
+					dataset: parsed.dataset,
+					startsAt: candidate.starts_at,
+					endsAt: candidate.ends_at,
+					days: calendarDays(candidate.starts_at, candidate.ends_at)
+				}));
+				return claimInitialSlice(env, budget, quota, jobId, mode);
+			}
+			const admission = protectedHead ? quota.claimProtectedAdmission(candidate.id, rateScope(parsed), logicalQueries, parsed.zoneIds, budgetKey, pageSize, rangeDays) : quota.claimAdmission(rateScope(parsed), logicalQueries, parsed.zoneIds, budgetKey, pageSize, rangeDays);
 			if (admission.kind === "quota") continue;
 			if (admission.kind === "paced") {
 				if (admission.waitUntil === null) earliestAdmission ??= null;
@@ -10403,7 +11156,7 @@ async function claimInitialSlice(env, budget, quota, jobId, mode) {
 		budget.charge("d1RowsWritten", persistenceReservation.writes);
 	}
 	const claimedRateScope = mode === "billing" ? null : rateScope(metadata);
-	if (claimedRateScope) quota.reserveClaim(claimedRateScope);
+	if (claimedRateScope) quota.reserveClaim(claimedRateScope, slice.id === protectedCandidate?.candidate.id ? slice.id : null);
 	return {
 		slice,
 		metadata,
@@ -10436,10 +11189,13 @@ async function fetchInitialSlice(env, client, budget, quota, claimed, timeZone) 
 			claimed,
 			usage: await client.historicalUsage({
 				dataset: metadata.dataset,
+				budgetKey: initialGraphqlBudgetKey(metadata, slice.starts_at, slice.ends_at),
 				startsAt: slice.starts_at,
 				endsAt: slice.ends_at,
 				maxPageSize: metadata.pageSizeHint ?? metadata.maxPageSize,
-				zoneIds: metadata.zoneIds
+				availableFields: metadata.availableFields,
+				zoneIds: metadata.zoneIds,
+				activityProbe: metadata.activityProbe
 			})
 		};
 	} catch (error) {
@@ -10447,14 +11203,13 @@ async function fetchInitialSlice(env, client, budget, quota, claimed, timeZone) 
 			claimed,
 			error
 		};
-	} finally {
-		if (claimed.rateScope && quota) quota.releaseClaim(claimed.rateScope);
 	}
 }
 async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claimed, fetched, updateJob = true, quota = null) {
 	const slice = claimed.slice;
 	const metadata = claimed.metadata;
 	const budgetAbortedAtEntry = budget.signal.aborted;
+	let completedGapDetail = null;
 	releasePersistenceReservation(budget, claimed);
 	try {
 		if (slice.collector_key === "billing") {
@@ -10472,6 +11227,13 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 			if (!result) throw new Error("Historical Analytics returned no result");
 			if (result.zoneGaps?.length && metadata.zoneIds.length) {
 				await splitZoneGapSlice(env.DB, env.BROLLY_ACCOUNT_ID, slice, metadata, result.zoneGaps, budget);
+				if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
+				return true;
+			}
+			const activityDetected = !result.complete || result.samples.some((sample) => Math.abs(sample.value) > 0);
+			const probeIsDailyAccountAggregate = metadata.activityProbe && FRESH_WINDOW_DATASETS.has(metadata.dataset) && calendarDays(slice.starts_at, slice.ends_at) === 1;
+			if (metadata.activityProbe && activityDetected && !probeIsDailyAccountAggregate) {
+				await promoteActivityProbe(env.DB, slice, metadata, budget);
 				if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
 				return true;
 			}
@@ -10494,13 +11256,28 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 				if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
 				return true;
 			}
-			await saveDatasetSliceCoverage(env, slice, metadata, "measured", void 0, budget);
-			if (metadata.freshGraphqlBudgetRequired && quota?.hasReliableDebit(metadata.dataset)) {
+			await saveResultSliceCoverage(env, slice, metadata, result.coverage, budget);
+			const unavailableMetrics = result.coverage.filter((item) => item.state !== "healthy" && item.state !== "delayed").map((item) => item.metric);
+			if (unavailableMetrics.length) {
+				completedGapDetail = `Cloudflare omitted required metric data: ${unavailableMetrics.join(", ")}`;
+				chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices SET scope_key=?2,updated_at=?3 WHERE id=?1`).bind(slice.id, serializeMetadata({
+					...metadata,
+					unavailableMetrics,
+					terminalGap: true
+				}), Date.now()).run()).meta);
+			}
+			if ((metadata.freshGraphqlBudgetRequired || metadata.detailCalibrationRequired) && quota?.hasReliableDebit(initialGraphqlBudgetKey(metadata))) {
 				const relaxed = await env.DB.prepare(`UPDATE backfill_slices
-           SET scope_key=json_set(scope_key,'$.freshGraphqlBudgetRequired',json('false')),updated_at=?3
-           WHERE backfill_job_id=?1 AND status='pending'
+           SET scope_key=json_remove(
+             json_set(scope_key,'$.freshGraphqlBudgetRequired',json('false')),
+             '$.detailCalibrationRequired'
+           ),updated_at=?3
+           WHERE backfill_job_id=?1
              AND json_extract(scope_key,'$.dataset')=?2
-             AND COALESCE(json_extract(scope_key,'$.freshGraphqlBudgetRequired'),0)=1`).bind(slice.backfill_job_id, metadata.dataset, Date.now()).run();
+             AND (
+               COALESCE(json_extract(scope_key,'$.freshGraphqlBudgetRequired'),0)=1
+               OR COALESCE(json_extract(scope_key,'$.detailCalibrationRequired'),0)=1
+             )`).bind(slice.backfill_job_id, metadata.dataset, Date.now()).run();
 				chargeMeta(budget, relaxed.meta);
 				if (Number(relaxed.meta.changes ?? 0) > 0) console.info("brolly.initial_graphql_measured_pacing", JSON.stringify({
 					dataset: metadata.dataset,
@@ -10508,7 +11285,7 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 				}));
 			}
 		}
-		await finishSlice(env.DB, budget, slice.id, "complete", null, "complete");
+		await finishSlice(env.DB, budget, slice.id, "complete", completedGapDetail, completedGapDetail ? "partial" : "complete");
 		if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
 		return true;
 	} catch (error) {
@@ -10522,24 +11299,29 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 					startsAt: slice.starts_at,
 					endsAt: slice.ends_at
 				}));
-				await env.DB.prepare(`UPDATE backfill_slices SET status='pending',scope_key=?2,error=?3,next_eligible_at=?4,
-            coverage_status='missing',updated_at=?5 WHERE id=?1`).bind(slice.id, serializeMetadata({
-					...metadata,
-					freshGraphqlBudgetRequired: true
-				}), error.message.slice(0, 2e3), Math.max(now + 1e3, error.retryAt), now).run();
+				chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices
+           SET scope_key=json_remove(
+             json_set(scope_key,'$.freshGraphqlBudgetRequired',json('true')),
+             '$.detailCalibrationRequired'
+           ),updated_at=?4
+           WHERE backfill_job_id=?1
+             AND json_extract(scope_key,'$.dataset')=?2
+             AND (status='pending' OR id=?3)`).bind(slice.backfill_job_id, metadata.dataset, slice.id, now).run()).meta);
+				chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices SET status='pending',error=?2,retry_count=retry_count+1,next_eligible_at=?3,
+            coverage_status='missing',updated_at=?4 WHERE id=?1`).bind(slice.id, error.message.slice(0, 2e3), Math.max(now + 1e3, error.retryAt), now).run()).meta);
 				if (updateJob) await updateInitialJobStatus(env.DB, jobId);
 				return false;
 			}
-			if (oversizedQuery && slice.ends_at - slice.starts_at > DAY_MS && graphqlBudgetFailures >= 4) {
-				const detail = "Cloudflare's GraphQL budget could not return this dataset after progressively smaller ranges.";
-				console.warn("brolly.initial_graphql_unavailable", JSON.stringify({
+			if (oversizedQuery && metadata.zoneIds.length > 1) {
+				console.info("brolly.initial_graphql_zone_split", JSON.stringify({
 					dataset: metadata.dataset,
-					startsAt: slice.starts_at,
-					endsAt: slice.ends_at,
-					reason: "repeated_range_budget_exhaustion",
+					zones: metadata.zoneIds.length,
 					failures: graphqlBudgetFailures
 				}));
-				await markDatasetBudgetUnavailable(env, slice.backfill_job_id, metadata.dataset, detail, budget);
+				await splitOversizedZoneBatches(env.DB, slice, {
+					...metadata,
+					graphqlBudgetFailures
+				}, budget);
 				if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
 				return false;
 			}
@@ -10566,10 +11348,7 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 					endsAt: slice.ends_at,
 					reason: "single_day_budget_exhausted"
 				}));
-				await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", detail, budget);
-				await markSliceTerminalGap(env.DB, slice, metadata, detail, budget);
-				await finishSlice(env.DB, budget, slice.id, "failed", detail, "missing");
-				if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
+				await terminateInitialDatasetSlices(env, slice.backfill_job_id, metadata.dataset, detail, budget);
 				return false;
 			}
 			await env.DB.prepare(`UPDATE backfill_slices SET status='pending',error=?2,retry_count=retry_count+?3,next_eligible_at=?4,
@@ -10628,7 +11407,35 @@ async function finalizeInitialSlice(env, ledger, budget, jobId, timeZone, claime
 		chargeMeta(budget, (await env.DB.prepare(`UPDATE backfill_slices SET status=?2,error=?3,retry_count=?4,next_eligible_at=?5,coverage_status='missing',updated_at=?6 WHERE id=?1`).bind(slice.id, failed ? "failed" : "pending", errorMessage$1(error).slice(0, 2e3), retryCount, nextEligibleAt, Date.now()).run()).meta);
 		if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
 		return true;
+	} finally {
+		if (claimed.rateScope && quota) quota.releaseClaim(claimed.rateScope);
 	}
+}
+async function promoteActivityProbe(db, slice, metadata, budget) {
+	const now = Date.now();
+	const promoted = await db.prepare(`UPDATE backfill_slices
+     SET status='pending',
+       scope_key=json_remove(
+         json_set(
+           scope_key,
+           '$.freshGraphqlBudgetRequired',json(?5),
+           '$.detailCalibrationRequired',json('true')
+         ),
+         '$.pageSizeHint','$.graphqlBudgetFailures','$.activityProbe'
+       ),
+       error=NULL,retry_count=0,next_eligible_at=?3,coverage_status='missing',updated_at=?3
+     WHERE backfill_job_id=?1
+       AND json_extract(scope_key,'$.dataset')=?2
+       AND COALESCE(json_extract(scope_key,'$.activityProbe'),0)=1
+       AND (status='pending' OR id=?4)`).bind(slice.backfill_job_id, metadata.dataset, now, slice.id, FRESH_WINDOW_DATASETS.has(metadata.dataset) ? "true" : "false").run();
+	if (budget) chargeMeta(budget, promoted.meta);
+	console.info("brolly.initial_graphql_activity_detected", JSON.stringify({
+		dataset: metadata.dataset,
+		startsAt: slice.starts_at,
+		endsAt: slice.ends_at,
+		zones: metadata.zoneIds.length,
+		promotedSlices: Number(promoted.meta.changes ?? 0)
+	}));
 }
 async function splitZoneGapSlice(db, accountId, slice, metadata, gaps, budget) {
 	const gapByZone = new Map(gaps.map((gap) => [gap.zoneId, gap]));
@@ -10688,22 +11495,66 @@ async function splitSlice(db, slice, metadata, reason, budget, subdivisions = 2)
 async function splitOversizedDatasetRanges(db, slice, metadata, budget) {
 	const failedDuration = slice.ends_at - slice.starts_at;
 	const subdivisions = metadata.graphqlBudgetFailures === 1 ? 4 : 2;
-	await splitSlice(db, slice, metadata, "Cloudflare GraphQL query budget", budget, subdivisions);
+	await splitSlice(db, slice, resetGraphqlShape(metadata), "Cloudflare GraphQL query budget", budget, subdivisions);
 	const siblings = await db.prepare(`SELECT * FROM backfill_slices
      WHERE backfill_job_id=?1 AND status='pending'
        AND json_extract(scope_key,'$.dataset')=?2
        AND ends_at-starts_at>?3 AND ends_at-starts_at>=?4
      ORDER BY ends_at DESC LIMIT 20`).bind(slice.backfill_job_id, metadata.dataset, DAY_MS, Math.max(86400001, failedDuration - DAY_MS)).all();
 	budget.charge("d1RowsRead", siblings.results.length);
-	for (const sibling of siblings.results) await splitSlice(db, sibling, {
-		...parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at),
-		graphqlBudgetFailures: metadata.graphqlBudgetFailures
-	}, "same dataset's observed GraphQL query budget", budget, subdivisions);
+	for (const sibling of siblings.results) await splitSlice(db, sibling, resetGraphqlShape(parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at)), "same dataset's observed GraphQL query budget", budget, subdivisions);
 	if (siblings.results.length) console.info("brolly.initial_graphql_sibling_splits", JSON.stringify({
 		dataset: metadata.dataset,
 		count: siblings.results.length,
 		minimumDurationMs: Math.max(86400001, failedDuration - DAY_MS)
 	}));
+}
+async function splitOversizedZoneBatches(db, slice, metadata, budget) {
+	const failedZoneCount = metadata.zoneIds.length;
+	await splitZoneSlice(db, slice, resetGraphqlShape(metadata), "Cloudflare GraphQL query budget", budget);
+	const siblings = await db.prepare(`SELECT * FROM backfill_slices
+     WHERE backfill_job_id=?1 AND status='pending'
+       AND json_extract(scope_key,'$.dataset')=?2
+       AND json_array_length(json_extract(scope_key,'$.zoneIds'))>=?3
+     ORDER BY ends_at DESC LIMIT 100`).bind(slice.backfill_job_id, metadata.dataset, failedZoneCount).all();
+	budget.charge("d1RowsRead", siblings.results.length);
+	for (const sibling of siblings.results) {
+		const siblingMetadata = parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at);
+		if (siblingMetadata.zoneIds.length <= 1) continue;
+		await splitZoneSlice(db, sibling, resetGraphqlShape(siblingMetadata), "same dataset's observed GraphQL query budget", budget);
+	}
+	if (siblings.results.length) console.info("brolly.initial_graphql_zone_sibling_splits", JSON.stringify({
+		dataset: metadata.dataset,
+		count: siblings.results.length,
+		failedZoneCount
+	}));
+}
+async function splitZoneSlice(db, slice, metadata, reason, budget) {
+	const middle = Math.ceil(metadata.zoneIds.length / 2);
+	const partitions = [metadata.zoneIds.slice(0, middle), metadata.zoneIds.slice(middle)].filter((values) => values.length > 0);
+	if (partitions.length < 2) throw new Error("A zone slice requires at least two zones before splitting");
+	const now = Date.now();
+	let assignedUnits = 0;
+	const results = await db.batch([db.prepare(`UPDATE backfill_slices SET status='superseded',error=?2,updated_at=?3 WHERE id=?1`).bind(slice.id, `Zone batch split after reaching the ${reason}`, now), ...partitions.map((zoneIds, index) => {
+		const units = index === partitions.length - 1 ? metadata.units - assignedUnits : Math.max(1, Math.round(metadata.units * zoneIds.length / metadata.zoneIds.length));
+		assignedUnits += units;
+		return db.prepare(`INSERT OR IGNORE INTO backfill_slices(
+           id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at
+         ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',?7)`).bind(crypto.randomUUID(), slice.backfill_job_id, slice.collector_key, serializeMetadata({
+			...metadata,
+			zoneIds,
+			units
+		}), slice.starts_at, slice.ends_at, now);
+	})]);
+	for (const result of results) chargeMeta(budget, result.meta);
+}
+function resetGraphqlShape(metadata) {
+	return {
+		...metadata,
+		graphqlBudgetFailures: void 0,
+		freshGraphqlBudgetRequired: true,
+		detailCalibrationRequired: void 0
+	};
 }
 function resourcePageShape(dataset) {
 	const spec = HISTORICAL_DATASETS.find((candidate) => candidate.dataset === dataset);
@@ -10773,30 +11624,6 @@ async function updatePendingResourcePageHints(db, accountId, jobId, dataset, bud
 		updatedSlices: statements.length
 	}));
 }
-async function markDatasetBudgetUnavailable(env, jobId, dataset, detail, budget) {
-	const rows = await env.DB.prepare(`SELECT * FROM backfill_slices
-     WHERE backfill_job_id=?1 AND status IN ('pending','running')
-       AND json_extract(scope_key,'$.dataset')=?2
-     ORDER BY starts_at LIMIT 100`).bind(jobId, dataset).all();
-	budget.charge("d1RowsRead", rows.results.length);
-	for (const row of rows.results) {
-		const metadata = parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at);
-		const unavailable = serializeMetadata({
-			...metadata,
-			availability: "unavailable",
-			terminalGap: true,
-			expectedGap: false
-		});
-		const result = await env.DB.prepare(`UPDATE backfill_slices SET status='failed',scope_key=?2,error=?3,next_eligible_at=NULL,
-         coverage_status='missing',updated_at=?4 WHERE id=?1 AND status IN ('pending','running')`).bind(row.id, unavailable, detail, Date.now()).run();
-		chargeMeta(budget, result.meta);
-		if (Number(result.meta.changes ?? 0) === 1) await saveDatasetSliceCoverage(env, row, {
-			...metadata,
-			availability: "unavailable",
-			terminalGap: true
-		}, "unavailable", detail, budget);
-	}
-}
 /** Split a dense range while preserving its exact progress denominator. */
 function bisectInitialIngestionRange(startsAt, endsAt, partitions) {
 	return bisectRangeWithUnits(startsAt, endsAt, partitions, calendarDays(startsAt, endsAt) * Math.max(1, partitions));
@@ -10816,7 +11643,8 @@ function bisectRangeWithUnits(startsAt, endsAt, partitions, totalUnits) {
 	}];
 }
 async function finishSlice(db, budget, id, status, error, coverage) {
-	chargeMeta(budget, (await db.prepare(`UPDATE backfill_slices SET status=?2,error=?3,next_eligible_at=NULL,coverage_status=?4,updated_at=?5 WHERE id=?1`).bind(id, status, error, coverage, Date.now()).run()).meta);
+	chargeMeta(budget, (await db.prepare(`UPDATE backfill_slices SET status=?2,error=?3,next_eligible_at=NULL,coverage_status=?4,updated_at=?5
+     WHERE id=?1 AND status='running'`).bind(id, status, error, coverage, Date.now()).run()).meta);
 }
 async function markSliceTerminalGap(db, slice, metadata, reason, budget) {
 	const result = await db.prepare(`UPDATE backfill_slices SET scope_key=?2,error=COALESCE(error,?3),updated_at=?4 WHERE id=?1`).bind(slice.id, serializeMetadata({
@@ -10825,6 +11653,46 @@ async function markSliceTerminalGap(db, slice, metadata, reason, budget) {
 		terminalGap: true
 	}), reason.slice(0, 2e3), Date.now()).run();
 	if (budget) chargeMeta(budget, result.meta);
+}
+/** A dataset that cannot return one day cannot complete any remaining range. */
+async function terminateInitialDatasetSlices(env, jobId, dataset, reason, budget) {
+	const updatedAt = Date.now();
+	const result = await env.DB.prepare(`UPDATE backfill_slices
+     SET status='failed',
+         scope_key=json_set(scope_key,'$.availability','unavailable','$.terminalGap',json('true')),
+         coverage_status='missing',error=COALESCE(error,?3),updated_at=?4
+     WHERE backfill_job_id=?1 AND status IN ('pending','running')
+       AND json_extract(scope_key,'$.dataset')=?2`).bind(jobId, dataset, reason.slice(0, 2e3), updatedAt).run();
+	const count = Number(result.meta.changes ?? 0);
+	await updateInitialJobStatus(env.DB, jobId);
+	if (count > 0) console.warn("brolly.initial_graphql_dataset_terminated", JSON.stringify({
+		dataset,
+		slices: count,
+		reason
+	}));
+	try {
+		chargeMeta(budget, result.meta);
+		const slices = await env.DB.prepare(`SELECT id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,error
+       FROM backfill_slices
+       WHERE backfill_job_id=?1 AND status='failed' AND updated_at=?3
+         AND json_extract(scope_key,'$.dataset')=?2`).bind(jobId, dataset, updatedAt).all();
+		budget.charge("d1RowsRead", slices.results.length);
+		await saveCoverageIntervals(env.DB, slices.results.flatMap((item) => {
+			const itemMetadata = parseSliceMetadata(item.scope_key, item.starts_at, item.ends_at);
+			return (itemMetadata.zoneIds.length ? itemMetadata.zoneIds : [""]).map((scopeKey) => ({
+				accountId: env.BROLLY_ACCOUNT_ID,
+				dataset: itemMetadata.dataset,
+				scopeKey,
+				startsAt: item.starts_at,
+				endsAt: item.ends_at,
+				state: "unavailable",
+				reason
+			}));
+		}), budget);
+	} catch (error) {
+		if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) return;
+		throw error;
+	}
 }
 async function updateInitialJobStatus(db, jobId, budget) {
 	const result = await db.prepare(`UPDATE backfill_jobs SET status=CASE
@@ -10836,7 +11704,7 @@ async function updateInitialJobStatus(db, jobId, budget) {
 }
 function rangeSlices(collector, dataset, zoneIds, now, setting) {
 	const retentionDays = Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86400)));
-	const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, Math.max(1, Math.floor(setting.maxDurationSeconds / 86400)), setting.maxPageSize);
+	const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, Math.max(1, Math.floor(setting.maxDurationSeconds / 86400)), setting.maxPageSize, setting.availableFields);
 	if (retentionDays >= HISTORY_DAYS) return ranges;
 	return [gapRange(collector, dataset, zoneIds, historyStart(now, HISTORY_DAYS), historyStart(now, retentionDays), `Cloudflare retains ${retentionDays} days for this dataset.`, true), ...ranges];
 }
@@ -10851,10 +11719,30 @@ function initialIngestionDays(job, rows) {
 	let gaps = 0;
 	const errors = [];
 	let failedWindows = 0;
+	const issueGroups = /* @__PURE__ */ new Map();
 	for (const row of rows) {
-		if (row.status !== "failed") continue;
-		failedWindows += 1;
-		if (row.error && !errors.includes(row.error) && errors.length < 3) errors.push(row.error);
+		const metadata = parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at);
+		if (row.status === "failed") {
+			failedWindows += 1;
+			if (row.error && !errors.includes(row.error) && errors.length < 3) errors.push(row.error);
+		}
+		if (metadata.expectedGap || row.status !== "failed" && !metadata.terminalGap) continue;
+		const current = issueGroups.get(metadata.dataset) ?? {
+			dataset: metadata.dataset,
+			label: HISTORICAL_DATASETS.find((spec) => spec.dataset === metadata.dataset)?.label ?? collectorLabel(row.collector_key),
+			startsAt: row.starts_at,
+			endsAt: row.ends_at,
+			days: /* @__PURE__ */ new Set(),
+			zoneIds: /* @__PURE__ */ new Set(),
+			account: metadata.zoneIds.length === 0,
+			reason: row.error ?? "Cloudflare did not return this history."
+		};
+		current.startsAt = Math.min(current.startsAt, row.starts_at);
+		current.endsAt = Math.max(current.endsAt, row.ends_at);
+		current.account ||= metadata.zoneIds.length === 0;
+		for (const zoneId of metadata.zoneIds) current.zoneIds.add(zoneId);
+		for (let at = startOfUtcDay(row.starts_at); at < row.ends_at; at += DAY_MS) current.days.add(new Date(at).toISOString().slice(0, 10));
+		issueGroups.set(metadata.dataset, current);
 	}
 	for (let offset = 0; offset < total; offset += 1) {
 		const dayStart = start + offset * DAY_MS;
@@ -10874,13 +11762,24 @@ function initialIngestionDays(job, rows) {
 		if (active) pending += 1;
 		else if (!failed) complete += 1;
 	}
+	const issues = [...issueGroups.values()].map((issue) => ({
+		dataset: issue.dataset,
+		label: issue.label,
+		fromDay: new Date(issue.startsAt).toISOString().slice(0, 10),
+		toDay: new Date(Math.max(issue.startsAt, issue.endsAt - 1)).toISOString().slice(0, 10),
+		affectedDays: issue.days.size,
+		affectedScopes: issue.account ? null : issue.zoneIds.size,
+		scope: issue.account ? "account" : "zones",
+		reason: issue.reason
+	})).sort((left, right) => left.label.localeCompare(right.label));
 	return {
 		total,
 		complete,
 		pending,
 		gaps,
 		failedWindows,
-		errors
+		errors,
+		issues
 	};
 }
 function emptyInitialIngestionReadiness() {
@@ -10905,8 +11804,9 @@ function initialIngestionReadiness(jobStatus, rows) {
 	const accountActive = accountRows.some((item) => item.row.status === "pending" || item.row.status === "running") || accountRows.length === 0 && activeJob;
 	const accountUsable = accountRows.some((item) => item.row.status === "complete" && item.metadata.availability !== "unavailable" && !item.metadata.expectedGap);
 	const accountUnexpected = accountRows.some((item) => !item.metadata.expectedGap && (item.row.status === "failed" || item.metadata.terminalGap));
-	const account = billing === "pending" || accountActive ? "pending" : accountUsable && !accountUnexpected ? "ready" : "limited";
-	const families = [...new Set(HISTORICAL_DATASETS.map((spec) => spec.family))];
+	const account = billing === "pending" || accountActive ? "pending" : accountUnexpected ? "limited" : billing === "ready" || accountUsable ? "ready" : "limited";
+	const productContracts = PRODUCT_METRIC_CONTRACTS.filter((contract) => contract.productLimit);
+	const families = [...new Set(productContracts.map((contract) => contract.family))];
 	const rowsByFamily = /* @__PURE__ */ new Map();
 	for (const item of parsedRows) {
 		const family = specByDataset.get(item.metadata.dataset)?.family;
@@ -10917,17 +11817,32 @@ function initialIngestionReadiness(jobStatus, rows) {
 	}
 	const products = {};
 	for (const family of families) {
+		const contracts = productContracts.filter((contract) => contract.family === family);
 		const parsed = rowsByFamily.get(family) ?? [];
 		const totalUnits = parsed.reduce((sum, item) => sum + item.metadata.units, 0);
 		const processedUnits = parsed.reduce((sum, item) => item.row.status === "complete" || item.row.status === "failed" ? sum + item.metadata.units : sum, 0);
-		const active = parsed.some((item) => item.row.status === "pending" || item.row.status === "running");
-		const usable = parsed.some((item) => item.row.status === "complete" && item.metadata.availability !== "unavailable" && !item.metadata.expectedGap);
 		const unexpected = parsed.filter((item) => !item.metadata.expectedGap && (item.row.status === "failed" || item.metadata.terminalGap));
-		const state = active || parsed.length === 0 && activeJob ? "importing" : usable && unexpected.length > 0 ? "limited" : usable ? "ready" : "unavailable";
+		const unavailableMetricErrors = new Set(parsed.flatMap((item) => item.metadata.unavailableMetrics ?? []));
+		const metricStates = contracts.map((contract) => {
+			const specs = HISTORICAL_DATASETS.filter((spec) => spec.family === family && (spec.source?.metrics.some((metric) => metric.metric === contract.metricKey) ?? true));
+			const datasets = new Set(specs.map((spec) => spec.dataset));
+			const metricRows = parsed.filter((item) => datasets.has(item.metadata.dataset));
+			const graphqlSource = specs.length > 0;
+			const graphqlActive = metricRows.some((item) => item.row.status === "pending" || item.row.status === "running") || graphqlSource && metricRows.length === 0 && activeJob;
+			const graphqlUsable = metricRows.some((item) => item.row.status === "complete" && item.metadata.availability !== "unavailable" && !item.metadata.expectedGap && !item.metadata.unavailableMetrics?.includes(contract.metricKey));
+			const graphqlUnexpected = metricRows.some((item) => !item.metadata.expectedGap && (item.row.status === "failed" || item.metadata.unavailableMetrics?.includes(contract.metricKey) || item.metadata.terminalGap && !item.metadata.unavailableMetrics?.length));
+			const billingSource = contract.historySource === "billing" || contract.historySource === "graphql_or_billing";
+			if (billingSource && billing === "ready") return "ready";
+			if (graphqlActive) return "importing";
+			if (graphqlUsable) return graphqlUnexpected ? "limited" : "ready";
+			if (billingSource && billing === "pending") return "importing";
+			return "unavailable";
+		});
+		const state = metricStates.some((value) => value === "importing") ? "importing" : metricStates.every((value) => value === "ready") ? "ready" : metricStates.some((value) => value === "ready" || value === "limited") ? "limited" : "unavailable";
 		products[family] = {
 			state,
-			percent: totalUnits > 0 ? Math.round(Math.min(totalUnits, processedUnits) / totalUnits * 100) : state === "importing" ? 0 : 100,
-			errors: unexpected.length
+			percent: totalUnits > 0 ? Math.round(Math.min(totalUnits, processedUnits) / totalUnits * 100) : state === "ready" ? 100 : 0,
+			errors: unexpected.filter((item) => !item.metadata.unavailableMetrics?.length).length + unavailableMetricErrors.size
 		};
 	}
 	return {
@@ -10936,7 +11851,7 @@ function initialIngestionReadiness(jobStatus, rows) {
 		products
 	};
 }
-function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, maxPageSize) {
+function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, maxPageSize, availableFields) {
 	const startsAt = startOfUtcDay(now) - (retentionDays - 1) * DAY_MS;
 	const slices = [];
 	for (let end = now; end > startsAt;) {
@@ -10952,6 +11867,7 @@ function boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays,
 				dataset,
 				zoneIds,
 				maxPageSize,
+				...availableFields === void 0 ? {} : { availableFields },
 				units,
 				availability: "available",
 				freshGraphqlBudgetRequired: FRESH_WINDOW_DATASETS.has(dataset)
@@ -10998,6 +11914,18 @@ async function saveDatasetSliceCoverage(env, slice, metadata, state, reason, bud
 		reason
 	})), budget);
 }
+async function saveResultSliceCoverage(env, slice, metadata, coverage, budget) {
+	const scopes = metadata.zoneIds.length ? metadata.zoneIds : [""];
+	await saveCoverageIntervals(env.DB, coverage.flatMap((item) => scopes.map((scopeKey) => ({
+		accountId: env.BROLLY_ACCOUNT_ID,
+		dataset: metricCoverageDataset(metadata.dataset, item.metric),
+		scopeKey,
+		startsAt: slice.starts_at,
+		endsAt: slice.ends_at,
+		state: item.state === "healthy" ? "measured" : item.state === "delayed" ? "partial" : "unavailable",
+		reason: item.detail
+	}))), budget);
+}
 function parseSliceMetadata(value, startsAt, endsAt) {
 	try {
 		const parsed = JSON.parse(value);
@@ -11006,16 +11934,20 @@ function parseSliceMetadata(value, startsAt, endsAt) {
 			dataset: parsed.dataset,
 			zoneIds: Array.isArray(parsed.zoneIds) ? parsed.zoneIds.filter((item) => typeof item === "string") : [],
 			maxPageSize: Number.isFinite(parsed.maxPageSize) ? Number(parsed.maxPageSize) : 1e4,
+			availableFields: Array.isArray(parsed.availableFields) ? parsed.availableFields.filter((item) => typeof item === "string") : void 0,
 			units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt),
 			family: typeof parsed.family === "string" ? parsed.family : void 0,
 			priority: Number.isFinite(parsed.priority) ? Number(parsed.priority) : void 0,
 			pageSizeHint: Number.isFinite(parsed.pageSizeHint) ? Math.max(1, Math.min(1e4, Math.floor(Number(parsed.pageSizeHint)))) : void 0,
 			graphqlBudgetFailures: Number.isFinite(parsed.graphqlBudgetFailures) ? Math.max(0, Math.floor(Number(parsed.graphqlBudgetFailures))) : void 0,
 			freshGraphqlBudgetRequired: parsed.freshGraphqlBudgetRequired === true,
+			detailCalibrationRequired: parsed.detailCalibrationRequired === true,
 			availability: parsed.availability === "unavailable" ? "unavailable" : parsed.availability === "available" ? "available" : void 0,
+			unavailableMetrics: Array.isArray(parsed.unavailableMetrics) ? parsed.unavailableMetrics.filter((item) => typeof item === "string") : void 0,
 			terminalGap: parsed.terminalGap === true,
 			expectedGap: parsed.expectedGap === true,
-			persistenceRetry: parsed.persistenceRetry === true
+			persistenceRetry: parsed.persistenceRetry === true,
+			activityProbe: parsed.activityProbe === true
 		};
 	} catch {}
 	return {
@@ -11028,6 +11960,17 @@ function parseSliceMetadata(value, startsAt, endsAt) {
 }
 function serializeMetadata(value) {
 	return JSON.stringify(value);
+}
+function initialGraphqlBudgetKey(metadata, startsAt, endsAt) {
+	return metadata.activityProbe ? `${metadata.dataset}${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:${rangeDurationDays(startsAt ?? 0, endsAt ?? DAY_MS)}` : metadata.dataset;
+}
+function isActivityProbeBudgetKey(budgetKey) {
+	return budgetKey.includes(`${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:`);
+}
+function activityProbeRangeDays(budgetKey) {
+	if (!isActivityProbeBudgetKey(budgetKey)) return null;
+	const days = Number(budgetKey.slice(budgetKey.lastIndexOf(":") + 1));
+	return Number.isFinite(days) ? Math.max(1, Math.floor(days)) : null;
 }
 function sliceUnits(scopeKey, startsAt, endsAt) {
 	return parseSliceMetadata(scopeKey, startsAt, endsAt).units;
@@ -11045,6 +11988,9 @@ function startOfUtcDay(timestamp) {
 }
 function calendarDays(startsAt, endsAt) {
 	return Math.max(1, Math.ceil((endsAt - startOfUtcDay(startsAt)) / DAY_MS));
+}
+function rangeDurationDays(startsAt, endsAt) {
+	return Math.max(1, Math.ceil((endsAt - startsAt) / DAY_MS));
 }
 function splitPoint(startsAt, endsAt) {
 	const days = calendarDays(startsAt, endsAt);
@@ -11067,6 +12013,7 @@ var InitialGraphqlQuota = class {
 	inFlightClaims = /* @__PURE__ */ new Set();
 	admissionTails = /* @__PURE__ */ new Map();
 	claimWaiters = /* @__PURE__ */ new Set();
+	activeProtectedClaimKey = null;
 	runBudget = null;
 	constructor(state, baseSharedLimit) {
 		this.state = state;
@@ -11114,22 +12061,29 @@ var InitialGraphqlQuota = class {
 		if (!lastAdmission || !this.state.sharedNextAdmissionAt) return GRAPHQL_MIN_QUERY_INTERVAL_MS;
 		return Math.max(GRAPHQL_MIN_QUERY_INTERVAL_MS, this.state.sharedNextAdmissionAt - lastAdmission.admittedAt);
 	}
-	canCharge(scope, logicalQueries, budgetKey = "", pageSize) {
+	canCharge(scope, logicalQueries, budgetKey = "", pageSize, rangeDays) {
 		this.compact();
 		if (this.physicalRemaining < 1) return false;
 		const amount = Math.max(1, Math.floor(logicalQueries));
 		if (this.state.reportedRemaining === null) return this.logicalUsed + amount <= this.activeSharedLimit;
-		return this.estimatedDebit(amount, budgetKey, pageSize) + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
+		return this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays) + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
 	}
-	claimAdmission(scope, logicalQueries, zoneIds = [], budgetKey = "", pageSize) {
+	shouldSplitActivityProbe(logicalQueries, budgetKey, pageSize) {
+		const rangeDays = activityProbeRangeDays(budgetKey);
+		if (rangeDays === null || rangeDays <= 1) return false;
+		const available = this.state.reportedRemaining ?? (this.state.observedCapacity === null ? null : Math.max(0, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE));
+		if (available === null) return rangeDays > ACTIVITY_PROBE_UNKNOWN_CAPACITY_MIN_RANGE_DAYS;
+		return this.estimatedDebit(logicalQueries, budgetKey, pageSize) + GRAPHQL_REPORTED_BUDGET_RESERVE > available;
+	}
+	claimAdmission(scope, logicalQueries, zoneIds = [], budgetKey = "", pageSize, rangeDays) {
 		this.compact();
 		const scopePause = Math.max(this.state.pausedUntil ?? 0, this.scopePausedUntil(scope) ?? 0, ...zoneIds.map((zoneId) => this.state.zonePausedUntil[zoneId] ?? 0));
 		if (scopePause && scopePause > Date.now()) return {
 			kind: "paced",
 			waitUntil: scopePause
 		};
-		if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-			const waitUntil = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize);
+		if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+			const waitUntil = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
 			this.state.capacityWaitUntil = waitUntil;
 			return {
 				kind: "paced",
@@ -11140,21 +12094,113 @@ var InitialGraphqlQuota = class {
 			kind: "paced",
 			waitUntil: null
 		};
-		const waitUntil = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS, this.pacingAvailableAt(logicalQueries, budgetKey, pageSize));
+		const waitUntil = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS, this.pacingAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays));
 		return waitUntil > Date.now() ? {
 			kind: "paced",
 			waitUntil
 		} : { kind: "ready" };
 	}
+	get protectedHeadAdmitAt() {
+		return this.state.protectedHeadAdmitAt;
+	}
+	reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, admitAt, rangeDays) {
+		const debit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, true, rangeDays);
+		if (this.state.protectedHeadKey === headKey && this.state.protectedHeadAdmitAt !== null) {
+			this.state.protectedHeadDebit = Math.max(this.state.protectedHeadDebit, debit);
+			this.state.protectedHeadLogicalQueries = Math.max(this.state.protectedHeadLogicalQueries, Math.max(1, Math.floor(logicalQueries)));
+			return;
+		}
+		this.state.protectedHeadKey = headKey;
+		this.state.protectedHeadAdmitAt = Math.max(Date.now(), admitAt);
+		this.state.protectedHeadDebit = debit;
+		this.state.protectedHeadLogicalQueries = Math.max(1, Math.floor(logicalQueries));
+		console.info("brolly.initial_graphql_priority_reserved", JSON.stringify({
+			headKey,
+			budgetKey,
+			admitAt: this.state.protectedHeadAdmitAt,
+			debit,
+			logicalQueries: this.state.protectedHeadLogicalQueries,
+			...this.estimateSource(budgetKey, rangeDays)
+		}));
+	}
+	deferProtectedHead(headKey, logicalQueries, budgetKey, pageSize, deferredUntil, rangeDays) {
+		this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, deferredUntil, rangeDays);
+		this.state.protectedHeadAdmitAt = Math.max(this.state.protectedHeadAdmitAt ?? Date.now(), deferredUntil);
+	}
+	clearProtectedHead(headKey) {
+		if (headKey !== void 0 && this.state.protectedHeadKey !== headKey) return;
+		if (this.activeProtectedClaimKey !== null && (headKey === void 0 || headKey === this.activeProtectedClaimKey)) return;
+		this.state.protectedHeadKey = null;
+		this.state.protectedHeadAdmitAt = null;
+		this.state.protectedHeadDebit = 0;
+		this.state.protectedHeadLogicalQueries = 0;
+	}
+	claimProtectedAdmission(headKey, scope, logicalQueries, zoneIds = [], budgetKey = "", pageSize, rangeDays) {
+		this.compact();
+		const now = Date.now();
+		const scopePause = Math.max(this.state.pausedUntil ?? 0, this.scopePausedUntil(scope) ?? 0, ...zoneIds.map((zoneId) => this.state.zonePausedUntil[zoneId] ?? 0));
+		if (this.inFlightClaims.has("shared")) return {
+			kind: "paced",
+			waitUntil: null
+		};
+		if (this.state.protectedHeadKey !== headKey || this.state.protectedHeadAdmitAt === null) {
+			const admission = this.claimAdmission(scope, logicalQueries, zoneIds, budgetKey, pageSize, rangeDays);
+			if (admission.kind === "paced" && admission.waitUntil !== null) this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, admission.waitUntil, rangeDays);
+			else if (admission.kind === "ready") this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, now, rangeDays);
+			return admission;
+		}
+		const currentDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, true, rangeDays);
+		this.state.protectedHeadDebit = Math.max(this.state.protectedHeadDebit, currentDebit);
+		this.state.protectedHeadLogicalQueries = Math.max(this.state.protectedHeadLogicalQueries, Math.max(1, Math.floor(logicalQueries)));
+		if (scopePause > now) {
+			this.state.protectedHeadAdmitAt = Math.max(this.state.protectedHeadAdmitAt, scopePause);
+			return {
+				kind: "paced",
+				waitUntil: this.state.protectedHeadAdmitAt
+			};
+		}
+		if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+			const capacityAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
+			this.state.capacityWaitUntil = capacityAt;
+			this.state.protectedHeadAdmitAt = Math.max(this.state.protectedHeadAdmitAt, capacityAt);
+			return {
+				kind: "paced",
+				waitUntil: this.state.protectedHeadAdmitAt
+			};
+		}
+		const waitUntil = Math.max(this.state.protectedHeadAdmitAt, this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS);
+		return waitUntil > now ? {
+			kind: "paced",
+			waitUntil
+		} : { kind: "ready" };
+	}
+	canAdmitResidual(logicalQueries, budgetKey, pageSize, rangeDays) {
+		this.compact();
+		const admitAt = this.state.protectedHeadAdmitAt;
+		if (this.state.protectedHeadKey === null || admitAt === null) return true;
+		const amount = Math.max(1, Math.floor(logicalQueries));
+		const probeDebit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays);
+		const protectedDebit = Math.max(1, this.state.protectedHeadDebit);
+		if (Date.now() + Math.max(GRAPHQL_MIN_QUERY_INTERVAL_MS, this.pacingIntervalForDebit(Math.ceil((probeDebit + protectedDebit) / 2))) > admitAt) return false;
+		if (this.physicalRemaining < 2) return false;
+		if (this.state.reportedRemaining !== null) return probeDebit + protectedDebit + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
+		return this.logicalUsed + amount + this.state.protectedHeadLogicalQueries <= this.activeSharedLimit;
+	}
 	scheduleNextAdmissionAt(waitUntil) {
 		this.state.sharedNextAdmissionAt = waitUntil && waitUntil > Date.now() ? waitUntil : null;
 	}
-	reserveClaim(scope) {
+	reserveClaim(scope, protectedHeadKey = null) {
 		this.inFlightClaims.add("shared");
+		this.activeProtectedClaimKey = protectedHeadKey;
 	}
 	releaseClaim(scope) {
 		this.inFlightClaims.delete(rateScopeKey(scope));
 		this.inFlightClaims.delete("shared");
+		if (this.activeProtectedClaimKey !== null) {
+			const completedHeadKey = this.activeProtectedClaimKey;
+			this.activeProtectedClaimKey = null;
+			this.clearProtectedHead(completedHeadKey);
+		}
 		for (const resolve of this.claimWaiters) resolve();
 		this.claimWaiters.clear();
 	}
@@ -11175,8 +12221,10 @@ var InitialGraphqlQuota = class {
 			} else timer = setTimeout(done, Math.max(1, waitUntil - Date.now()));
 		});
 	}
-	async admit(scope, logicalQueries, budgetKey, pageSize) {
+	async admit(scope, logicalQueries, budgetKey, pageSize, zoneIds = [], rangeDays) {
 		this.assertRemoteWorkTime();
+		const pauseUntil = Math.max(this.state.pausedUntil ?? 0, this.scopePausedUntil(scope) ?? 0, ...zoneIds.map((zoneId) => this.state.zonePausedUntil[zoneId] ?? 0));
+		if (pauseUntil > Date.now()) throw new HistoricalRateLimitError(429, pauseUntil, "Initial Analytics scope remains inside Cloudflare's persisted cooldown");
 		const key = "shared";
 		const previous = this.admissionTails.get(key) ?? Promise.resolve();
 		let release;
@@ -11187,16 +12235,24 @@ var InitialGraphqlQuota = class {
 		this.admissionTails.set(key, queued);
 		await previous;
 		try {
-			if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-				const retryAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize);
+			if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+				const retryAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
 				this.state.capacityWaitUntil = retryAt;
 				throw new HistoricalRateLimitError(429, retryAt, "Initial Analytics quota is reserved until rolling budget capacity is available");
 			}
-			const delay = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS, this.pacingAvailableAt(logicalQueries, budgetKey, pageSize)) - Date.now();
+			const protectedAdmitAt = this.activeProtectedClaimKey !== null && this.state.protectedHeadKey === this.activeProtectedClaimKey ? this.state.protectedHeadAdmitAt ?? 0 : 0;
+			const delay = Math.max(this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS, protectedAdmitAt || this.pacingAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays)) - Date.now();
 			if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 			this.assertRemoteWorkTime();
 			this.setLastAdmissionAt(scope, Date.now());
-			this.charge(scope, logicalQueries, budgetKey, pageSize);
+			this.charge(scope, logicalQueries, budgetKey, pageSize, rangeDays);
+			if (this.activeProtectedClaimKey !== null) console.info("brolly.initial_graphql_priority_admitted", JSON.stringify({
+				headKey: this.activeProtectedClaimKey,
+				budgetKey,
+				scheduledAt: protectedAdmitAt,
+				admittedAt: this.state.accountLastAdmissionAt,
+				debit: this.state.protectedHeadDebit
+			}));
 		} finally {
 			release();
 			if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
@@ -11204,6 +12260,7 @@ var InitialGraphqlQuota = class {
 	}
 	observe(scope, logicalQueries, observation) {
 		const predicted = Math.max(1, Math.floor(logicalQueries));
+		const probeObservation = isActivityProbeBudgetKey(observation.budgetKey);
 		const cost = Math.max(0, Math.floor(observation.cost));
 		const remaining = Math.max(0, Math.floor(observation.remaining));
 		this.state.observedCostMultiplier = Math.max(this.state.observedCostMultiplier, cost / predicted);
@@ -11219,7 +12276,7 @@ var InitialGraphqlQuota = class {
 		}
 		const exhausted = remaining === 0;
 		const maximumAdmissibleUnknownDebit = this.state.observedCapacity === null ? debit : Math.max(1, Math.floor((this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE) / GRAPHQL_BUDGET_DEBIT_SAFETY));
-		this.state.observedMaxDebit = Math.max(this.state.observedMaxDebit, Math.min(debit, maximumAdmissibleUnknownDebit));
+		if (!probeObservation) this.state.observedMaxDebit = Math.max(this.state.observedMaxDebit, Math.min(debit, maximumAdmissibleUnknownDebit));
 		let measuredDebit = Math.max(debit, cost);
 		const priorDebitWasProvisional = this.state.provisionalDebitKeys[observation.budgetKey] === true;
 		if (exhausted && this.state.observedCapacity !== null) {
@@ -11235,7 +12292,7 @@ var InitialGraphqlQuota = class {
 			const requestedRows = observation.pageSize * predicted;
 			const debitRate = (priorDebitWasProvisional && !exhausted ? this.state.observedDebits[observation.budgetKey] ?? measuredDebit : measuredDebit) / requestedRows;
 			this.state.observedDebitRates[observation.budgetKey] = priorDebitWasProvisional && !exhausted ? debitRate : Math.max(this.state.observedDebitRates[observation.budgetKey] ?? 0, debitRate);
-			if (debit > 0 || exhausted) this.state.observedMaxDebitRate = Math.max(this.state.observedMaxDebitRate, debitRate);
+			if (!probeObservation && (debit > 0 || exhausted)) this.state.observedMaxDebitRate = Math.max(this.state.observedMaxDebitRate, debitRate);
 		}
 		let admission;
 		for (let index = this.state.admissions.length - 1; index >= 0; index -= 1) {
@@ -11247,7 +12304,7 @@ var InitialGraphqlQuota = class {
 		}
 		if (admission) {
 			admission.budgetDebit = Math.max(admission.budgetDebit, cost, debit, exhausted ? this.state.observedCapacity ?? 0 : 0);
-			const pacedDebit = Math.max(admission.budgetDebit, this.estimatedDebit(predicted, observation.budgetKey, observation.pageSize ?? void 0));
+			const pacedDebit = probeObservation ? Math.max(1, admission.budgetDebit) : Math.max(admission.budgetDebit, this.estimatedDebit(predicted, observation.budgetKey, observation.pageSize ?? void 0));
 			this.state.sharedNextAdmissionAt = Math.max(admission.admittedAt + GRAPHQL_MIN_QUERY_INTERVAL_MS, admission.admittedAt + this.pacingIntervalForDebit(Math.ceil(pacedDebit / 2)));
 		}
 		if (observation.requestedAt >= (this.state.reportedForRequestAt ?? 0)) {
@@ -11283,15 +12340,16 @@ var InitialGraphqlQuota = class {
 		for (const resolve of this.claimWaiters) resolve();
 		this.claimWaiters.clear();
 	}
-	charge(scope, logicalQueries, budgetKey, pageSize) {
-		if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-			const retryAt = Math.max(Date.now() + 1e3, this.capacityAvailableAt(logicalQueries, budgetKey, pageSize));
+	charge(scope, logicalQueries, budgetKey, pageSize, rangeDays) {
+		if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+			const retryAt = Math.max(Date.now() + 1e3, this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays));
 			this.state.capacityWaitUntil = retryAt;
 			throw new HistoricalRateLimitError(429, retryAt, "Initial Analytics quota is reserved until rolling budget capacity is available");
 		}
 		const amount = Math.max(1, Math.floor(logicalQueries));
 		const admittedAt = Date.now();
-		const estimatedDebit = this.estimatedDebit(amount, budgetKey, pageSize);
+		const estimatedDebit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays);
+		const pacingDebit = this.estimatedDebit(amount, budgetKey, pageSize, false, rangeDays);
 		this.state.admissions.push({
 			admittedAt,
 			logicalQueries: amount,
@@ -11304,7 +12362,7 @@ var InitialGraphqlQuota = class {
 			this.state.reportedAt = admittedAt;
 		}
 		this.state.capacityWaitUntil = null;
-		this.state.sharedNextAdmissionAt = admittedAt + this.pacingIntervalForDebit(Math.ceil(estimatedDebit / 2));
+		this.state.sharedNextAdmissionAt = admittedAt + this.pacingIntervalForDebit(Math.ceil(pacingDebit / 2));
 	}
 	snapshot() {
 		this.compact();
@@ -11339,6 +12397,10 @@ var InitialGraphqlQuota = class {
 			zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
 			sharedNextAdmissionAt: this.state.sharedNextAdmissionAt,
 			capacityWaitUntil: this.state.capacityWaitUntil,
+			protectedHeadKey: this.state.protectedHeadKey,
+			protectedHeadAdmitAt: this.state.protectedHeadAdmitAt,
+			protectedHeadDebit: this.state.protectedHeadDebit,
+			protectedHeadLogicalQueries: this.state.protectedHeadLogicalQueries,
 			pausedUntil: this.state.pausedUntil,
 			rateLimitedAt: this.state.rateLimitedAt,
 			accountPausedUntil: this.state.accountPausedUntil,
@@ -11403,13 +12465,13 @@ var InitialGraphqlQuota = class {
 			this.state.rateLimitedAt = null;
 		}
 	}
-	capacityAvailableAt(logicalQueries, budgetKey = "", pageSize, now = Date.now()) {
+	capacityAvailableAt(logicalQueries, budgetKey = "", pageSize, rangeDays, now = Date.now()) {
 		this.compact(now);
 		const amount = Math.max(1, Math.floor(logicalQueries));
 		const logicalUsed = this.logicalUsed;
 		const physicalAvailableAt = this.physicalUsed < INITIAL_PHYSICAL_GRAPHQL_QUOTA ? now : (this.state.admissions[0]?.admittedAt ?? now) + GRAPHQL_WINDOW_MS;
 		if (this.state.reportedRemaining !== null) {
-			const deficit = this.estimatedDebit(amount, budgetKey, pageSize) + GRAPHQL_REPORTED_BUDGET_RESERVE - this.reportedAvailable();
+			const deficit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays) + GRAPHQL_REPORTED_BUDGET_RESERVE - this.reportedAvailable();
 			let released = 0;
 			let budgetAvailableAt = now;
 			if (deficit > 0) {
@@ -11435,28 +12497,33 @@ var InitialGraphqlQuota = class {
 	estimatedCost(logicalQueries) {
 		return Math.max(1, this.state.observedCosts[String(logicalQueries)] ?? Math.ceil(logicalQueries * this.state.observedCostMultiplier));
 	}
-	estimatedDebit(logicalQueries, budgetKey, pageSize) {
+	estimatedDebit(logicalQueries, budgetKey, pageSize, includeProbeRangeReservation = true, rangeDays) {
 		const observed = budgetKey ? this.state.observedDebits[budgetKey] : void 0;
 		const observedRate = budgetKey ? this.state.observedDebitRates[budgetKey] : void 0;
+		const relatedProbe = observed === void 0 ? this.relatedActivityProbeEstimate(budgetKey, rangeDays) : null;
 		const requestedRows = pageSize ? Math.max(1, pageSize * logicalQueries) : null;
-		const pageRate = observedRate ?? Math.max(DEFAULT_UNSEEN_PAGE_UNIT_DEBIT, this.state.observedMaxDebitRate);
-		const shapedDebit = requestedRows === null ? null : Math.ceil(requestedRows * pageRate);
-		const globalDebit = observed ?? this.unseenDebitBaseline();
-		const debit = observedRate !== void 0 && shapedDebit !== null ? shapedDebit : observed === void 0 && shapedDebit !== null ? globalDebit > 0 ? Math.min(globalDebit, shapedDebit) : shapedDebit : globalDebit;
+		const shapedDebit = requestedRows === null ? null : Math.ceil(requestedRows * (observedRate ?? DEFAULT_UNSEEN_PAGE_UNIT_DEBIT));
+		const unseenGlobalDebit = pageSize !== void 0 && pageSize <= 2 ? this.state.observedMaxCost : Math.max(this.state.observedMaxCost, this.unseenDebitBaseline(budgetKey));
+		const globalDebit = observed ?? relatedProbe?.debit ?? unseenGlobalDebit;
+		const debit = observedRate !== void 0 && shapedDebit !== null ? shapedDebit : relatedProbe !== null ? relatedProbe.debit : observed === void 0 && shapedDebit !== null ? globalDebit > 0 ? Math.min(globalDebit, shapedDebit) : shapedDebit : globalDebit;
 		const safety = observed === void 0 ? GRAPHQL_BUDGET_DEBIT_SAFETY : 1.1;
 		const estimate = Math.max(this.estimatedCost(logicalQueries), Math.ceil(debit * safety));
-		return this.state.observedCapacity === null ? estimate : Math.min(estimate, Math.max(1, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE));
+		if (this.state.observedCapacity === null) return estimate;
+		const usableCapacity = Math.max(1, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE);
+		const probeRangeDays = activityProbeRangeDays(budgetKey);
+		const rangeAwareProbeFloor = !includeProbeRangeReservation || probeRangeDays === null ? 0 : Math.ceil(usableCapacity * Math.min(1, probeRangeDays / ACTIVITY_PROBE_REFERENCE_RANGE_DAYS));
+		return Math.min(Math.max(estimate, rangeAwareProbeFloor), usableCapacity);
 	}
 	pacingIntervalForDebit(debit) {
 		const usableCapacity = Math.max(1, (this.state.observedCapacity ?? 0) - GRAPHQL_REPORTED_BUDGET_RESERVE);
 		if (this.state.observedCapacity === null || debit <= 0) return GRAPHQL_MIN_QUERY_INTERVAL_MS;
 		return Math.max(GRAPHQL_MIN_QUERY_INTERVAL_MS, Math.ceil(GRAPHQL_WINDOW_MS * Math.min(debit, usableCapacity) / usableCapacity));
 	}
-	pacingAvailableAt(logicalQueries, budgetKey, pageSize) {
+	pacingAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays) {
 		const previous = this.state.admissions.at(-1);
 		if (!previous) return Date.now();
-		const previousDebit = previous.budgetDebit > 0 ? previous.budgetDebit : this.estimatedDebit(previous.logicalQueries, previous.budgetKey);
-		const nextDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize);
+		const previousDebit = previous.budgetDebit > 0 ? previous.budgetDebit : this.estimatedDebit(previous.logicalQueries, previous.budgetKey, void 0, false);
+		const nextDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, false, rangeDays);
 		return previous.admittedAt + this.pacingIntervalForDebit(Math.ceil((previousDebit + nextDebit) / 2));
 	}
 	assertRemoteWorkTime() {
@@ -11465,9 +12532,52 @@ var InitialGraphqlQuota = class {
 		if (remaining >= INITIAL_REMOTE_WORK_WALL_RESERVE_MS) return;
 		throw new LedgerBudgetExceededError("wallMs", this.runBudget.limits.wallMs - remaining, this.runBudget.limits.wallMs);
 	}
+	relatedActivityProbeEstimate(budgetKey, targetRangeDays) {
+		if (!budgetKey || isActivityProbeBudgetKey(budgetKey) || !targetRangeDays) return null;
+		const relatedProbePrefix = `${budgetKey}${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:`;
+		const selected = Object.entries(this.state.observedDebits).flatMap(([candidateKey, value]) => {
+			const rangeDays = activityProbeRangeDays(candidateKey);
+			return candidateKey.startsWith(relatedProbePrefix) && rangeDays !== null && this.state.provisionalDebitKeys[candidateKey] !== true && Number.isFinite(value) && value > 0 ? [{
+				budgetKey: candidateKey,
+				observedDebit: value,
+				rangeDays
+			}] : [];
+		}).sort((left, right) => {
+			return Math.abs(Math.log(left.rangeDays / targetRangeDays)) - Math.abs(Math.log(right.rangeDays / targetRangeDays)) || right.observedDebit - left.observedDebit;
+		})[0];
+		if (!selected) return null;
+		const scaledDebit = Math.ceil(selected.observedDebit * targetRangeDays / selected.rangeDays);
+		return {
+			...selected,
+			debit: Math.max(this.state.observedMaxCost, scaledDebit)
+		};
+	}
+	estimateSource(budgetKey, targetRangeDays) {
+		const observed = budgetKey ? this.state.observedDebits[budgetKey] : void 0;
+		if (observed !== void 0) return {
+			estimateSource: this.state.provisionalDebitKeys[budgetKey] === true ? "dataset_detail_provisional" : "dataset_detail",
+			sourceBudgetKey: budgetKey,
+			sourceDebit: observed,
+			targetRangeDays
+		};
+		const relatedProbe = this.relatedActivityProbeEstimate(budgetKey, targetRangeDays);
+		if (relatedProbe) return {
+			estimateSource: "dataset_probe",
+			sourceBudgetKey: relatedProbe.budgetKey,
+			sourceDebit: relatedProbe.observedDebit,
+			sourceRangeDays: relatedProbe.rangeDays,
+			scaledSourceDebit: relatedProbe.debit,
+			targetRangeDays
+		};
+		return {
+			estimateSource: "account_fallback",
+			targetRangeDays
+		};
+	}
 	unseenDebitBaseline(excludeBudgetKey) {
-		const debits = Object.entries(this.state.observedDebits).filter(([budgetKey, value]) => budgetKey !== excludeBudgetKey && this.state.provisionalDebitKeys[budgetKey] !== true && Number.isFinite(value) && value > 0).map(([, value]) => value).sort((left, right) => left - right);
-		if (debits.length < 12) return debits.at(-1) ?? this.state.observedMaxCost;
+		const probeShape = excludeBudgetKey !== void 0 && isActivityProbeBudgetKey(excludeBudgetKey);
+		const debits = Object.entries(this.state.observedDebits).filter(([budgetKey, value]) => budgetKey !== excludeBudgetKey && isActivityProbeBudgetKey(budgetKey) === probeShape && this.state.provisionalDebitKeys[budgetKey] !== true && Number.isFinite(value) && value > 0).map(([, value]) => value).sort((left, right) => left - right);
+		if (debits.length < 12) return debits.at(-1) ?? (probeShape ? this.state.observedMaxCost : excludeBudgetKey && this.state.provisionalDebitKeys[excludeBudgetKey] === true ? this.state.observedMaxCost : Math.max(this.state.observedMaxCost, this.state.observedMaxDebit));
 		return debits[Math.max(0, Math.ceil(debits.length * .9) - 1)] ?? this.state.observedMaxDebit;
 	}
 	reportedAvailable() {
@@ -11535,6 +12645,10 @@ async function loadInitialGraphqlQuota(db, accountId, jobId, now) {
 		zoneLastAdmissionAt: {},
 		sharedNextAdmissionAt: null,
 		capacityWaitUntil: null,
+		protectedHeadKey: null,
+		protectedHeadAdmitAt: null,
+		protectedHeadDebit: 0,
+		protectedHeadLogicalQueries: 0,
 		pausedUntil: null,
 		rateLimitedAt: null,
 		accountPausedUntil: null,
@@ -11628,6 +12742,16 @@ async function loadInitialGraphqlQuota(db, accountId, jobId, now) {
 		}));
 		state.sharedNextAdmissionAt = boundedFutureAdmissionAt(parsed.sharedNextAdmissionAt, now);
 		state.capacityWaitUntil = boundedPauseAt(parsed.capacityWaitUntil, now);
+		state.protectedHeadKey = sameJob && typeof parsed.protectedHeadKey === "string" ? parsed.protectedHeadKey : null;
+		state.protectedHeadAdmitAt = sameJob && Number.isFinite(parsed.protectedHeadAdmitAt) ? Math.max(now, Number(parsed.protectedHeadAdmitAt)) : null;
+		state.protectedHeadDebit = sameJob && Number.isFinite(parsed.protectedHeadDebit) ? Math.max(0, Number(parsed.protectedHeadDebit)) : 0;
+		state.protectedHeadLogicalQueries = sameJob && Number.isFinite(parsed.protectedHeadLogicalQueries) ? Math.max(0, Math.floor(Number(parsed.protectedHeadLogicalQueries))) : 0;
+		if (state.protectedHeadKey === null || state.protectedHeadAdmitAt === null) {
+			state.protectedHeadKey = null;
+			state.protectedHeadAdmitAt = null;
+			state.protectedHeadDebit = 0;
+			state.protectedHeadLogicalQueries = 0;
+		}
 		if (!sameJob) state.jobId = jobId;
 	} catch {}
 	return new InitialGraphqlQuota(state, sharedLimit);
@@ -11667,6 +12791,11 @@ async function requeueRunningInitialSlices(db, jobId) {
 	const now = Date.now();
 	await db.prepare(`UPDATE backfill_slices SET status='pending',next_eligible_at=?2,updated_at=?2
      WHERE backfill_job_id=?1 AND status='running'`).bind(jobId, now).run();
+}
+async function supersedeRetiredInitialSlices(db, jobId) {
+	await db.prepare(`UPDATE backfill_slices SET status='superseded',error='Collector removed',next_eligible_at=NULL,updated_at=?2
+     WHERE backfill_job_id=?1 AND status!='superseded'
+       AND json_extract(scope_key,'$.dataset') IN (${RETIRED_INITIAL_DATASETS.map(() => "?").join(",")})`).bind(jobId, Date.now(), ...RETIRED_INITIAL_DATASETS).run();
 }
 async function initialSlicesPending(db, jobId) {
 	const row = await db.prepare(`SELECT 1 AS pending FROM backfill_slices WHERE backfill_job_id=?1 AND status='pending'
@@ -12579,8 +13708,10 @@ function validPolicy(policy, requireEveryFamily = false, levelIds = [
 		const validOptionalSpend = (spend) => !spend || Object.keys(spend).length === 0 || validSpend(spend);
 		for (const scopes of [policy.limits.day, policy.limits.cycle]) {
 			if (!scopes || typeof scopes !== "object") return false;
-			for (const scope of Object.values(scopes)) {
+			for (const [scopeKey, scope] of Object.entries(scopes)) {
 				if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some((value) => !validOptionalSpend(value))) return false;
+				const scopeFamily = scopeKey.match(/^(?:family|asset):([^:]+)/)?.[1] ?? null;
+				if (Object.keys(scope.usage).some((metricId) => productLimitMetric(metricId)?.family !== scopeFamily)) return false;
 				if (scope.enabled !== void 0 && typeof scope.enabled !== "boolean") return false;
 			}
 		}
