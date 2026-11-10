@@ -175,13 +175,20 @@ export class LedgerStore {
     this.budget?.observePeak("resourcesPerTransaction", Math.min(orderedResources.length, this.transactionLimit()));
     const statements = orderedResources.map(resource => this.db.prepare(
       `INSERT INTO resources(
-         id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,
+         id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,cloudflare_name,name_kind,
          first_seen_at,last_seen_at,last_active_at,coverage_status,control_capability,runtime_fuse_status,
          auto_quarantine_policy,tier,excluded,collector_key,dataset,metadata_json
-       ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+       ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
        ON CONFLICT(id) DO UPDATE SET
          parent_resource_id=COALESCE(excluded.parent_resource_id,resources.parent_resource_id),
-         display_name=excluded.display_name,last_seen_at=MAX(resources.last_seen_at,excluded.last_seen_at),
+         display_name=CASE WHEN excluded.name_kind IN ('named','brolly') THEN excluded.display_name ELSE resources.display_name END,
+         cloudflare_name=CASE WHEN excluded.name_kind='named' AND excluded.cloudflare_name IS NOT NULL THEN excluded.cloudflare_name ELSE resources.cloudflare_name END,
+         name_kind=CASE
+           WHEN resources.name_kind='brolly' OR excluded.name_kind='brolly' THEN 'brolly'
+           WHEN excluded.name_kind='named' AND excluded.cloudflare_name IS NOT NULL THEN 'named'
+           ELSE resources.name_kind
+         END,
+         last_seen_at=MAX(resources.last_seen_at,excluded.last_seen_at),
          last_active_at=CASE
            WHEN resources.last_active_at IS NULL THEN excluded.last_active_at
            WHEN excluded.last_active_at IS NULL THEN resources.last_active_at
@@ -207,10 +214,12 @@ export class LedgerStore {
              AND resources.runtime_fuse_status!=excluded.runtime_fuse_status
           OR excluded.tier='control_plane' AND resources.tier!='control_plane'
           OR resources.excluded<excluded.excluded
+          OR excluded.name_kind='named' AND (resources.name_kind!='named' OR resources.cloudflare_name IS NOT excluded.cloudflare_name)
           OR json_patch(resources.metadata_json,excluded.metadata_json)!=resources.metadata_json`,
     ).bind(
       resource.id, resource.accountId, resource.parentResourceId, resource.productFamily, resource.resourceType,
-      resource.cloudflareId, resource.displayName, resource.firstSeenAt, resource.lastSeenAt, resource.lastActiveAt,
+      resource.cloudflareId, resource.cloudflareName ?? resource.cloudflareId, resource.cloudflareName, resource.nameKind,
+      resource.firstSeenAt, resource.lastSeenAt, resource.lastActiveAt,
       resource.coverageStatus, resource.controlCapability, resource.runtimeFuseStatus,
       resource.autoQuarantinePolicy, resource.tier, resource.excluded ? 1 : 0,
       observations.find(item => observationIds.get(item) === resource.id)?.collectorKey ?? null,
@@ -751,10 +760,12 @@ function resourceFromAsset(asset: AssetRef, quality: DataQualityState, activeAt:
     : tags.brollyFuse === "true" && (asset.family === "workers" || asset.family === "durable_objects") ? "runtime_fuse" : "none";
   const controlPlane = asset.tier === "control_plane" || tags.brollyControlPlane === "true";
   const now = activeAt ?? Date.now();
+  const nameKind = asset.nameKind ?? (asset.name ? "named" : "id_only");
+  const cloudflareName = nameKind === "id_only" ? null : asset.name ?? null;
   return {
     id: resourceId(asset.accountId, canonicalFamily, type, asset.id), accountId: asset.accountId,
     parentResourceId, productFamily: canonicalFamily, resourceType: type, cloudflareId: asset.id,
-    displayName: asset.name ?? asset.id, firstSeenAt: now, lastSeenAt: now, lastActiveAt: activeAt,
+    cloudflareName, nameKind, firstSeenAt: now, lastSeenAt: now, lastActiveAt: activeAt,
     coverageStatus: quality, controlCapability,
     runtimeFuseStatus: tags.brollyFuseVerified === "true" ? "verified" : tags.brollyFuse === "true" ? "declared" : "unknown",
     autoQuarantinePolicy: "inherit", tier: asset.tier, excluded: controlPlane, metadata: tags,
@@ -764,17 +775,17 @@ function resourceFromAsset(asset: AssetRef, quality: DataQualityState, activeAt:
 function parentResources(asset: AssetRef, quality: DataQualityState, seenAt: number): Resource[] {
   const account: AssetRef = {
     accountId: asset.accountId, family: "account", id: asset.accountId, name: "Cloudflare account",
-    scope: "account", tier: "unclassified", tags: { ledgerLevel: "account" },
+    scope: "account", tier: "unclassified", nameKind: "brolly", tags: { ledgerLevel: "account" },
   };
   const product: AssetRef = {
     accountId: asset.accountId, family: asset.family, id: asset.family, name: productName(asset.family),
-    scope: "account", tier: "unclassified", tags: { ledgerLevel: "product" },
+    scope: "account", tier: "unclassified", nameKind: "brolly", tags: { ledgerLevel: "product" },
   };
   const parents = [resourceFromAsset(account, quality, seenAt), resourceFromAsset(product, quality, seenAt)];
   if (asset.scope === "object" && asset.parentId) {
     parents.push(resourceFromAsset({
-      accountId: asset.accountId, family: asset.family, id: asset.parentId, name: asset.parentId,
-      scope: "namespace", tier: asset.tier, tags: asset.tags,
+      accountId: asset.accountId, family: asset.family, id: asset.parentId,
+      scope: "namespace", tier: asset.tier, nameKind: "id_only", tags: asset.tags,
     }, quality, seenAt));
   }
   return parents;
@@ -785,17 +796,21 @@ function hierarchySamples(sample: MetricSample): MetricSample[] {
   if (sample.asset.scope === "object" && sample.asset.parentId) {
     values.push({ ...sample, asset: {
       accountId: sample.asset.accountId, family: sample.asset.family, id: sample.asset.parentId,
-      name: sample.asset.parentId, scope: "namespace", tier: sample.asset.tier, tags: sample.asset.tags,
+      scope: "namespace", tier: sample.asset.tier, nameKind: "id_only", tags: sample.asset.tags,
     } });
   }
-  values.push({ ...sample, asset: {
-    accountId: sample.asset.accountId, family: sample.asset.family, id: sample.asset.family,
-    name: productName(sample.asset.family), scope: "account", tier: "unclassified", tags: { ledgerLevel: "product" },
-  } });
-  values.push({ ...sample, asset: {
-    accountId: sample.asset.accountId, family: sample.asset.family, id: sample.asset.accountId,
-    name: "Cloudflare account", scope: "account", tier: "unclassified", tags: { ledgerLevel: "account" },
-  } });
+  if (sample.asset.scope !== "account" || sample.asset.id !== sample.asset.family) {
+    values.push({ ...sample, asset: {
+      accountId: sample.asset.accountId, family: sample.asset.family, id: sample.asset.family,
+      name: productName(sample.asset.family), nameKind: "brolly", scope: "account", tier: "unclassified", tags: { ledgerLevel: "product" },
+    } });
+  }
+  if (sample.asset.scope !== "account" || sample.asset.id !== sample.asset.accountId) {
+    values.push({ ...sample, asset: {
+      accountId: sample.asset.accountId, family: sample.asset.family, id: sample.asset.accountId,
+      name: "Cloudflare account", nameKind: "brolly", scope: "account", tier: "unclassified", tags: { ledgerLevel: "account" },
+    } });
+  }
   return values;
 }
 

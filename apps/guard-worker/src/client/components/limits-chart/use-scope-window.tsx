@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { billableMetricIds, costSeries, metricAggregationKind, metricBillableCostSeries, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
+import { limitMetricIds, costSeries, metricAggregationKind, metricBillableCostSeries, metricIncluded, metricPool, rowSeries, type UsageSeriesResponse } from "./api";
 import { unitRateUsd } from "./metric-cost";
 import type { AggregationKind } from "./cycles";
 import { cycleDaysFor, dailyMultiple, dailyToleranceDefaults, defaultLevelValues, pushLevelValue, toleranceDefaults, windowDefaults } from "./defaults";
@@ -48,7 +48,7 @@ export interface ScopeWindow {
  * rows look; this decides what they contain.
  */
 export function useScopeWindow({ data, window, levels, cost, onCostChange, usage, onUsageChange, costFloor, usageFloor, tolerance, quotaScope = false, usageEnabled = true, readOnly }: ScopeWindowInput): ScopeWindow {
-  const metricIds = useMemo(() => (data && usageEnabled ? billableMetricIds(data) : []), [data, usageEnabled]);
+  const metricIds = useMemo(() => (data && usageEnabled ? limitMetricIds(data) : []), [data, usageEnabled]);
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const histories = useLimitHistories();
   const usageRef = useRef(usage);

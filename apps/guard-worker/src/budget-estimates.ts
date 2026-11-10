@@ -328,7 +328,6 @@ function billingFamily(row: BillingUsageRecord): string | null {
     ["worker_builds", /worker builds?|build minutes?/],
     ["analytics_engine", /analytics engine/],
     ["log_explorer", /log explorer/],
-    ["zones", /zone analytics|bandwidth/],
     ["email", /email routing|email service|email sent/],
     ["workers", /\bworkers?\b/],
   ];

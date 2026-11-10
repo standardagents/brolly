@@ -60,6 +60,8 @@ directory.
 - Paid and unknown product usage charts show the matching meter's estimated
   billable cost in the cycle marker tooltip. The estimate remains separate
   from the primary cost series and has no threshold or history state.
+- Product sections state when every measured cost point is zero. The notice
+  remains outside the shared chart component.
 
 ## Limits UI
 
@@ -77,11 +79,16 @@ directory.
   value. Use `chip` for compact row values, `bare` below expanded charts, and
   `boxed` when a standalone chart needs cards.
 - `components/limits-chart/LimitsChartDual.tsx` owns the daily and billing-cycle
-  shell for one policy scope. Account limits include cost and account-wide
-  billable usage rows so included allotments can seed cycle thresholds.
+  shell for one policy scope. Product usage rows come from the canonical,
+  account-independent Cloudflare metric contract. Raw billing SKUs remain
+  internal ledger data.
 - `onboarding/limits-policy.ts` owns scope updates and the daily legacy-map
   mirroring required by server and dashboard readers.
 - New limit editors must compose these components and helpers.
+- The onboarding wizard owns one account usage-history request after Billing
+  reaches a final state. Risk Tolerance and Account Limits share its result.
+- Generic Zone request and bandwidth analytics stay outside Product Limits.
+  Zone inventory remains available to features that need a domain scope.
 
 ## Product icons
 
@@ -97,4 +104,5 @@ directory.
   is zero only inside a measured span. Pending and unavailable days render as
   gaps and stay out of projections, defaults, scale inputs, and threshold
   crossings. Partial spans render observed values with partial quality and
-  keep absent values as gaps.
+  keep absent values as gaps. Closed-row sparklines retain a blue bottom
+  segment for measured days and a full-height gray fill for missing days.

@@ -22,6 +22,7 @@ import { preparePolicy, prepareRuntimeIntegrations } from "./model";
 import { useBudgetEstimates } from "./useBudgetEstimates";
 import { useOnboardingSave } from "./useOnboardingSave";
 import { useWizardNavigation } from "./useWizardNavigation";
+import { useUsageSeries } from "../components/limits-chart";
 
 /**
  * Setup order. The first three steps establish access, alert channels, and
@@ -80,6 +81,9 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     products: {},
   }, [initialIngestion.ingestion]);
   const billingReady = editing || readiness.billing !== "pending";
+  // Billing readiness releases account history. Keep one request alive across
+  // Risk Tolerance and Account Limits so the next step opens from memory.
+  const accountUsage = useUsageSeries(token, "account", billingReady);
   const estimates = useBudgetEstimates(token, policy, setPolicy, board.levels, data.planTier);
   const save = useOnboardingSave(token, data, policy, integrations, editing, onSaved);
   const installedCount = Object.values(integrations).filter(integration => integration.installed).length;
@@ -119,8 +123,8 @@ export function BudgetWizard({ data, token, editing, initialStep = 0, onCancel, 
     <AlertLevelsStep token={token} targets={targets} board={board} />,
     !billingReady
       ? <ImportHoldStep />
-      : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} />,
-    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={currentData.planTier} />,
+      : <RiskToleranceStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} accountName={data.accountName ?? null} accountId={data.accountId} usage={accountUsage} />,
+    <AccountLimitStep token={token} policy={policy} levels={board.levels} setPolicy={setPolicy} planTier={currentData.planTier} usage={accountUsage} />,
     <ProductLimitsStep token={token} data={currentData} policy={policy} levels={board.levels} setPolicy={setPolicy} readiness={readiness.products} />,
     <RuntimeStep assets={data.scopedAssets} />,
     <VerifyStep assets={data.scopedAssets} token={token} integrations={integrations} onChange={setIntegrations} autoRun={breakerClaimed && !editing} />,

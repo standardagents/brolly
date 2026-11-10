@@ -103,15 +103,13 @@ const WORKERS_PAID_QUEUES: IncludedAllotment[] = [
   { metricId: "queues:operations", includedPerCycle: 1_000_000, unit: "count" },
 ];
 
-/**
- * Metrics that have no meter of their own but bill into another metric's
- * shared allotment. `ratio` source units count as one billed unit of the
- * target meter. The dashboard shows this as a note on the source row, and
- * the billable-cost estimator folds the converted quantity into the target
- * meter's cycle consumption.
- */
+/** Explicit source-meter conversions that are safe to fold into another meter. */
 export const BILLED_VIA: Readonly<Record<string, { metricId: string; ratio: number; label: string }>> = {
-  "durable_objects:incoming_websocket_messages": { metricId: "durable_objects:requests", ratio: 20, label: "Durable Objects request" },
+  "durable_objects:incoming_websocket_messages": {
+    metricId: "durable_objects:requests",
+    ratio: 20,
+    label: "20 incoming WebSocket messages count as one request",
+  },
 };
 
 export const WORKERS_PAID_INCLUDED: IncludedAllotment[] = [

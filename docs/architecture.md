@@ -97,8 +97,11 @@ inside scheduled collectors, setup checks, configuration verification, and
 explicit refresh jobs.
 
 The one-minute cron is a scheduler. Active Worker and Durable Object telemetry
-is due every five minutes. Product-wide historical collectors cover every
-registered Cloudflare usage dataset during the initial import. Hot watch can run each minute while a current alert
+is due every five minutes. The initial import queries Billing, Durable Objects,
+and Workers first. Other Product Limits datasets begin with bounded aggregate
+activity probes. A positive probe converts every pending range for its dataset
+to detailed collection. Completed empty probes remain measured-zero coverage.
+Hot watch can run each minute while a current alert
 instance is open and the aligned Cloudflare watermark has advanced. Inventory,
 billing reconciliation, and retention maintenance are hourly. Analytics
 capability discovery is daily. Historical backfill runs newest-first from
@@ -113,13 +116,31 @@ keep physical requests at least 1.2 seconds apart. Once Cloudflare reports its
 budget, the interval between two requests reflects the average of the previous
 measured debit and the next predicted debit. This centers expensive work across
 the surrounding intervals and gives lower-cost work earlier admission. The
-cadence persists across discovery, collection, and resumed invocations. Zone settings and
-usage requests nest batches of at most ten zones under the connected account.
-Admission reserves one logical query unit for each zone in the batch.
+cadence persists across discovery, collection, and resumed invocations. Zone settings
+nest batches of at most ten zones under the connected account. Historical
+usage keeps the same ten-zone bound. Admission reserves one logical query unit
+for each zone in the batch.
 Billing is the initial ingestion's hard first phase. Analytics candidates remain
-ordered by Durable Objects, Workers, and billed family cost. A paced or
-capacity-blocked candidate yields to lower-cost eligible work, and the
-highest-priority eligible candidate runs first.
+ordered by Durable Objects, Workers, and billed family cost. A paced Durable
+Objects or Workers slice receives a persisted admission deadline and debit
+reservation. A lower-cost activity probe may use capacity inside that fixed
+gap when its request preserves both reservations. Every candidate uses the
+shared paced lane.
+Probe and detail query shapes use separate debit histories. Probe admission
+also reserves budget in proportion to the scanned date range. A probe that
+cannot fit the remaining reported budget is bisected before any request. The
+child ranges tile the original interval exactly. Only one probe per dataset can
+be in flight, so its result can promote pending siblings before another probe
+for that dataset starts. The first promoted detail range receives a protected
+calibration reservation against reported remaining capacity. Residual work
+cannot consume that reservation or extend its deadline. The calibration uses
+reliable activity-probe debit from the same dataset before falling back to
+account-wide observations. It selects the closest measured probe duration,
+scales its debit to the detail duration, and preserves that value as a floor
+when the result page is small. Known scan-heavy
+datasets and actual remote budget failures retain the fresh-window path. One
+successful detail query returns its pending siblings to pacing from the measured
+detail debit.
 After a smaller clean-window retry succeeds, pending slices for that dataset
 return to pacing from its measured debit.
 Capability discovery and collection stop admitting remote work with less than
@@ -128,14 +149,15 @@ Daily-only datasets use the requested day count plus one as their page size.
 After a date-based resource dataset discovers its cardinality, later slices use
 resource-days plus bounded headroom and one truncation sentinel as their page
 size. Other resource-dimensional datasets retain Cloudflare's discovered page
-ceiling. An unseen bounded page uses a conservative per-row debit reservation.
-After twelve measured query shapes, the account's observed 90th-percentile
-debit replaces a single outlier as the unseen-query baseline. The 25% margin
-and fresh-window retry remain in effect. A zero remainder records a provisional
+ceiling. An unseen bounded page uses a conservative per-row debit reservation
+and the observed GraphQL cost for its logical-query count. A known dataset uses
+its own measured debit. The 25% margin and fresh-window retry remain in effect.
+A zero remainder records a provisional
 full-window estimate. A later clean measurement replaces that estimate with at
 least the account baseline.
-Images Transformations uses a fresh-window admission because Cloudflare charges
-its underlying event scan independently of the small daily result page.
+Images Transformations uses one daily aggregate query with a two-row bound.
+This limits Cloudflare's underlying event scan and returns the daily value
+needed by the chart.
 Capability planning checkpoints each successful batch in D1. A later query
 admission window resumes with the remaining account and zone settings.
 Scheduled passes dedicate themselves to an active initial import until it
@@ -145,11 +167,15 @@ zone errors pause their individual scope. One lease coordinates
 browser and cron starts. A two-result queue feeds one serialized D1 consumer.
 Each claimed slice reserves D1 capacity until persistence starts. Rate limits
 keep work pending until the reported reset. A shared-budget failure near the
-end of a window requeues that dataset for a fully recovered window while other
-eligible datasets continue. A query that also exceeds the recovered budget has
-its range quartered when it spans at least four days. Later failures bisect the
-range before the next attempt. Single-day queries receive one
-fresh-window retry before becoming unavailable coverage. A successful smaller
+end of a window requeues that dataset for a fully recovered window. Eligible
+ordinary slices drain before the retry receives a protected reservation. An
+HTTP 200 GraphQL budget rejection leaves the shared lane available. HTTP 429
+responses retain their account or named-scope cooldown. A recovered grouped-zone failure splits the zone
+group first. Account and single-zone queries quarter ranges of four days or
+more. Later failures bisect the range before the next attempt. A single-zone,
+single-day query receives one fresh-window retry before its slice becomes
+unavailable coverage. Other slices for the dataset remain pending at a lower
+priority so other sources can continue. A successful smaller
 retry returns pending siblings to measured pacing. A
 fresh per-slice D1 row-limit failure requeues the range for a fresh-budget attempt before range splitting.
 Shared run limits requeue unfinished work without changing its range. Reserved REST capacity runs Billing Read before Analytics.
@@ -167,6 +193,12 @@ ordering, 10,000-row keyset pages, independent continuation cursors, and
 explicit partial coverage. A collection pass never wakes a Durable Object or
 reads customer application storage.
 
+The same five-minute pass rotates one-row aggregate probes across inactive
+account product datasets. A positive or truncated probe activates detailed
+collection for that dataset on a later pass. Probe failures stay isolated to
+their dataset. This discovers new product usage without running detailed
+queries for every inactive product on every pass.
+
 Coverage incidents come from explicit active-telemetry and asset-inventory
 results. Passive product limitations and metrics outside the active fast pass
 remain coverage state for the Configuration page. They do not notify channels.
@@ -182,23 +214,30 @@ usage_daily rows, with account, product, namespace, and individual history
 retained for up to 730 days under D1 capacity safeguards.
 
 Billing Read reconciliation runs hourly. Cloudflare billing data defines
-authoritative aggregate charges and actual cycle boundaries. Requests align to
-the current account billing-cycle start when the resulting range remains within
-Cloudflare's 31-day request limit. Detailed resource
+authoritative aggregate charges and actual cycle boundaries. Authoritative
+boundaries replace overlapping provisional calendar cycles. A PayGo response
+without an end retains its subscription anchor day for the next monthly
+boundary. Requests align to the current account billing-cycle start when the
+resulting range remains within Cloudflare's 31-day request limit. Detailed resource
 cost remains modeled; a product/day charge is proportionally allocated only
 where granular usage provides a defensible weighting. Unmapped billing products
 remain visible through account/product catchalls and explicit coverage gaps.
 
-Setup offers a one-shot import of Cloudflare's available 90-day history. Usage
-collectors create daily slices within each dataset's discovered or registered
-retention. Billing Read uses contiguous slices of at most 31 days. Registered
-usage families include Workers, Durable Objects, Workers AI, Queues, D1, R2,
-Workers KV, Pages Functions, Images, Stream, Vectorize, Hyperdrive, AI Gateway,
-Containers, Browser Rendering, Workflows, Worker Builds, Analytics Engine, Log
-Explorer, zones, and Email. This ingestion path writes normalized ledger data
-without entering alert, notification, or control evaluation. Daily collection
-extends the stored history after setup, subject to the 730-day D1 retention
-ceiling.
+Setup offers a one-shot import of Cloudflare's available 90-day history.
+Billing Read uses contiguous slices of at most 31 days. GraphQL planning
+includes datasets that feed the canonical Product Limits contract. Each
+dataset uses its live account capability, field list, page size, duration, and
+retention. Each non-priority product range starts with a one-row,
+dimension-free aggregate. Empty successful ranges become measured-zero
+coverage. Positive ranges are promoted to detailed daily collection. Images
+Transformations uses daily aggregate queries because its scan cost follows the
+time range instead of the result-page size.
+Supporting-only traffic datasets remain outside setup ingestion.
+The 20 product families and their Cloudflare pricing references are maintained
+in [cloudflare-metric-catalog.md](cloudflare-metric-catalog.md). This ingestion
+path writes normalized ledger data without entering alert, notification, or
+control evaluation. Daily collection extends the stored history after setup,
+subject to the 730-day D1 retention ceiling.
 
 The implementation details, API surface, cost labels, and retention policy are
 maintained in [usage-ledger.md](usage-ledger.md).

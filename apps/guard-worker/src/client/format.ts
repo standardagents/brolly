@@ -56,6 +56,12 @@ export function compactId(value: string): string {
   return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
+export function middleCompact(value: string, maximum = 42): string {
+  if (value.length <= maximum) return value;
+  const tail = Math.min(14, Math.max(6, Math.floor((maximum - 1) / 3)));
+  return `${value.slice(0, maximum - tail - 1)}…${value.slice(-tail)}`;
+}
+
 export function shortId(value: string): string {
   return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-6)}` : value;
 }

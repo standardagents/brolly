@@ -50,6 +50,22 @@ show the matching meter estimate in the billable-usage marker tooltip. The
 primary cost series keeps its existing authoritative-then-estimated selection.
 Free and Enterprise tiers return no estimated billable-cost points.
 
+Pages Functions requests and shared Workflows request and CPU usage fold into
+the Workers pools for account cost estimation. Cloudflare billing rows map to
+the receiving Workers meters. The Pages and Workflows source meters remain
+independent Product Limits for usage alerts.
+
+The response exposes usage metadata from the account-independent Cloudflare
+product metric contract in `PRODUCT_METRIC_CONTRACTS`. The contract records
+independent, shared, conditional, quota-only, announced, provider, and
+supporting roles. Product Limits includes every contract row marked for that
+surface. Dynamic billing SKUs, billed-cost metric definitions, and supporting
+reconciliation meters remain stored in the ledger. Product Limits renders
+allocated spend through its single Cost row. The unknown billing catchall
+contributes to account spend without appearing as a product. The maintained
+family matrix and Cloudflare sources live in
+[`docs/cloudflare-metric-catalog.md`](cloudflare-metric-catalog.md).
+
 Product billing-cycle usage charts shade the included range and draw a fixed
 system boundary at the allotment for each eligible meter. The line is outside
 threshold interaction and chart history. Daily charts omit the cycle-scoped
@@ -58,6 +74,20 @@ times the visible data and configured levels stays outside the scale so usage
 remains legible. The readout continues to report the allotment and billable
 state. Resource charts show their contribution without a separate allotment
 boundary.
+
+Closed-row sparklines draw a one-pixel blue baseline for measured zero and
+low-value days. Missing days use a full-height neutral gray coverage fill and
+contribute no value bar.
+
+Setup starts one account-history request when Billing reaches a final state.
+Risk Tolerance and Account Limits share that result so the Account Limits step
+can render available history without a second loading pass.
+
+Generic zone HTTP request and response-byte analytics are excluded from the
+usage catalog and historical ingestion. Those values are traffic analytics,
+rather than Cloudflare billing meters. Zone inventory remains available for
+features that need domain scope. Email collects its outbound-sending dataset
+per zone. Inbound Email Routing is free and stays outside Product Limits.
 
 Fresh usage limits for a meter with an allotment apply the risk-tolerance
 percentages to a baseline: the larger of the meter's typical cycle usage and
@@ -118,19 +148,30 @@ The one-minute cron acts as a scheduler:
 - newest-first historical backfill drains up to the configured slice budget after active protection work.
 
 First-run setup creates a separate initial-ingestion job. It imports daily usage
-for every registered Cloudflare collector across a requested 90-day interval.
+from Billing and from GraphQL datasets that feed the canonical Product Limits
+across a requested 90-day interval. Supporting-only datasets remain outside
+setup ingestion.
 Dataset ranges before Cloudflare's account-specific retention boundary become
 unavailable coverage. Billing Read uses contiguous windows of at most 31 days
 and runs before Analytics collection.
+
+Durable Objects and Workers retain detailed priority collection. Every other
+available product range starts with a one-row aggregate query that omits date
+and resource dimensions. A successful empty result establishes measured-zero
+coverage for that range. A positive or truncated result requeues the same
+range once for detailed daily collection. A product with no activity therefore
+does not incur detailed query and persistence work. Images Transformations is
+split into daily, two-row aggregate queries because Cloudflare charges for its
+underlying event scan. Each daily result has the granularity required by the
+limit chart and does not require a second query.
 
 Initial ingestion opts into Cloudflare's account-based Analytics limiter. Every
 request asks Cloudflare for its query cost and remaining GraphQL budget. A
 persisted rolling ledger records observed budget debits. A known dataset
 reserves 110% of its measured page-unit rate. An unseen bounded page reserves a
-conservative per-row estimate with a 125% safety factor. After twelve measured
-query shapes, the account's observed 90th-percentile debit replaces a single
-outlier as the unseen-query baseline. Earlier work uses the largest measured
-debit. Queries without a bounded page use the same adaptive account baseline.
+conservative per-row estimate with a 125% safety factor and the observed cost
+for its logical-query count. Queries without a bounded page use the observed
+GraphQL cost until their dataset has a measured debit.
 Every path retains a small fixed reserve. Capacity
 returns as each recorded debit leaves the five-minute window. A successful
 query that leaves zero budget records a provisional full-window estimate for
@@ -143,26 +184,43 @@ admission interval reflects the average of the previous measured debit and the
 next predicted debit. Expensive requests contribute half of their interval
 before admission and half after admission. Billing remains the hard first
 phase. Analytics candidates are ordered by Durable Objects, Workers, and billed
-family cost. A paced or capacity-blocked candidate yields to lower-cost eligible
-work, while the highest-priority eligible candidate retains first selection.
+family cost. A paced Durable Objects or Workers slice receives a persisted
+admission deadline and debit reservation. A lower-cost activity probe may use
+capacity inside that fixed gap when its request preserves both reservations.
+Every candidate shares the paced admission lane.
+The first detail range created by a positive activity probe receives a protected
+calibration reservation against reported remaining capacity. A fresh window is
+required only for known scan-heavy datasets or after an actual remote budget
+failure. Probe and detail observations use separate quota keys. The first
+detail reservation uses reliable probe debit from the same dataset plus the
+standard safety margin before it considers unrelated observations. Probe debit
+is scaled from the closest observed probe duration to the detail duration and
+remains the minimum estimate for small result pages.
+Probe admission includes the scanned range length, and an unaffordable probe is
+bisected before it reaches Cloudflare. Positive activity rewrites all pending
+probe siblings for that dataset in place as detailed ranges.
 After a smaller clean-window retry succeeds, pending slices for that dataset
 return to pacing from its measured debit.
 Discovery and collection stop admitting remote work during the final 12 seconds
 of an invocation. Capability checkpoints and pending slices retain the work for
 the next pass.
 
-Zone settings and usage requests nest batches of at most ten zones under the
-connected account. Admission accounts for each zone in the batch as one
-logical query unit. Capability discovery checkpoints each completed settings
+Zone settings requests nest batches of at most ten zones under the connected
+account. Historical usage keeps the same ten-zone bound. Admission accounts for
+each zone as one logical query unit. Capability discovery checkpoints each completed settings
 batch in D1. A two-result queue feeds one serialized D1 consumer. One lease
 coordinates browser and cron starts. Each claim reserves bounded D1 capacity.
 Shared run and wall-time limits requeue unfinished slices unchanged. HTTP rate
 limits defer a slice until reset without consuming a retry. A shared-budget
-failure first defers that dataset until a fully recovered window while other
-eligible datasets continue. A repeated failure against recovered capacity
-causes the importer to quarter ranges of four days or more. Later failures
-bisect the range. A single-day range receives one
-fresh-window retry before becoming unavailable coverage. A successful smaller
+failure first defers that dataset until a fully recovered window. Eligible
+ordinary slices drain before the retry receives a protected reservation. An
+HTTP 200 GraphQL budget rejection leaves the shared lane available. HTTP 429
+responses retain their account or named-scope cooldown. A recovered grouped-zone failure splits the zone
+group before reducing the date range. Account and single-zone failures quarter
+ranges of four days or more. Later failures bisect the range. Each new shape
+starts with fresh failure accounting. A single-zone, single-day range receives
+one fresh-window retry before its dataset becomes unavailable coverage. Every
+remaining slice for that dataset becomes terminal so the import can finish. A successful smaller
 retry returns pending siblings to measured pacing. Named account and zone responses
 pause their scope while other resources continue. A generic budget response
 uses Cloudflare's five-minute recovery interval. Scheduled passes run an active
@@ -175,16 +233,21 @@ Daily-only historical datasets request one row beyond the requested day count.
 Date-based resource datasets shrink later page limits from observed resource
 cardinality with bounded headroom and one truncation sentinel. Other
 resource-dimensional datasets retain Cloudflare's discovered page ceiling.
-Images Transformations requires a fresh GraphQL window because its underlying
-event-scan cost is independent of its small daily result page. Four
-progressively smaller full-window budget failures make the remaining ranges for
-that dataset unavailable.
+Images Transformations uses daily aggregate queries with a two-row limit. The
+daily range bounds Cloudflare's event scan while retaining the chart's required
+granularity.
 
-The setup progress bar weights every planned dataset-day and zone-day partition. Completed and terminally unavailable partitions advance the bar. Expected pre-retention intervals count as completed planning work without increasing the error count. Missing Billing access uses the same clean unavailable state. The error control reports permission and collection failures. Estimated remaining time uses completed weighted work, elapsed job time, pending requests, and the persisted admission interval. The summary shows the retry countdown while a Cloudflare deadline is active. The progress response also reports Billing, account, and per-product readiness. Terminal Billing readiness releases Risk tolerance and account limits. Each product reports Importing, Ready, Limited, or Unavailable. Measured empty coverage counts as usable. Expected retention gaps remain clean. Setup can finish while product imports continue.
+The setup progress bar weights every planned dataset-day and zone-day partition. Completed and terminally unavailable partitions advance the bar. Expected pre-retention intervals count as completed planning work without increasing the error count. Missing Billing access uses the same clean unavailable state. The error control groups permission and collection failures by dataset. Each issue reports its affected date range and zone count. Estimated remaining time uses completed weighted work, elapsed job time, pending requests, and the persisted admission interval. The summary shows the retry countdown while a Cloudflare deadline is active. The progress response also reports Billing, account, and per-product readiness. Risk tolerance and account limits open after Billing and account-root history reach terminal states. Billing releases each metric whose contract accepts Billing history. GraphQL-only metrics retain their own import state. Each product reports Importing, Ready, Limited, or Unavailable. Measured empty coverage counts as usable. A returned row that omits a requested aggregate becomes a metric-specific terminal gap. Expected retention gaps remain clean. Setup can finish while product imports continue.
 
 Active collection reads one fixed completed five-minute window with a two-minute ingestion delay, plus the immediately preceding fixed window as a correction pass. Each continuation remains bound to its original start and end timestamps after a restart. Durable Object datasets and Worker scripts use stable identifier ordering and keyset cursors with pages of up to 10,000 rows. Other product backfill collectors use daily product or resource groups. A dataset that reaches its bounded 10,000-row daily limit records partial coverage. A partial result persists independent active and correction cursors and keeps its interval in partial quality.
 
-Current day and billing-cycle values live in deterministic 8-bit accumulator shards. A shard approaching 1.5 MB splits into deterministic 4-bit secondary segments. Each resource metric retains correction bookkeeping and a bounded 12-scan baseline. Repeating a window is idempotent; a changed Cloudflare result replaces the prior contribution through a delta. Completed local days seal into one usage_daily row per resource and day. Billing cycles use Cloudflare's reconciled boundaries when Billing Read is available and an explicitly approximate calendar boundary during a coverage gap.
+Ongoing monitoring rotates aggregate probes across inactive account product
+datasets. A newly positive dataset enters bounded detailed collection on a
+later five-minute pass. Empty probes write coverage without observations.
+Errors remain local to one dataset, and persisted cursors distribute probes
+across passes.
+
+Current day and billing-cycle values live in deterministic 8-bit accumulator shards. A shard approaching 1.5 MB splits into deterministic 4-bit secondary segments. Each resource metric retains correction bookkeeping and a bounded 12-scan baseline. Repeating a window is idempotent; a changed Cloudflare result replaces the prior contribution through a delta. Completed local days seal into one usage_daily row per resource and day. Billing cycles use Cloudflare's reconciled boundaries when Billing Read is available and an explicitly approximate calendar boundary during a coverage gap. Cloudflare boundaries replace overlapping provisional calendar cycles. PayGo responses that omit a cycle end derive the next boundary from the account's anchor day.
 
 Initial ingestion writes the same correction-safe accumulator shards without producing alert-change records or reconciling each historical resource after every slice. Historical data is not evaluated for alerts. Completed-day sealing derives daily and billing-cycle totals from the stored day contributions after ingestion. Ongoing monitoring retains full change reconciliation before it evaluates alerts.
 

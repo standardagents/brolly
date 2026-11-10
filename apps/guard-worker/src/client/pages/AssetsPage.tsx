@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { ResourceIdentity, identityCollisions, identityLabel, type ResourceIdentityValue } from "../components/ResourceIdentity";
 import { Button, DetailBlock, Drawer, EmptyState, ExternalAction, Icon, InfoTip, LinkButton, Notice, Panel, PanelHead, Pill, ProductIcon, Select, Table, TableScroll, Td, Th, Tr, type Tone } from "../components/ui";
 import { compactId, dateTime, money, relativeTime } from "../format";
 import { tierDescription, tierLabel } from "../lib/meta";
@@ -56,17 +57,20 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Asset | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (append = false, cursor: string | null = null) => {
     setError("");
     const params = new URLSearchParams();
     if (family) params.set("family", family);
     if (tier) params.set("tier", tier);
     if (search.trim()) params.set("search", search.trim());
-    params.set("limit", "250");
+    params.set("limit", "100");
+    if (append && cursor) params.set("cursor", cursor);
     try {
-      const result = await api<{ assets: Asset[] }>(`/api/assets?${params}`, token);
-      setAssets(result.assets);
+      const result = await api<{ assets: Asset[]; nextCursor: string | null }>(`/api/assets?${params}`, token);
+      setAssets(current => append ? [...(current ?? []), ...result.assets] : result.assets);
+      setNextCursor(result.nextCursor);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -78,6 +82,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
   }, [load, search]);
 
   const unclassified = data.assets.tiers.unclassified ?? 0;
+  const collisions = useMemo(() => identityCollisions((assets ?? []).map(assetIdentity)), [assets]);
 
   return (
     <>
@@ -170,15 +175,9 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
                   const budget = data.policy.assetDailySpend[assetBudgetKey(asset)];
                   const levels = spendLevels(data, budget ?? data.policy.familyDailySpend[asset.family] ?? {});
                   return (
-                    <Tr key={`${asset.family}:${asset.id}`} clickable onClick={() => setSelected(asset)}>
+                    <Tr key={`${asset.family}:${asset.id}`}>
                       <Td>
-                        <span className="flex min-w-0 items-center gap-[11px]">
-                          <ProductIcon family={asset.family} />
-                          <span className="flex min-w-0 flex-col gap-[3px]">
-                            <strong className="max-w-[46ch] truncate">{asset.name ?? compactId(asset.id)}</strong>
-                            <small className="text-[12px] text-faint">{scopeLabel(asset)}</small>
-                          </span>
-                        </span>
+                        <ResourceIdentity identity={assetIdentity(asset)} collision={collisions.has(asset.id)} />
                       </Td>
                       <Td><TierBadge tier={asset.tier} /></Td>
                       <Td numeric>{budget ? highestSpendLabel(budget, levels) : "Product default"}</Td>
@@ -189,7 +188,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
                       </Td>
                       <Td>{asset.lastSignalAt ? relativeTime(asset.lastSignalAt) : "No samples yet"}</Td>
                       <Td className="whitespace-nowrap text-right">
-                        <LinkButton onClick={event => { event.stopPropagation(); setSelected(asset); }}>
+                        <LinkButton onClick={() => setSelected(asset)}>
                           Details <Icon name="arrow" />
                         </LinkButton>
                       </Td>
@@ -198,6 +197,7 @@ export function AssetsPage({ data, token, onNavigate, onBudgets }: {
                 })}
               </tbody>
             </Table>
+            {nextCursor && <div className="flex justify-center border-t border-line-soft p-3"><Button variant="secondary" onClick={() => void load(true, nextCursor)}>Load more assets</Button></div>}
           </TableScroll>
         ) : (
           <EmptyState icon="search" title="No matching assets">
@@ -232,6 +232,22 @@ function scopeLabel(asset: Asset): string {
   return `${asset.scope === "zone" ? "Zone" : "Resource"} · ${asset.family.replaceAll("_", " ")}`;
 }
 
+function assetIdentity(asset: Asset): ResourceIdentityValue {
+  return {
+    cloudflareId: asset.id,
+    cloudflareName: asset.name ?? null,
+    nameKind: asset.name ? "named" : "id_only",
+    resourceType: `${asset.family}:${asset.scope}`,
+    productFamily: asset.family,
+    parentIdentity: asset.parentId ? {
+      cloudflareId: asset.parentId,
+      cloudflareName: asset.parentName ?? null,
+      nameKind: asset.parentName ? "named" : "id_only",
+      resourceType: `${asset.family}:namespace`,
+    } : null,
+  };
+}
+
 function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token, onClose, onBudgets, onNavigate, onChanged }: {
   asset: Asset;
   budget: SpendLimits | null;
@@ -250,6 +266,7 @@ function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
   const fuseCapable = asset.family === "durable_objects" || asset.family === "workers";
   const effectiveBudget = budget ?? familyBudget;
 
@@ -274,6 +291,12 @@ function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token
     }
   }
 
+  async function copyId() {
+    await navigator.clipboard.writeText(asset.id);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+
   return (
     <Drawer
       onClose={onClose}
@@ -281,7 +304,7 @@ function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token
       header={
         <div>
           <TierBadge tier={asset.tier} />
-          <h2 id="asset-drawer-title">{asset.name ?? compactId(asset.id)}</h2>
+          <h2 id="asset-drawer-title">{identityLabel(assetIdentity(asset))}</h2>
           <p>{scopeLabel(asset)}</p>
         </div>
       }
@@ -289,7 +312,7 @@ function AssetDrawer({ asset, budget, familyBudget, levels, cloudflareUrl, token
     >
       <DetailBlock title="Details">
         <dl className="my-3">
-          <div className={detailRow}><dt className="text-faint">Resource ID</dt><dd className="m-0 min-w-0 break-all"><code>{asset.id}</code></dd></div>
+          <div className={detailRow}><dt className="text-faint">Resource ID</dt><dd className="m-0 min-w-0 break-all"><code>{asset.id}</code> <LinkButton inline onClick={() => void copyId()}>{copied ? "Copied" : "Copy ID"}</LinkButton></dd></div>
           {asset.parentId && <div className={detailRow}><dt className="text-faint">Parent</dt><dd className="m-0 min-w-0 break-all"><code>{asset.parentId}</code></dd></div>}
           <div className={detailRow}><dt className="text-faint">Discovered</dt><dd className="m-0 min-w-0 break-all">{dateTime(asset.discoveredAt)}</dd></div>
           <div className={detailRow}><dt className="text-faint">Last inventoried</dt><dd className="m-0 min-w-0 break-all">{dateTime(asset.seenAt)}</dd></div>

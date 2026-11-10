@@ -5,6 +5,7 @@ export type AutoQuarantinePolicy = "inherit" | "allow" | "deny";
 export type ControlCapability = "none" | "runtime_fuse" | "queue_pause";
 export type RuntimeFuseStatus = "unknown" | "missing" | "declared" | "verified" | "unhealthy";
 export type DataQualityState = "complete" | "partial" | "sampled" | "stale" | "missing";
+export type ResourceNameKind = "named" | "id_only" | "brolly";
 export type UsagePeriod = "day" | "billing_cycle";
 export type UsageMeasurement = "usage" | "estimated_cost" | "billed_cost";
 export type AggregationKind = "sum" | "maximum" | "latest";
@@ -30,7 +31,8 @@ export interface Resource {
   productFamily: string;
   resourceType: string;
   cloudflareId: string;
-  displayName: string;
+  cloudflareName: string | null;
+  nameKind: ResourceNameKind;
   firstSeenAt: number;
   lastSeenAt: number;
   lastActiveAt: number | null;

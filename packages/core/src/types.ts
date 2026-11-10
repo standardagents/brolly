@@ -8,6 +8,8 @@ export interface AssetRef {
   id: string;
   parentId?: string;
   name?: string;
+  /** Whether `name` came from Cloudflare or is a Brolly-owned aggregate label. */
+  nameKind?: "named" | "id_only" | "brolly";
   scope: "account" | "zone" | "resource" | "namespace" | "object";
   tier: AssetTier;
   tags?: Record<string, string>;

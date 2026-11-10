@@ -1,6 +1,7 @@
 import { resourceHashBucket, resourceId } from "@standardagents/brolly-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { scopeResourceId, usageSeriesResponse, type UsageSeriesResponse } from "../src/usage-series";
+import { LedgerStore } from "../src/ledger-store";
+import { resolvedBillingCycles, scopeResourceId, usageSeriesResponse, type UsageSeriesResponse } from "../src/usage-series";
 import { createTestD1, type TestD1 } from "./d1";
 
 const ACCOUNT = "acct-1";
@@ -11,11 +12,43 @@ describe("usage series", () => {
   beforeEach(() => { d1 = createTestD1(); });
   afterEach(() => d1.close());
 
+  it("uses authoritative anchored cycles without overlapping calendar fallbacks", () => {
+    expect(resolvedBillingCycles([
+      { starts_at: Date.UTC(2026, 5, 1), ends_at: Date.UTC(2026, 6, 1), approximate: 1 },
+      { starts_at: Date.UTC(2026, 5, 9), ends_at: Date.UTC(2026, 6, 1), approximate: 0 },
+      { starts_at: Date.UTC(2026, 6, 1), ends_at: Date.UTC(2026, 7, 1), approximate: 1 },
+      { starts_at: Date.UTC(2026, 6, 9), ends_at: Date.UTC(2026, 7, 1), approximate: 0 },
+    ])).toEqual([
+      { startsAt: Date.UTC(2026, 5, 9), endsAt: Date.UTC(2026, 6, 9), approximate: false },
+      { startsAt: Date.UTC(2026, 6, 9), endsAt: Date.UTC(2026, 7, 9), approximate: false },
+    ]);
+  });
+
   it("maps policy scope keys to ledger resource ids", () => {
     expect(scopeResourceId(ACCOUNT, "account")).toBe(resourceId(ACCOUNT, "account", "account", ACCOUNT));
     expect(scopeResourceId(ACCOUNT, "family:workers")).toBe(resourceId(ACCOUNT, "workers", "product", "workers"));
     expect(scopeResourceId(ACCOUNT, "asset:durable_objects:namespace:ns-1")).toBe(resourceId(ACCOUNT, "durable_objects", "durable_objects:namespace", "ns-1"));
     expect(scopeResourceId(ACCOUNT, "bogus")).toBeNull();
+  });
+
+  it("keeps a family's Product Limits schema identical with zero or observed usage", async () => {
+    const id = resourceId(ACCOUNT, "images", "product", "images");
+    await new LedgerStore(d1.db).syncMetricCatalog();
+    await d1.db.prepare(
+      `INSERT INTO resources(id,account_id,parent_resource_id,product_family,resource_type,cloudflare_id,display_name,first_seen_at,last_seen_at)
+       VALUES(?1,?2,NULL,'images','product','images','Images',?3,?3)`,
+    ).bind(id, ACCOUNT, NOW).run();
+
+    const before = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:images"), NOW)).json() as UsageSeriesResponse;
+    await d1.db.prepare(
+      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
+       VALUES(?1,'2026-08-15',0,0,'{"images:transformations":12}',0,'complete',1,?2)`,
+    ).bind(id, NOW).run();
+    const after = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:images"), NOW)).json() as UsageSeriesResponse;
+
+    expect(Object.keys(before.metrics)).toEqual(["images:transformations", "images:stored_images", "images:delivery"]);
+    expect(Object.keys(after.metrics)).toEqual(Object.keys(before.metrics));
+    expect(before.metrics).toEqual(after.metrics);
   });
 
   it("returns sealed daily rows plus unsealed accumulator days, with cycles and metric units", async () => {
@@ -26,11 +59,15 @@ describe("usage series", () => {
     ).bind(id, ACCOUNT, NOW).run();
     await d1.db.prepare(
       `INSERT INTO metric_definitions(id,product_family,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key,finest_scope,catalog_version)
-      VALUES('workers:requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1')`,
+      VALUES
+        ('workers:requests','workers','requests','Requests','requests','sum','workers_requests','graphql:workers','resource','v1'),
+        ('workers:cpu_ms','workers','cpu_ms','Workers CPU Time in Milliseconds','milliseconds','sum','cpu_ms','graphql:workers','resource','v1'),
+        ('workers:worker_build_minutes','workers','worker_build_minutes','Workers for Platforms - Worker Build Minutes','count','sum','worker_build_minutes','billing:billable-usage','product','billing-dynamic'),
+        ('workers:billed_cost_usd','workers','billed_cost_usd','Billed cost','usd','sum','billed_cost','billing:billable-usage','product','billing-dynamic')`,
     ).run();
     await d1.db.prepare(
-      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,completeness,sealed,revised_at)
-       VALUES(?1,'2026-08-15',0,0,'{"workers:requests":1000}',0.30,'complete',1,?2)`,
+      `INSERT INTO usage_daily(resource_id,local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,authoritative_allocated_cost_usd,completeness,sealed,revised_at)
+       VALUES(?1,'2026-08-15',0,0,'{"workers:requests":1000,"workers:cpu_ms":500,"workers:worker_build_minutes":12,"workers:billed_cost_usd":0.28}',0.30,0.28,'complete',1,?2)`,
     ).bind(id, NOW).run();
     await d1.db.prepare(
       `INSERT INTO usage_accumulator_shards(account_id,product_family,scope_type,local_day,billing_cycle_id,resource_hash_bucket,payload_json,updated_at)
@@ -47,10 +84,13 @@ describe("usage series", () => {
     expect(body.found).toBe(true);
     expect(body.today).toBe("2026-08-17");
     expect(body.series.map(point => [point.day, point.costUsd, point.metrics["workers:requests"], point.sealed])).toEqual([
-      ["2026-08-15", 0.3, 1000, true],
+      ["2026-08-15", 0.28, 1000, true],
       ["2026-08-17", 0.075, 250, false],
     ]);
-    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true, includedPerCycle: 10_000_000 });
+    expect(Object.keys(body.metrics)).toEqual(["workers:requests", "workers:cpu_ms"]);
+    expect(body.series[0]?.metrics).toEqual({ "workers:requests": 1000, "workers:cpu_ms": 500 });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", role: "billable", productLimit: true, billingKind: "independent", billable: true, includedPerCycle: 10_000_000 });
+    expect(body.metrics["workers:cpu_ms"]).toEqual({ key: "cpu_ms", label: "CPU time", unit: "ms", aggregationKind: "sum", role: "billable", productLimit: true, billingKind: "independent", billable: true, includedPerCycle: 30_000_000 });
     expect(body.includedQuotaCatalogVersion).toBe("2026-08");
     expect(body.planTier).toBe("unknown");
     expect(body.planTierSource).toBe("api");
@@ -81,7 +121,7 @@ describe("usage series", () => {
     ).bind(ACCOUNT, Date.UTC(2026, 7, 1), Date.UTC(2026, 8, 1)).run();
 
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=account"), NOW)).json() as UsageSeriesResponse;
-    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", role: "billable", productLimit: true, billingKind: "independent", billable: true });
     expect(body.series[0]?.metrics["workers:requests"]).toBe(11_000_000);
     expect(body.series[0]?.costUsd).toBe(3.3);
     expect(body.estimatedBillableCostSeries).toEqual([{ day: "2026-08-15", costUsd: 0.3 }]);
@@ -107,7 +147,7 @@ describe("usage series", () => {
 
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:durable_objects"), NOW)).json() as UsageSeriesResponse;
     expect(body.metrics["durable_objects:sql_storage_bytes"]).toEqual({
-      key: "sql_storage_bytes", label: "SQL storage", unit: "bytes", aggregationKind: "maximum", billable: true, includedPerCycle: 5_000_000_000,
+      key: "sql_storage_bytes", label: "SQLite storage", unit: "bytes", aggregationKind: "maximum", role: "billable", productLimit: true, billingKind: "independent", billable: true, includedPerCycle: 5_000_000_000,
     });
   });
 
@@ -141,7 +181,7 @@ describe("usage series", () => {
     const body = await (await usageSeriesResponse(d1.db, ACCOUNT, new URL("https://brolly.test/api/usage-series?scope=family:workers"), NOW)).json() as UsageSeriesResponse;
     expect(body.planTier).toBe("free");
     expect(body.planTierSource).toBe("api");
-    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", billable: true });
+    expect(body.metrics["workers:requests"]).toEqual({ key: "requests", label: "Requests", unit: "requests", aggregationKind: "sum", role: "billable", productLimit: true, billingKind: "independent", billable: true });
     expect(body.estimatedBillableCostSeries).toEqual([]);
   });
 });

@@ -3,6 +3,7 @@ import {
   LedgerBudgetExceededError,
   LedgerRunBudget,
   MonitoringBudgetExceededError,
+  PRODUCT_METRIC_CONTRACTS,
   RunBudget,
 } from "@standardagents/brolly-core";
 import { CloudflareClient } from "./cloudflare.js";
@@ -20,7 +21,7 @@ import {
   type HistoricalRateObservation,
   type HistoricalRateScope,
 } from "./historical-analytics.js";
-import { saveCoverageInterval, saveCoverageIntervals } from "./coverage-intervals.js";
+import { metricCoverageDataset, saveCoverageInterval, saveCoverageIntervals } from "./coverage-intervals.js";
 
 const DAY_MS = 86_400_000;
 const HISTORY_DAYS = 90;
@@ -48,6 +49,14 @@ const DEFAULT_UNSEEN_PAGE_UNIT_DEBIT = 16;
 // their GraphQL budget for the underlying event scan. A result-page estimate
 // cannot safely predict that scan cost.
 const FRESH_WINDOW_DATASETS = new Set(["imagesTransformationsAdaptiveGroups"]);
+const RETIRED_INITIAL_DATASETS = [
+  "httpRequests1dGroups",
+  "httpRequestsAdaptiveGroups",
+  "imagesRequestsAdaptiveGroups",
+  "emailRoutingAdaptiveGroups",
+] as const;
+// Cloudflare accepts at most ten zones in one account-root Analytics query.
+// Grouping them avoids multiplying identical time-range requests.
 const MAX_ZONE_BATCH = 10;
 const GRAPHQL_WINDOW_MS = 5 * 60_000;
 const INITIAL_LEASE_TTL_MS = 120_000;
@@ -58,6 +67,9 @@ const INITIAL_CAPABILITY_KEY_PREFIX = "initial_ingestion_capabilities:";
 const INITIAL_D1_READ_RESERVATION = 10_000;
 const INITIAL_D1_WRITE_RESERVATION = 1_000;
 const INITIAL_REMOTE_WORK_WALL_RESERVE_MS = 12_000;
+const ACTIVITY_PROBE_BUDGET_KEY_SUFFIX = ":activity_probe";
+const ACTIVITY_PROBE_REFERENCE_RANGE_DAYS = 32;
+const ACTIVITY_PROBE_UNKNOWN_CAPACITY_MIN_RANGE_DAYS = 8;
 
 export interface InitialIngestionJobResult {
   id: string;
@@ -81,16 +93,20 @@ export interface InitialIngestionSliceMetadata {
   dataset: string;
   zoneIds: string[];
   maxPageSize: number;
+  availableFields?: string[];
   units: number;
   family?: string;
   priority?: number;
   pageSizeHint?: number;
   graphqlBudgetFailures?: number;
   freshGraphqlBudgetRequired?: boolean;
+  detailCalibrationRequired?: boolean;
   availability?: "available" | "unavailable";
+  unavailableMetrics?: string[];
   terminalGap?: boolean;
   expectedGap?: boolean;
   persistenceRetry?: boolean;
+  activityProbe?: boolean;
 }
 
 export interface InitialIngestionProgress {
@@ -129,6 +145,16 @@ export interface InitialIngestionProgress {
     gaps: number;
     failedWindows: number;
     errors: string[];
+    issues: Array<{
+      dataset: string;
+      label: string;
+      fromDay: string;
+      toDay: string;
+      affectedDays: number;
+      affectedScopes: number | null;
+      scope: "account" | "zones";
+      reason: string;
+    }>;
   } | null;
   readiness: InitialIngestionReadiness;
 }
@@ -154,6 +180,7 @@ interface InitialSliceRow {
   ends_at: number;
   status: string;
   retry_count: number;
+  next_eligible_at: number | null;
   error: string | null;
 }
 
@@ -253,7 +280,7 @@ export async function ensureInitialIngestionJob(
       });
       const familyCosts = await initialBillingFamilyCosts(env.DB, env.BROLLY_ACCOUNT_ID);
       const slices = prioritizeInitialIngestionSlices(
-        initialIngestionSlicePlan(now, billingAvailable, capabilities),
+        activityProbeInitialIngestionSlices(initialIngestionSlicePlan(now, billingAvailable, capabilities)),
         familyCosts,
       );
       await insertInitialSlices(env.DB, jobId, slices.filter(slice => slice.collector !== "billing"), now);
@@ -385,6 +412,55 @@ export function prioritizeInitialIngestionSlices(
   });
 }
 
+/**
+ * Expensive product datasets start with a one-row aggregate for each
+ * Cloudflare-supported date range. A range with usage promotes every remaining
+ * range for that dataset to detailed collection. Billing, Durable Objects, and
+ * Workers retain their dedicated fast lanes.
+ */
+export function activityProbeInitialIngestionSlices(
+  slices: InitialIngestionSlicePlan[],
+): InitialIngestionSlicePlan[] {
+  return slices.flatMap(slice => {
+    if (slice.status !== "pending"
+      || slice.collector === "billing"
+      || slice.collector === "graphql:durable-objects"
+      || slice.collector === "graphql:workers") return slice;
+    const metadata = parseSliceMetadata(slice.scopeKey, slice.startsAt, slice.endsAt);
+    if (metadata.availability === "unavailable" || metadata.expectedGap) return slice;
+    if (FRESH_WINDOW_DATASETS.has(metadata.dataset)) {
+      const partitions = Math.max(1, metadata.zoneIds.length);
+      const daily: InitialIngestionSlicePlan[] = [];
+      for (let endsAt = slice.endsAt; endsAt > slice.startsAt;) {
+        const startsAt = Math.max(slice.startsAt, startOfUtcDay(endsAt - 1));
+        daily.push({
+          ...slice,
+          startsAt,
+          endsAt,
+          scopeKey: serializeMetadata({
+            ...metadata,
+            units: calendarDays(startsAt, endsAt) * partitions,
+            pageSizeHint: 2,
+            freshGraphqlBudgetRequired: false,
+            activityProbe: true,
+          }),
+        });
+        endsAt = startsAt;
+      }
+      return daily;
+    }
+    return {
+      ...slice,
+      scopeKey: serializeMetadata({
+        ...metadata,
+        pageSizeHint: 1,
+        freshGraphqlBudgetRequired: false,
+        activityProbe: true,
+      }),
+    };
+  });
+}
+
 async function initialBillingFamilyCosts(db: D1Database, accountId: string): Promise<Record<string, number>> {
   const rows = await db.prepare(
     `SELECT product_family,SUM(COALESCE(billed_cost,effective_cost,list_cost,0)) AS cost
@@ -492,6 +568,7 @@ function capabilityGroups(values: HistoricalDatasetCapability[]): HistoricalData
       value.maxDurationSeconds,
       value.notOlderThanSeconds,
       value.maxPageSize,
+      value.availableFields?.slice().sort() ?? null,
       value.state,
       value.detail,
     ]);
@@ -579,7 +656,9 @@ export async function runInitialIngestion(env: Env, jobId: string): Promise<void
   if (!await acquireInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder)) return;
   let quota: InitialGraphqlQuota;
   try {
+    await supersedeRetiredInitialSlices(env.DB, jobId);
     await requeueRunningInitialSlices(env.DB, jobId);
+    await updateInitialJobStatus(env.DB, jobId);
     quota = await loadInitialGraphqlQuota(env.DB, env.BROLLY_ACCOUNT_ID, jobId, Date.now());
   } catch (error) {
     await releaseInitialIngestionLease(env.DB, env.BROLLY_ACCOUNT_ID, holder);
@@ -852,22 +931,81 @@ async function claimInitialSlice(
   mode: "analytics" | "billing" | "persistence_retry",
 ): Promise<InitialClaimResult> {
   const persistenceRetry = mode === "persistence_retry" ? 1 : 0;
-  const collectorPredicate = mode === "billing" ? "collector_key='billing'" : "collector_key!='billing'";
+  const collectorPredicate = mode === "billing"
+    ? "candidate.collector_key='billing'"
+    : "candidate.collector_key!='billing'";
+  const eligibilityPredicate = mode === "analytics"
+    ? `(candidate.next_eligible_at IS NULL OR candidate.next_eligible_at<=?2
+       OR COALESCE(json_extract(candidate.scope_key,'$.priority'),10000)<=1
+       OR (COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=1
+         AND COALESCE(json_extract(candidate.scope_key,'$.activityProbe'),0)=0))`
+    : `(candidate.next_eligible_at IS NULL OR candidate.next_eligible_at<=?2)`;
+  const activityProbeEligibilityPredicate = `(
+    COALESCE(json_extract(candidate.scope_key,'$.activityProbe'),0)=0
+    OR NOT EXISTS (
+      SELECT 1 FROM backfill_slices AS active
+      WHERE active.backfill_job_id=candidate.backfill_job_id
+        AND active.status='running'
+        AND COALESCE(json_extract(active.scope_key,'$.activityProbe'),0)=1
+        AND json_extract(active.scope_key,'$.dataset')=json_extract(candidate.scope_key,'$.dataset')
+    )
+  )`;
+  let hasOrdinaryCandidate = false;
+  if (mode === "analytics") {
+    const ordinary = await env.DB.prepare(
+      `SELECT 1 AS present FROM backfill_slices AS candidate
+       WHERE candidate.backfill_job_id=?1 AND candidate.status='pending' AND ${eligibilityPredicate}
+         AND ${collectorPredicate}
+         AND COALESCE(json_extract(candidate.scope_key,'$.persistenceRetry'),0)=?3
+         AND COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=0
+         AND COALESCE(json_extract(candidate.scope_key,'$.detailCalibrationRequired'),0)=0
+         AND ${activityProbeEligibilityPredicate}
+       LIMIT 1`,
+    ).bind(jobId, Date.now(), persistenceRetry).first<{ present: number }>();
+    budget.charge("d1RowsRead");
+    hasOrdinaryCandidate = ordinary?.present === 1;
+  }
+  const freshCandidatePredicate = hasOrdinaryCandidate
+    ? `AND (
+       COALESCE(json_extract(candidate.scope_key,'$.freshGraphqlBudgetRequired'),0)=0
+       OR COALESCE(json_extract(candidate.scope_key,'$.detailCalibrationRequired'),0)=1
+       OR COALESCE(json_extract(candidate.scope_key,'$.priority'),10000)<=1
+     )`
+    : "";
   const candidates = await env.DB.prepare(
-    `SELECT * FROM backfill_slices
-     WHERE backfill_job_id=?1 AND status='pending' AND (next_eligible_at IS NULL OR next_eligible_at<=?2)
+    `SELECT candidate.* FROM backfill_slices AS candidate
+     WHERE candidate.backfill_job_id=?1 AND candidate.status='pending' AND ${eligibilityPredicate}
        AND ${collectorPredicate}
-       AND COALESCE(json_extract(scope_key,'$.persistenceRetry'),0)=?3
-     ORDER BY COALESCE(json_extract(scope_key,'$.priority'),10000),
-       COALESCE(json_array_length(json_extract(scope_key,'$.zoneIds')),0),
-       ends_at DESC,collector_key LIMIT 100`,
+       AND COALESCE(json_extract(candidate.scope_key,'$.persistenceRetry'),0)=?3
+       AND ${activityProbeEligibilityPredicate}
+       ${freshCandidatePredicate}
+     ORDER BY COALESCE(json_extract(candidate.scope_key,'$.priority'),10000),
+       COALESCE(json_array_length(json_extract(candidate.scope_key,'$.zoneIds')),0),
+       candidate.ends_at DESC,candidate.collector_key LIMIT 100`,
   ).bind(jobId, Date.now(), persistenceRetry).all<InitialSliceRow>();
   budget.charge("d1RowsRead", candidates.results.length);
+  const preparedCandidates = candidates.results.map(candidate => ({
+    candidate,
+    metadata: parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at),
+  }));
+  const protectedCandidate = mode === "analytics"
+    ? preparedCandidates.find(({ metadata }) => (metadata.priority ?? Number.POSITIVE_INFINITY) <= 1)
+      ?? preparedCandidates.find(({ metadata }) => (
+        metadata.detailCalibrationRequired === true
+        && metadata.activityProbe !== true
+      ))
+      ?? (!hasOrdinaryCandidate
+        ? preparedCandidates.find(({ metadata }) => (
+          metadata.freshGraphqlBudgetRequired === true
+          && metadata.activityProbe !== true
+        ))
+        : undefined)
+    : undefined;
+  if (mode === "analytics" && !protectedCandidate) quota.clearProtectedHead();
   let slice: InitialSliceRow | undefined;
   let metadata: InitialIngestionSliceMetadata | undefined;
   let earliestAdmission: number | null | undefined;
-  for (const candidate of candidates.results) {
-    const parsed = parseSliceMetadata(candidate.scope_key, candidate.starts_at, candidate.ends_at);
+  for (const { candidate, metadata: parsed } of preparedCandidates) {
     if (mode !== "billing") {
       const pageSize = historicalQueryPageSize({
         dataset: parsed.dataset,
@@ -877,25 +1015,82 @@ async function claimInitialSlice(
         zoneIds: parsed.zoneIds,
       });
       const logicalQueries = initialSliceLogicalQueries(parsed);
+      const budgetKey = initialGraphqlBudgetKey(parsed, candidate.starts_at, candidate.ends_at);
+      const rangeDays = rangeDurationDays(candidate.starts_at, candidate.ends_at);
+      const protectedHead = candidate.id === protectedCandidate?.candidate.id;
+      if (protectedHead && candidate.next_eligible_at !== null && candidate.next_eligible_at > Date.now()) {
+        quota.deferProtectedHead(
+          candidate.id,
+          logicalQueries,
+          budgetKey,
+          pageSize,
+          candidate.next_eligible_at,
+          rangeDays,
+        );
+        if (earliestAdmission !== null) {
+          earliestAdmission = Math.min(
+            earliestAdmission ?? Number.POSITIVE_INFINITY,
+            candidate.next_eligible_at,
+          );
+        }
+        continue;
+      }
       if (parsed.freshGraphqlBudgetRequired) {
         const freshAt = quota.freshBudgetAvailableAt;
         if (freshAt > Date.now()) {
+          if (protectedHead) {
+            quota.reserveProtectedHead(candidate.id, logicalQueries, budgetKey, pageSize, freshAt, rangeDays);
+          }
           if (earliestAdmission !== null) {
             earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, freshAt);
           }
           continue;
         }
       }
-      const admission = quota.claimAdmission(
-        rateScope(parsed),
-        logicalQueries,
-        parsed.zoneIds,
-        parsed.dataset,
-        pageSize,
-      );
-      if (admission.kind === "quota") {
+      if (!protectedHead && protectedCandidate
+        && !quota.canAdmitResidual(logicalQueries, budgetKey, pageSize, rangeDays)) {
+        const protectedAt = quota.protectedHeadAdmitAt;
+        if (protectedAt !== null && earliestAdmission !== null) {
+          earliestAdmission = Math.min(earliestAdmission ?? Number.POSITIVE_INFINITY, protectedAt);
+        }
         continue;
       }
+      if (parsed.activityProbe
+        && quota.shouldSplitActivityProbe(logicalQueries, budgetKey, pageSize)) {
+        await splitSlice(
+          env.DB,
+          candidate,
+          parsed,
+          "available Cloudflare GraphQL scan budget",
+          budget,
+        );
+        console.info("brolly.initial_graphql_probe_split", JSON.stringify({
+          dataset: parsed.dataset,
+          startsAt: candidate.starts_at,
+          endsAt: candidate.ends_at,
+          days: calendarDays(candidate.starts_at, candidate.ends_at),
+        }));
+        return claimInitialSlice(env, budget, quota, jobId, mode);
+      }
+      const admission = protectedHead
+        ? quota.claimProtectedAdmission(
+          candidate.id,
+          rateScope(parsed),
+          logicalQueries,
+          parsed.zoneIds,
+          budgetKey,
+          pageSize,
+          rangeDays,
+        )
+        : quota.claimAdmission(
+          rateScope(parsed),
+          logicalQueries,
+          parsed.zoneIds,
+          budgetKey,
+          pageSize,
+          rangeDays,
+        );
+      if (admission.kind === "quota") continue;
       if (admission.kind === "paced") {
         if (admission.waitUntil === null) earliestAdmission ??= null;
         else if (earliestAdmission !== null) {
@@ -949,7 +1144,12 @@ async function claimInitialSlice(
     budget.charge("d1RowsWritten", persistenceReservation.writes);
   }
   const claimedRateScope = mode === "billing" ? null : rateScope(metadata);
-  if (claimedRateScope) quota.reserveClaim(claimedRateScope);
+  if (claimedRateScope) {
+    quota.reserveClaim(
+      claimedRateScope,
+      slice.id === protectedCandidate?.candidate.id ? slice.id : null,
+    );
+  }
   return { slice, metadata, persistenceReservation, rateScope: claimedRateScope };
 }
 
@@ -975,16 +1175,17 @@ async function fetchInitialSlice(
       claimed,
       usage: await client.historicalUsage({
         dataset: metadata.dataset,
+        budgetKey: initialGraphqlBudgetKey(metadata, slice.starts_at, slice.ends_at),
         startsAt: slice.starts_at,
         endsAt: slice.ends_at,
         maxPageSize: metadata.pageSizeHint ?? metadata.maxPageSize,
+        availableFields: metadata.availableFields,
         zoneIds: metadata.zoneIds,
+        activityProbe: metadata.activityProbe,
       }),
     };
   } catch (error) {
     return { claimed, error };
-  } finally {
-    if (claimed.rateScope && quota) quota.releaseClaim(claimed.rateScope);
   }
 }
 
@@ -1002,6 +1203,7 @@ async function finalizeInitialSlice(
   const slice = claimed.slice;
   const metadata = claimed.metadata;
   const budgetAbortedAtEntry = budget.signal.aborted;
+  let completedGapDetail: string | null = null;
   releasePersistenceReservation(budget, claimed);
   try {
     if (slice.collector_key === "billing") {
@@ -1019,6 +1221,15 @@ async function finalizeInitialSlice(
       if (!result) throw new Error("Historical Analytics returned no result");
       if (result.zoneGaps?.length && metadata.zoneIds.length) {
         await splitZoneGapSlice(env.DB, env.BROLLY_ACCOUNT_ID, slice, metadata, result.zoneGaps, budget);
+        if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
+        return true;
+      }
+      const activityDetected = !result.complete || result.samples.some(sample => Math.abs(sample.value) > 0);
+      const probeIsDailyAccountAggregate = metadata.activityProbe
+        && FRESH_WINDOW_DATASETS.has(metadata.dataset)
+        && calendarDays(slice.starts_at, slice.ends_at) === 1;
+      if (metadata.activityProbe && activityDetected && !probeIsDailyAccountAggregate) {
+        await promoteActivityProbe(env.DB, slice, metadata, budget);
         if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
         return true;
       }
@@ -1044,14 +1255,35 @@ async function finalizeInitialSlice(
         if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
         return true;
       }
-      await saveDatasetSliceCoverage(env, slice, metadata, "measured", undefined, budget);
-      if (metadata.freshGraphqlBudgetRequired && quota?.hasReliableDebit(metadata.dataset)) {
+      await saveResultSliceCoverage(env, slice, metadata, result.coverage, budget);
+      const unavailableMetrics = result.coverage
+        .filter(item => item.state !== "healthy" && item.state !== "delayed")
+        .map(item => item.metric);
+      if (unavailableMetrics.length) {
+        completedGapDetail = `Cloudflare omitted required metric data: ${unavailableMetrics.join(", ")}`;
+        const updated = await env.DB.prepare(
+          `UPDATE backfill_slices SET scope_key=?2,updated_at=?3 WHERE id=?1`,
+        ).bind(
+          slice.id,
+          serializeMetadata({ ...metadata, unavailableMetrics, terminalGap: true }),
+          Date.now(),
+        ).run();
+        chargeMeta(budget, updated.meta);
+      }
+      if ((metadata.freshGraphqlBudgetRequired || metadata.detailCalibrationRequired)
+        && quota?.hasReliableDebit(initialGraphqlBudgetKey(metadata))) {
         const relaxed = await env.DB.prepare(
           `UPDATE backfill_slices
-           SET scope_key=json_set(scope_key,'$.freshGraphqlBudgetRequired',json('false')),updated_at=?3
-           WHERE backfill_job_id=?1 AND status='pending'
+           SET scope_key=json_remove(
+             json_set(scope_key,'$.freshGraphqlBudgetRequired',json('false')),
+             '$.detailCalibrationRequired'
+           ),updated_at=?3
+           WHERE backfill_job_id=?1
              AND json_extract(scope_key,'$.dataset')=?2
-             AND COALESCE(json_extract(scope_key,'$.freshGraphqlBudgetRequired'),0)=1`,
+             AND (
+               COALESCE(json_extract(scope_key,'$.freshGraphqlBudgetRequired'),0)=1
+               OR COALESCE(json_extract(scope_key,'$.detailCalibrationRequired'),0)=1
+             )`,
         ).bind(slice.backfill_job_id, metadata.dataset, Date.now()).run();
         chargeMeta(budget, relaxed.meta);
         if (Number(relaxed.meta.changes ?? 0) > 0) {
@@ -1062,7 +1294,14 @@ async function finalizeInitialSlice(
         }
       }
     }
-    await finishSlice(env.DB, budget, slice.id, "complete", null, "complete");
+    await finishSlice(
+      env.DB,
+      budget,
+      slice.id,
+      "complete",
+      completedGapDetail,
+      completedGapDetail ? "partial" : "complete",
+    );
     if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
     return true;
   } catch (error) {
@@ -1078,31 +1317,42 @@ async function finalizeInitialSlice(
           startsAt: slice.starts_at,
           endsAt: slice.ends_at,
         }));
-        await env.DB.prepare(
-          `UPDATE backfill_slices SET status='pending',scope_key=?2,error=?3,next_eligible_at=?4,
-            coverage_status='missing',updated_at=?5 WHERE id=?1`,
+        const converted = await env.DB.prepare(
+          `UPDATE backfill_slices
+           SET scope_key=json_remove(
+             json_set(scope_key,'$.freshGraphqlBudgetRequired',json('true')),
+             '$.detailCalibrationRequired'
+           ),updated_at=?4
+           WHERE backfill_job_id=?1
+             AND json_extract(scope_key,'$.dataset')=?2
+             AND (status='pending' OR id=?3)`,
+        ).bind(slice.backfill_job_id, metadata.dataset, slice.id, now).run();
+        chargeMeta(budget, converted.meta);
+        const deferred = await env.DB.prepare(
+          `UPDATE backfill_slices SET status='pending',error=?2,retry_count=retry_count+1,next_eligible_at=?3,
+            coverage_status='missing',updated_at=?4 WHERE id=?1`,
         ).bind(
           slice.id,
-          serializeMetadata({ ...metadata, freshGraphqlBudgetRequired: true }),
           error.message.slice(0, 2_000),
           Math.max(now + 1_000, error.retryAt),
           now,
         ).run();
+        chargeMeta(budget, deferred.meta);
         if (updateJob) await updateInitialJobStatus(env.DB, jobId);
         return false;
       }
-      if (oversizedQuery
-        && slice.ends_at - slice.starts_at > DAY_MS
-        && graphqlBudgetFailures >= 4) {
-        const detail = "Cloudflare's GraphQL budget could not return this dataset after progressively smaller ranges.";
-        console.warn("brolly.initial_graphql_unavailable", JSON.stringify({
+      if (oversizedQuery && metadata.zoneIds.length > 1) {
+        console.info("brolly.initial_graphql_zone_split", JSON.stringify({
           dataset: metadata.dataset,
-          startsAt: slice.starts_at,
-          endsAt: slice.ends_at,
-          reason: "repeated_range_budget_exhaustion",
+          zones: metadata.zoneIds.length,
           failures: graphqlBudgetFailures,
         }));
-        await markDatasetBudgetUnavailable(env, slice.backfill_job_id, metadata.dataset, detail, budget);
+        await splitOversizedZoneBatches(
+          env.DB,
+          slice,
+          { ...metadata, graphqlBudgetFailures },
+          budget,
+        );
         if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
         return false;
       }
@@ -1131,10 +1381,7 @@ async function finalizeInitialSlice(
           endsAt: slice.ends_at,
           reason: "single_day_budget_exhausted",
         }));
-        await saveDatasetSliceCoverage(env, slice, metadata, "unavailable", detail, budget);
-        await markSliceTerminalGap(env.DB, slice, metadata, detail, budget);
-        await finishSlice(env.DB, budget, slice.id, "failed", detail, "missing");
-        if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
+        await terminateInitialDatasetSlices(env, slice.backfill_job_id, metadata.dataset, detail, budget);
         return false;
       }
       await env.DB.prepare(
@@ -1225,7 +1472,49 @@ async function finalizeInitialSlice(
     chargeMeta(budget, result.meta);
     if (updateJob) await updateInitialJobStatus(env.DB, jobId, budget);
     return true;
+  } finally {
+    if (claimed.rateScope && quota) quota.releaseClaim(claimed.rateScope);
   }
+}
+
+async function promoteActivityProbe(
+  db: D1Database,
+  slice: InitialSliceRow,
+  metadata: InitialIngestionSliceMetadata,
+  budget?: LedgerRunBudget,
+): Promise<void> {
+  const now = Date.now();
+  const promoted = await db.prepare(
+    `UPDATE backfill_slices
+     SET status='pending',
+       scope_key=json_remove(
+         json_set(
+           scope_key,
+           '$.freshGraphqlBudgetRequired',json(?5),
+           '$.detailCalibrationRequired',json('true')
+         ),
+         '$.pageSizeHint','$.graphqlBudgetFailures','$.activityProbe'
+       ),
+       error=NULL,retry_count=0,next_eligible_at=?3,coverage_status='missing',updated_at=?3
+     WHERE backfill_job_id=?1
+       AND json_extract(scope_key,'$.dataset')=?2
+       AND COALESCE(json_extract(scope_key,'$.activityProbe'),0)=1
+       AND (status='pending' OR id=?4)`,
+  ).bind(
+    slice.backfill_job_id,
+    metadata.dataset,
+    now,
+    slice.id,
+    FRESH_WINDOW_DATASETS.has(metadata.dataset) ? "true" : "false",
+  ).run();
+  if (budget) chargeMeta(budget, promoted.meta);
+  console.info("brolly.initial_graphql_activity_detected", JSON.stringify({
+    dataset: metadata.dataset,
+    startsAt: slice.starts_at,
+    endsAt: slice.ends_at,
+    zones: metadata.zoneIds.length,
+    promotedSlices: Number(promoted.meta.changes ?? 0),
+  }));
 }
 
 async function splitZoneGapSlice(
@@ -1337,7 +1626,8 @@ async function splitOversizedDatasetRanges(
 ): Promise<void> {
   const failedDuration = slice.ends_at - slice.starts_at;
   const subdivisions = metadata.graphqlBudgetFailures === 1 ? 4 : 2;
-  await splitSlice(db, slice, metadata, "Cloudflare GraphQL query budget", budget, subdivisions);
+  const childMetadata = resetGraphqlShape(metadata);
+  await splitSlice(db, slice, childMetadata, "Cloudflare GraphQL query budget", budget, subdivisions);
   const siblings = await db.prepare(
     `SELECT * FROM backfill_slices
      WHERE backfill_job_id=?1 AND status='pending'
@@ -1355,10 +1645,7 @@ async function splitOversizedDatasetRanges(
     await splitSlice(
       db,
       sibling,
-      {
-        ...parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at),
-        graphqlBudgetFailures: metadata.graphqlBudgetFailures,
-      },
+      resetGraphqlShape(parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at)),
       "same dataset's observed GraphQL query budget",
       budget,
       subdivisions,
@@ -1371,6 +1658,89 @@ async function splitOversizedDatasetRanges(
       minimumDurationMs: Math.max(DAY_MS + 1, failedDuration - DAY_MS),
     }));
   }
+}
+
+async function splitOversizedZoneBatches(
+  db: D1Database,
+  slice: InitialSliceRow,
+  metadata: InitialIngestionSliceMetadata,
+  budget: LedgerRunBudget,
+): Promise<void> {
+  const failedZoneCount = metadata.zoneIds.length;
+  await splitZoneSlice(db, slice, resetGraphqlShape(metadata), "Cloudflare GraphQL query budget", budget);
+  const siblings = await db.prepare(
+    `SELECT * FROM backfill_slices
+     WHERE backfill_job_id=?1 AND status='pending'
+       AND json_extract(scope_key,'$.dataset')=?2
+       AND json_array_length(json_extract(scope_key,'$.zoneIds'))>=?3
+     ORDER BY ends_at DESC LIMIT 100`,
+  ).bind(slice.backfill_job_id, metadata.dataset, failedZoneCount).all<InitialSliceRow>();
+  budget.charge("d1RowsRead", siblings.results.length);
+  for (const sibling of siblings.results) {
+    const siblingMetadata = parseSliceMetadata(sibling.scope_key, sibling.starts_at, sibling.ends_at);
+    if (siblingMetadata.zoneIds.length <= 1) continue;
+    await splitZoneSlice(
+      db,
+      sibling,
+      resetGraphqlShape(siblingMetadata),
+      "same dataset's observed GraphQL query budget",
+      budget,
+    );
+  }
+  if (siblings.results.length) {
+    console.info("brolly.initial_graphql_zone_sibling_splits", JSON.stringify({
+      dataset: metadata.dataset,
+      count: siblings.results.length,
+      failedZoneCount,
+    }));
+  }
+}
+
+async function splitZoneSlice(
+  db: D1Database,
+  slice: InitialSliceRow,
+  metadata: InitialIngestionSliceMetadata,
+  reason: string,
+  budget: LedgerRunBudget,
+): Promise<void> {
+  const middle = Math.ceil(metadata.zoneIds.length / 2);
+  const partitions = [metadata.zoneIds.slice(0, middle), metadata.zoneIds.slice(middle)].filter(values => values.length > 0);
+  if (partitions.length < 2) throw new Error("A zone slice requires at least two zones before splitting");
+  const now = Date.now();
+  let assignedUnits = 0;
+  const results = await db.batch([
+    db.prepare(`UPDATE backfill_slices SET status='superseded',error=?2,updated_at=?3 WHERE id=?1`)
+      .bind(slice.id, `Zone batch split after reaching the ${reason}`, now),
+    ...partitions.map((zoneIds, index) => {
+      const units = index === partitions.length - 1
+        ? metadata.units - assignedUnits
+        : Math.max(1, Math.round(metadata.units * zoneIds.length / metadata.zoneIds.length));
+      assignedUnits += units;
+      return db.prepare(
+        `INSERT OR IGNORE INTO backfill_slices(
+           id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,next_eligible_at,coverage_status,updated_at
+         ) VALUES(?1,?2,?3,?4,?5,?6,'pending',0,?7,'missing',?7)`,
+      ).bind(
+        crypto.randomUUID(),
+        slice.backfill_job_id,
+        slice.collector_key,
+        serializeMetadata({ ...metadata, zoneIds, units }),
+        slice.starts_at,
+        slice.ends_at,
+        now,
+      );
+    }),
+  ]);
+  for (const result of results) chargeMeta(budget, result.meta);
+}
+
+function resetGraphqlShape(metadata: InitialIngestionSliceMetadata): InitialIngestionSliceMetadata {
+  return {
+    ...metadata,
+    graphqlBudgetFailures: undefined,
+    freshGraphqlBudgetRequired: true,
+    detailCalibrationRequired: undefined,
+  };
 }
 
 function resourcePageShape(dataset: string): { family: string; resourceType: string; rowsPerResourceDay: number } | null {
@@ -1458,39 +1828,6 @@ async function updatePendingResourcePageHints(
   }));
 }
 
-async function markDatasetBudgetUnavailable(
-  env: Env,
-  jobId: string,
-  dataset: string,
-  detail: string,
-  budget: LedgerRunBudget,
-): Promise<void> {
-  const rows = await env.DB.prepare(
-    `SELECT * FROM backfill_slices
-     WHERE backfill_job_id=?1 AND status IN ('pending','running')
-       AND json_extract(scope_key,'$.dataset')=?2
-     ORDER BY starts_at LIMIT 100`,
-  ).bind(jobId, dataset).all<InitialSliceRow>();
-  budget.charge("d1RowsRead", rows.results.length);
-  for (const row of rows.results) {
-    const metadata = parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at);
-    const unavailable = serializeMetadata({
-      ...metadata,
-      availability: "unavailable",
-      terminalGap: true,
-      expectedGap: false,
-    });
-    const result = await env.DB.prepare(
-      `UPDATE backfill_slices SET status='failed',scope_key=?2,error=?3,next_eligible_at=NULL,
-         coverage_status='missing',updated_at=?4 WHERE id=?1 AND status IN ('pending','running')`,
-    ).bind(row.id, unavailable, detail, Date.now()).run();
-    chargeMeta(budget, result.meta);
-    if (Number(result.meta.changes ?? 0) === 1) {
-      await saveDatasetSliceCoverage(env, row, { ...metadata, availability: "unavailable", terminalGap: true }, "unavailable", detail, budget);
-    }
-  }
-}
-
 /** Split a dense range while preserving its exact progress denominator. */
 export function bisectInitialIngestionRange(
   startsAt: number,
@@ -1525,7 +1862,8 @@ function bisectRangeWithUnits(
 
 async function finishSlice(db: D1Database, budget: LedgerRunBudget, id: string, status: string, error: string | null, coverage: string): Promise<void> {
   const result = await db.prepare(
-    `UPDATE backfill_slices SET status=?2,error=?3,next_eligible_at=NULL,coverage_status=?4,updated_at=?5 WHERE id=?1`,
+    `UPDATE backfill_slices SET status=?2,error=?3,next_eligible_at=NULL,coverage_status=?4,updated_at=?5
+     WHERE id=?1 AND status='running'`,
   ).bind(id, status, error, coverage, Date.now()).run();
   chargeMeta(budget, result.meta);
 }
@@ -1548,6 +1886,59 @@ async function markSliceTerminalGap(
   if (budget) chargeMeta(budget, result.meta);
 }
 
+/** A dataset that cannot return one day cannot complete any remaining range. */
+export async function terminateInitialDatasetSlices(
+  env: Env,
+  jobId: string,
+  dataset: string,
+  reason: string,
+  budget: LedgerRunBudget,
+): Promise<void> {
+  const updatedAt = Date.now();
+  const result = await env.DB.prepare(
+    `UPDATE backfill_slices
+     SET status='failed',
+         scope_key=json_set(scope_key,'$.availability','unavailable','$.terminalGap',json('true')),
+         coverage_status='missing',error=COALESCE(error,?3),updated_at=?4
+     WHERE backfill_job_id=?1 AND status IN ('pending','running')
+       AND json_extract(scope_key,'$.dataset')=?2`,
+  ).bind(jobId, dataset, reason.slice(0, 2_000), updatedAt).run();
+  const count = Number(result.meta.changes ?? 0);
+  await updateInitialJobStatus(env.DB, jobId);
+  if (count > 0) {
+    console.warn("brolly.initial_graphql_dataset_terminated", JSON.stringify({
+      dataset,
+      slices: count,
+      reason,
+    }));
+  }
+  try {
+    chargeMeta(budget, result.meta);
+    const slices = await env.DB.prepare(
+      `SELECT id,backfill_job_id,collector_key,scope_key,starts_at,ends_at,status,retry_count,error
+       FROM backfill_slices
+       WHERE backfill_job_id=?1 AND status='failed' AND updated_at=?3
+         AND json_extract(scope_key,'$.dataset')=?2`,
+    ).bind(jobId, dataset, updatedAt).all<InitialSliceRow>();
+    budget.charge("d1RowsRead", slices.results.length);
+    await saveCoverageIntervals(env.DB, slices.results.flatMap(item => {
+      const itemMetadata = parseSliceMetadata(item.scope_key, item.starts_at, item.ends_at);
+      return (itemMetadata.zoneIds.length ? itemMetadata.zoneIds : [""]).map(scopeKey => ({
+        accountId: env.BROLLY_ACCOUNT_ID,
+        dataset: itemMetadata.dataset,
+        scopeKey,
+        startsAt: item.starts_at,
+        endsAt: item.ends_at,
+        state: "unavailable" as const,
+        reason,
+      }));
+    }), budget);
+  } catch (error) {
+    if (error instanceof LedgerBudgetExceededError || error instanceof MonitoringBudgetExceededError) return;
+    throw error;
+  }
+}
+
 async function updateInitialJobStatus(db: D1Database, jobId: string, budget?: LedgerRunBudget): Promise<void> {
   const result = await db.prepare(
     `UPDATE backfill_jobs SET status=CASE
@@ -1562,7 +1953,7 @@ async function updateInitialJobStatus(db: D1Database, jobId: string, budget?: Le
 function rangeSlices(collector: string, dataset: string, zoneIds: string[], now: number, setting: HistoricalDatasetCapability): InitialIngestionSlicePlan[] {
   const retentionDays = Math.max(1, Math.min(HISTORY_DAYS, Math.floor(setting.notOlderThanSeconds / 86_400)));
   const maxDays = Math.max(1, Math.floor(setting.maxDurationSeconds / 86_400));
-  const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, setting.maxPageSize);
+  const ranges = boundedRanges(collector, dataset, zoneIds, now, retentionDays, maxDays, setting.maxPageSize, setting.availableFields);
   if (retentionDays >= HISTORY_DAYS) return ranges;
   const requestedStart = historyStart(now, HISTORY_DAYS);
   const availableStart = historyStart(now, retentionDays);
@@ -1572,7 +1963,7 @@ function rangeSlices(collector: string, dataset: string, zoneIds: string[], now:
 
 function initialIngestionDays(
   job: { kind: string; requested_start_at: number; requested_end_at: number },
-  rows: Array<{ scope_key: string; starts_at: number; ends_at: number; status: string; error: string | null }>,
+  rows: Array<{ collector_key: string; scope_key: string; starts_at: number; ends_at: number; status: string; error: string | null }>,
 ): InitialIngestionProgress["days"] {
   const end = job.requested_end_at;
   const requestedStart = startOfUtcDay(job.requested_start_at);
@@ -1584,11 +1975,42 @@ function initialIngestionDays(
   let gaps = 0;
   const errors: string[] = [];
   let failedWindows = 0;
+  const issueGroups = new Map<string, {
+    dataset: string;
+    label: string;
+    startsAt: number;
+    endsAt: number;
+    days: Set<string>;
+    zoneIds: Set<string>;
+    account: boolean;
+    reason: string;
+  }>();
 
   for (const row of rows) {
-    if (row.status !== "failed") continue;
-    failedWindows += 1;
-    if (row.error && !errors.includes(row.error) && errors.length < 3) errors.push(row.error);
+    const metadata = parseSliceMetadata(row.scope_key, row.starts_at, row.ends_at);
+    if (row.status === "failed") {
+      failedWindows += 1;
+      if (row.error && !errors.includes(row.error) && errors.length < 3) errors.push(row.error);
+    }
+    if (metadata.expectedGap || row.status !== "failed" && !metadata.terminalGap) continue;
+    const current = issueGroups.get(metadata.dataset) ?? {
+      dataset: metadata.dataset,
+      label: HISTORICAL_DATASETS.find(spec => spec.dataset === metadata.dataset)?.label ?? collectorLabel(row.collector_key),
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      days: new Set<string>(),
+      zoneIds: new Set<string>(),
+      account: metadata.zoneIds.length === 0,
+      reason: row.error ?? "Cloudflare did not return this history.",
+    };
+    current.startsAt = Math.min(current.startsAt, row.starts_at);
+    current.endsAt = Math.max(current.endsAt, row.ends_at);
+    current.account ||= metadata.zoneIds.length === 0;
+    for (const zoneId of metadata.zoneIds) current.zoneIds.add(zoneId);
+    for (let at = startOfUtcDay(row.starts_at); at < row.ends_at; at += DAY_MS) {
+      current.days.add(new Date(at).toISOString().slice(0, 10));
+    }
+    issueGroups.set(metadata.dataset, current);
   }
 
   for (let offset = 0; offset < total; offset += 1) {
@@ -1609,7 +2031,19 @@ function initialIngestionDays(
     else if (!failed) complete += 1;
   }
 
-  return { total, complete, pending, gaps, failedWindows, errors };
+  const issues = [...issueGroups.values()]
+    .map(issue => ({
+      dataset: issue.dataset,
+      label: issue.label,
+      fromDay: new Date(issue.startsAt).toISOString().slice(0, 10),
+      toDay: new Date(Math.max(issue.startsAt, issue.endsAt - 1)).toISOString().slice(0, 10),
+      affectedDays: issue.days.size,
+      affectedScopes: issue.account ? null : issue.zoneIds.size,
+      scope: issue.account ? "account" as const : "zones" as const,
+      reason: issue.reason,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  return { total, complete, pending, gaps, failedWindows, errors, issues };
 }
 
 function emptyInitialIngestionReadiness(): InitialIngestionReadiness {
@@ -1637,10 +2071,13 @@ function initialIngestionReadiness(
     && (item.row.status === "failed" || item.metadata.terminalGap));
   const account = billing === "pending" || accountActive
     ? "pending"
-    : accountUsable && !accountUnexpected
+    : accountUnexpected
+      ? "limited"
+      : billing === "ready" || accountUsable
       ? "ready"
       : "limited";
-  const families = [...new Set(HISTORICAL_DATASETS.map(spec => spec.family))];
+  const productContracts = PRODUCT_METRIC_CONTRACTS.filter(contract => contract.productLimit);
+  const families = [...new Set(productContracts.map(contract => contract.family))];
   const rowsByFamily = new Map<string, typeof parsedRows>();
   for (const item of parsedRows) {
     const family = specByDataset.get(item.metadata.dataset)?.family;
@@ -1652,35 +2089,69 @@ function initialIngestionReadiness(
   const products: InitialIngestionReadiness["products"] = {};
 
   for (const family of families) {
+    const contracts = productContracts.filter(contract => contract.family === family);
     const parsed = rowsByFamily.get(family) ?? [];
     const totalUnits = parsed.reduce((sum, item) => sum + item.metadata.units, 0);
     const processedUnits = parsed.reduce((sum, item) => (
       item.row.status === "complete" || item.row.status === "failed" ? sum + item.metadata.units : sum
     ), 0);
-    const active = parsed.some(item => item.row.status === "pending" || item.row.status === "running");
-    const usable = parsed.some(item => item.row.status === "complete"
-      && item.metadata.availability !== "unavailable"
-      && !item.metadata.expectedGap);
     const unexpected = parsed.filter(item => !item.metadata.expectedGap
       && (item.row.status === "failed" || item.metadata.terminalGap));
-    const state: InitialIngestionReadinessState = active || parsed.length === 0 && activeJob
+    const unavailableMetricErrors = new Set(parsed.flatMap(item => item.metadata.unavailableMetrics ?? []));
+    const metricStates = contracts.map(contract => {
+      const specs = HISTORICAL_DATASETS.filter(spec => spec.family === family && (
+        spec.source?.metrics.some(metric => metric.metric === contract.metricKey) ?? true
+      ));
+      const datasets = new Set(specs.map(spec => spec.dataset));
+      const metricRows = parsed.filter(item => datasets.has(item.metadata.dataset));
+      const graphqlSource = specs.length > 0;
+      const graphqlActive = metricRows.some(item => item.row.status === "pending" || item.row.status === "running")
+        || graphqlSource && metricRows.length === 0 && activeJob;
+      const graphqlUsable = metricRows.some(item => item.row.status === "complete"
+        && item.metadata.availability !== "unavailable"
+        && !item.metadata.expectedGap
+        && !item.metadata.unavailableMetrics?.includes(contract.metricKey));
+      const graphqlUnexpected = metricRows.some(item => !item.metadata.expectedGap
+        && (item.row.status === "failed"
+          || item.metadata.unavailableMetrics?.includes(contract.metricKey)
+          || item.metadata.terminalGap && !item.metadata.unavailableMetrics?.length));
+      const billingSource = contract.historySource === "billing" || contract.historySource === "graphql_or_billing";
+
+      if (billingSource && billing === "ready") return "ready" as const;
+      if (graphqlActive) return "importing" as const;
+      if (graphqlUsable) return graphqlUnexpected ? "limited" as const : "ready" as const;
+      if (billingSource && billing === "pending") return "importing" as const;
+      return "unavailable" as const;
+    });
+    const state: InitialIngestionReadinessState = metricStates.some(value => value === "importing")
       ? "importing"
-      : usable && unexpected.length > 0
-        ? "limited"
-        : usable
-          ? "ready"
+      : metricStates.every(value => value === "ready")
+        ? "ready"
+        : metricStates.some(value => value === "ready" || value === "limited")
+          ? "limited"
           : "unavailable";
     products[family] = {
       state,
-      percent: totalUnits > 0 ? Math.round(Math.min(totalUnits, processedUnits) / totalUnits * 100) : state === "importing" ? 0 : 100,
-      errors: unexpected.length,
+      percent: totalUnits > 0
+        ? Math.round(Math.min(totalUnits, processedUnits) / totalUnits * 100)
+        : state === "ready" ? 100 : 0,
+      errors: unexpected.filter(item => !item.metadata.unavailableMetrics?.length).length + unavailableMetricErrors.size,
     };
   }
 
   return { billing, account, products };
 }
 
-function boundedRanges(collector: string, dataset: string, zoneIds: string[], now: number, retentionDays: number, maxDays: number, maxPageSize: number): InitialIngestionSlicePlan[] {
+function boundedRanges(
+  collector: string,
+  dataset: string,
+  zoneIds: string[],
+  now: number,
+  retentionDays: number,
+  maxDays: number,
+  maxPageSize: number,
+  availableFields?: string[],
+): InitialIngestionSlicePlan[] {
   const startsAt = startOfUtcDay(now) - (retentionDays - 1) * DAY_MS;
   const slices: InitialIngestionSlicePlan[] = [];
   for (let end = now; end > startsAt;) {
@@ -1696,6 +2167,7 @@ function boundedRanges(collector: string, dataset: string, zoneIds: string[], no
         dataset,
         zoneIds,
         maxPageSize,
+        ...(availableFields === undefined ? {} : { availableFields }),
         units,
         availability: "available",
         freshGraphqlBudgetRequired: FRESH_WINDOW_DATASETS.has(dataset),
@@ -1763,6 +2235,27 @@ async function saveDatasetSliceCoverage(
   })), budget);
 }
 
+async function saveResultSliceCoverage(
+  env: Env,
+  slice: InitialSliceRow,
+  metadata: InitialIngestionSliceMetadata,
+  coverage: Array<{ metric: string; state: string; detail?: string }>,
+  budget: LedgerRunBudget,
+): Promise<void> {
+  const scopes = metadata.zoneIds.length ? metadata.zoneIds : [""];
+  await saveCoverageIntervals(env.DB, coverage.flatMap(item => scopes.map(scopeKey => ({
+    accountId: env.BROLLY_ACCOUNT_ID,
+    dataset: metricCoverageDataset(metadata.dataset, item.metric),
+    scopeKey,
+    startsAt: slice.starts_at,
+    endsAt: slice.ends_at,
+    state: item.state === "healthy" ? "measured" as const
+      : item.state === "delayed" ? "partial" as const
+        : "unavailable" as const,
+    reason: item.detail,
+  }))), budget);
+}
+
 function parseSliceMetadata(value: string, startsAt: number, endsAt: number): InitialIngestionSliceMetadata {
   try {
     const parsed = JSON.parse(value) as Partial<InitialIngestionSliceMetadata>;
@@ -1772,6 +2265,9 @@ function parseSliceMetadata(value: string, startsAt: number, endsAt: number): In
         dataset: parsed.dataset,
         zoneIds: Array.isArray(parsed.zoneIds) ? parsed.zoneIds.filter(item => typeof item === "string") : [],
         maxPageSize: Number.isFinite(parsed.maxPageSize) ? Number(parsed.maxPageSize) : 10_000,
+        availableFields: Array.isArray(parsed.availableFields)
+          ? parsed.availableFields.filter(item => typeof item === "string")
+          : undefined,
         units: Number.isFinite(parsed.units) ? Number(parsed.units) : calendarDays(startsAt, endsAt),
         family: typeof parsed.family === "string" ? parsed.family : undefined,
         priority: Number.isFinite(parsed.priority) ? Number(parsed.priority) : undefined,
@@ -1782,10 +2278,15 @@ function parseSliceMetadata(value: string, startsAt: number, endsAt: number): In
           ? Math.max(0, Math.floor(Number(parsed.graphqlBudgetFailures)))
           : undefined,
         freshGraphqlBudgetRequired: parsed.freshGraphqlBudgetRequired === true,
+        detailCalibrationRequired: parsed.detailCalibrationRequired === true,
         availability: parsed.availability === "unavailable" ? "unavailable" : parsed.availability === "available" ? "available" : undefined,
+        unavailableMetrics: Array.isArray(parsed.unavailableMetrics)
+          ? parsed.unavailableMetrics.filter(item => typeof item === "string")
+          : undefined,
         terminalGap: parsed.terminalGap === true,
         expectedGap: parsed.expectedGap === true,
         persistenceRetry: parsed.persistenceRetry === true,
+        activityProbe: parsed.activityProbe === true,
       };
     }
   } catch {
@@ -1795,6 +2296,26 @@ function parseSliceMetadata(value: string, startsAt: number, endsAt: number): In
 }
 
 function serializeMetadata(value: InitialIngestionSliceMetadata): string { return JSON.stringify(value); }
+function initialGraphqlBudgetKey(
+  metadata: InitialIngestionSliceMetadata,
+  startsAt?: number,
+  endsAt?: number,
+): string {
+  return metadata.activityProbe
+    ? `${metadata.dataset}${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:${rangeDurationDays(
+      startsAt ?? 0,
+      endsAt ?? DAY_MS,
+    )}`
+    : metadata.dataset;
+}
+function isActivityProbeBudgetKey(budgetKey: string): boolean {
+  return budgetKey.includes(`${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:`);
+}
+function activityProbeRangeDays(budgetKey: string): number | null {
+  if (!isActivityProbeBudgetKey(budgetKey)) return null;
+  const days = Number(budgetKey.slice(budgetKey.lastIndexOf(":") + 1));
+  return Number.isFinite(days) ? Math.max(1, Math.floor(days)) : null;
+}
 function sliceUnits(scopeKey: string, startsAt: number, endsAt: number): number { return parseSliceMetadata(scopeKey, startsAt, endsAt).units; }
 function capabilityRetentionDays(setting: HistoricalDatasetCapability | undefined, fallback: number): number {
   return Math.max(1, Math.min(HISTORY_DAYS, Math.floor((setting?.notOlderThanSeconds ?? fallback * 86_400) / 86_400)));
@@ -1805,6 +2326,7 @@ function historyStart(now: number, days = HISTORY_DAYS): number {
 }
 function startOfUtcDay(timestamp: number): number { const date = new Date(timestamp); return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()); }
 function calendarDays(startsAt: number, endsAt: number): number { return Math.max(1, Math.ceil((endsAt - startOfUtcDay(startsAt)) / DAY_MS)); }
+function rangeDurationDays(startsAt: number, endsAt: number): number { return Math.max(1, Math.ceil((endsAt - startsAt) / DAY_MS)); }
 function splitPoint(startsAt: number, endsAt: number): number {
   const days = calendarDays(startsAt, endsAt);
   return Math.min(endsAt - 1, startsAt + Math.max(1, Math.floor(days / 2)) * DAY_MS);
@@ -1852,6 +2374,10 @@ interface InitialGraphqlQuotaState {
   zoneLastAdmissionAt: Record<string, number>;
   sharedNextAdmissionAt: number | null;
   capacityWaitUntil: number | null;
+  protectedHeadKey: string | null;
+  protectedHeadAdmitAt: number | null;
+  protectedHeadDebit: number;
+  protectedHeadLogicalQueries: number;
   pausedUntil: number | null;
   rateLimitedAt: number | null;
   accountPausedUntil: number | null;
@@ -1862,6 +2388,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   private readonly inFlightClaims = new Set<string>();
   private readonly admissionTails = new Map<string, Promise<void>>();
   private readonly claimWaiters = new Set<() => void>();
+  private activeProtectedClaimKey: string | null = null;
   private runBudget: LedgerRunBudget | null = null;
 
   constructor(
@@ -1930,16 +2457,44 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     );
   }
 
-  canCharge(scope: HistoricalRateScope, logicalQueries: number, budgetKey = "", pageSize?: number): boolean {
+  canCharge(
+    scope: HistoricalRateScope,
+    logicalQueries: number,
+    budgetKey = "",
+    pageSize?: number,
+    rangeDays?: number,
+  ): boolean {
     this.compact();
     if (this.physicalRemaining < 1) return false;
     const amount = Math.max(1, Math.floor(logicalQueries));
     void scope;
     if (this.state.reportedRemaining === null) return this.logicalUsed + amount <= this.activeSharedLimit;
-    return this.estimatedDebit(amount, budgetKey, pageSize) + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
+    return this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays)
+      + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
   }
 
-  claimAdmission(scope: HistoricalRateScope, logicalQueries: number, zoneIds: readonly string[] = [], budgetKey = "", pageSize?: number):
+  shouldSplitActivityProbe(logicalQueries: number, budgetKey: string, pageSize?: number): boolean {
+    const rangeDays = activityProbeRangeDays(budgetKey);
+    if (rangeDays === null || rangeDays <= 1) return false;
+    const available = this.state.reportedRemaining
+      ?? (this.state.observedCapacity === null
+        ? null
+        : Math.max(0, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE));
+    if (available === null) {
+      return rangeDays > ACTIVITY_PROBE_UNKNOWN_CAPACITY_MIN_RANGE_DAYS;
+    }
+    return this.estimatedDebit(logicalQueries, budgetKey, pageSize)
+      + GRAPHQL_REPORTED_BUDGET_RESERVE > available;
+  }
+
+  claimAdmission(
+    scope: HistoricalRateScope,
+    logicalQueries: number,
+    zoneIds: readonly string[] = [],
+    budgetKey = "",
+    pageSize?: number,
+    rangeDays?: number,
+  ):
     | { kind: "ready" }
     | { kind: "paced"; waitUntil: number | null }
     | { kind: "quota" } {
@@ -1950,8 +2505,8 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       ...zoneIds.map(zoneId => this.state.zonePausedUntil[zoneId] ?? 0),
     );
     if (scopePause && scopePause > Date.now()) return { kind: "paced", waitUntil: scopePause };
-    if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-      const waitUntil = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize);
+    if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+      const waitUntil = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
       this.state.capacityWaitUntil = waitUntil;
       return { kind: "paced", waitUntil };
     }
@@ -1959,23 +2514,160 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     if (this.inFlightClaims.has(key)) return { kind: "paced", waitUntil: null };
     const waitUntil = Math.max(
       this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS,
-      this.pacingAvailableAt(logicalQueries, budgetKey, pageSize),
+      this.pacingAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays),
     );
     return waitUntil > Date.now() ? { kind: "paced", waitUntil } : { kind: "ready" };
+  }
+
+  get protectedHeadAdmitAt(): number | null {
+    return this.state.protectedHeadAdmitAt;
+  }
+
+  reserveProtectedHead(
+    headKey: string,
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize: number | undefined,
+    admitAt: number,
+    rangeDays?: number,
+  ): void {
+    const debit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, true, rangeDays);
+    if (this.state.protectedHeadKey === headKey && this.state.protectedHeadAdmitAt !== null) {
+      this.state.protectedHeadDebit = Math.max(this.state.protectedHeadDebit, debit);
+      this.state.protectedHeadLogicalQueries = Math.max(
+        this.state.protectedHeadLogicalQueries,
+        Math.max(1, Math.floor(logicalQueries)),
+      );
+      return;
+    }
+    this.state.protectedHeadKey = headKey;
+    this.state.protectedHeadAdmitAt = Math.max(Date.now(), admitAt);
+    this.state.protectedHeadDebit = debit;
+    this.state.protectedHeadLogicalQueries = Math.max(1, Math.floor(logicalQueries));
+    console.info("brolly.initial_graphql_priority_reserved", JSON.stringify({
+      headKey,
+      budgetKey,
+      admitAt: this.state.protectedHeadAdmitAt,
+      debit,
+      logicalQueries: this.state.protectedHeadLogicalQueries,
+      ...this.estimateSource(budgetKey, rangeDays),
+    }));
+  }
+
+  deferProtectedHead(
+    headKey: string,
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize: number | undefined,
+    deferredUntil: number,
+    rangeDays?: number,
+  ): void {
+    this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, deferredUntil, rangeDays);
+    this.state.protectedHeadAdmitAt = Math.max(
+      this.state.protectedHeadAdmitAt ?? Date.now(),
+      deferredUntil,
+    );
+  }
+
+  clearProtectedHead(headKey?: string): void {
+    if (headKey !== undefined && this.state.protectedHeadKey !== headKey) return;
+    if (this.activeProtectedClaimKey !== null
+      && (headKey === undefined || headKey === this.activeProtectedClaimKey)) return;
+    this.state.protectedHeadKey = null;
+    this.state.protectedHeadAdmitAt = null;
+    this.state.protectedHeadDebit = 0;
+    this.state.protectedHeadLogicalQueries = 0;
+  }
+
+  claimProtectedAdmission(
+    headKey: string,
+    scope: HistoricalRateScope,
+    logicalQueries: number,
+    zoneIds: readonly string[] = [],
+    budgetKey = "",
+    pageSize?: number,
+    rangeDays?: number,
+  ):
+    | { kind: "ready" }
+    | { kind: "paced"; waitUntil: number | null }
+    | { kind: "quota" } {
+    this.compact();
+    const now = Date.now();
+    const scopePause = Math.max(
+      this.state.pausedUntil ?? 0,
+      this.scopePausedUntil(scope) ?? 0,
+      ...zoneIds.map(zoneId => this.state.zonePausedUntil[zoneId] ?? 0),
+    );
+    if (this.inFlightClaims.has("shared")) return { kind: "paced", waitUntil: null };
+    if (this.state.protectedHeadKey !== headKey || this.state.protectedHeadAdmitAt === null) {
+      const admission = this.claimAdmission(scope, logicalQueries, zoneIds, budgetKey, pageSize, rangeDays);
+      if (admission.kind === "paced" && admission.waitUntil !== null) {
+        this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, admission.waitUntil, rangeDays);
+      } else if (admission.kind === "ready") {
+        this.reserveProtectedHead(headKey, logicalQueries, budgetKey, pageSize, now, rangeDays);
+      }
+      return admission;
+    }
+    const currentDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, true, rangeDays);
+    this.state.protectedHeadDebit = Math.max(this.state.protectedHeadDebit, currentDebit);
+    this.state.protectedHeadLogicalQueries = Math.max(
+      this.state.protectedHeadLogicalQueries,
+      Math.max(1, Math.floor(logicalQueries)),
+    );
+    if (scopePause > now) {
+      this.state.protectedHeadAdmitAt = Math.max(this.state.protectedHeadAdmitAt, scopePause);
+      return { kind: "paced", waitUntil: this.state.protectedHeadAdmitAt };
+    }
+    if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+      const capacityAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
+      this.state.capacityWaitUntil = capacityAt;
+      this.state.protectedHeadAdmitAt = Math.max(this.state.protectedHeadAdmitAt, capacityAt);
+      return { kind: "paced", waitUntil: this.state.protectedHeadAdmitAt };
+    }
+    const waitUntil = Math.max(
+      this.state.protectedHeadAdmitAt,
+      this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS,
+    );
+    return waitUntil > now ? { kind: "paced", waitUntil } : { kind: "ready" };
+  }
+
+  canAdmitResidual(logicalQueries: number, budgetKey: string, pageSize?: number, rangeDays?: number): boolean {
+    this.compact();
+    const admitAt = this.state.protectedHeadAdmitAt;
+    if (this.state.protectedHeadKey === null || admitAt === null) return true;
+    const amount = Math.max(1, Math.floor(logicalQueries));
+    const probeDebit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays);
+    const protectedDebit = Math.max(1, this.state.protectedHeadDebit);
+    const nextProtectedAt = Date.now() + Math.max(
+      GRAPHQL_MIN_QUERY_INTERVAL_MS,
+      this.pacingIntervalForDebit(Math.ceil((probeDebit + protectedDebit) / 2)),
+    );
+    if (nextProtectedAt > admitAt) return false;
+    if (this.physicalRemaining < 2) return false;
+    if (this.state.reportedRemaining !== null) {
+      return probeDebit + protectedDebit + GRAPHQL_REPORTED_BUDGET_RESERVE <= this.reportedAvailable();
+    }
+    return this.logicalUsed + amount + this.state.protectedHeadLogicalQueries <= this.activeSharedLimit;
   }
 
   scheduleNextAdmissionAt(waitUntil: number | null): void {
     this.state.sharedNextAdmissionAt = waitUntil && waitUntil > Date.now() ? waitUntil : null;
   }
 
-  reserveClaim(scope: HistoricalRateScope): void {
+  reserveClaim(scope: HistoricalRateScope, protectedHeadKey: string | null = null): void {
     void scope;
     this.inFlightClaims.add("shared");
+    this.activeProtectedClaimKey = protectedHeadKey;
   }
 
   releaseClaim(scope: HistoricalRateScope): void {
     this.inFlightClaims.delete(rateScopeKey(scope));
     this.inFlightClaims.delete("shared");
+    if (this.activeProtectedClaimKey !== null) {
+      const completedHeadKey = this.activeProtectedClaimKey;
+      this.activeProtectedClaimKey = null;
+      this.clearProtectedHead(completedHeadKey);
+    }
     for (const resolve of this.claimWaiters) resolve();
     this.claimWaiters.clear();
   }
@@ -1998,8 +2690,27 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     });
   }
 
-  async admit(scope: HistoricalRateScope, logicalQueries: number, budgetKey: string, pageSize?: number): Promise<void> {
+  async admit(
+    scope: HistoricalRateScope,
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize?: number,
+    zoneIds: readonly string[] = [],
+    rangeDays?: number,
+  ): Promise<void> {
     this.assertRemoteWorkTime();
+    const pauseUntil = Math.max(
+      this.state.pausedUntil ?? 0,
+      this.scopePausedUntil(scope) ?? 0,
+      ...zoneIds.map(zoneId => this.state.zonePausedUntil[zoneId] ?? 0),
+    );
+    if (pauseUntil > Date.now()) {
+      throw new HistoricalRateLimitError(
+        429,
+        pauseUntil,
+        "Initial Analytics scope remains inside Cloudflare's persisted cooldown",
+      );
+    }
     const key = "shared";
     const previous = this.admissionTails.get(key) ?? Promise.resolve();
     let release!: () => void;
@@ -2008,19 +2719,32 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     this.admissionTails.set(key, queued);
     await previous;
     try {
-      if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-        const retryAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize);
+      if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+        const retryAt = this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays);
         this.state.capacityWaitUntil = retryAt;
         throw new HistoricalRateLimitError(429, retryAt, "Initial Analytics quota is reserved until rolling budget capacity is available");
       }
+      const protectedAdmitAt = this.activeProtectedClaimKey !== null
+        && this.state.protectedHeadKey === this.activeProtectedClaimKey
+        ? this.state.protectedHeadAdmitAt ?? 0
+        : 0;
       const delay = Math.max(
         this.lastAdmissionAt(scope) + GRAPHQL_MIN_QUERY_INTERVAL_MS,
-        this.pacingAvailableAt(logicalQueries, budgetKey, pageSize),
+        protectedAdmitAt || this.pacingAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays),
       ) - Date.now();
       if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
       this.assertRemoteWorkTime();
       this.setLastAdmissionAt(scope, Date.now());
-      this.charge(scope, logicalQueries, budgetKey, pageSize);
+      this.charge(scope, logicalQueries, budgetKey, pageSize, rangeDays);
+      if (this.activeProtectedClaimKey !== null) {
+        console.info("brolly.initial_graphql_priority_admitted", JSON.stringify({
+          headKey: this.activeProtectedClaimKey,
+          budgetKey,
+          scheduledAt: protectedAdmitAt,
+          admittedAt: this.state.accountLastAdmissionAt,
+          debit: this.state.protectedHeadDebit,
+        }));
+      }
     } finally {
       release();
       if (this.admissionTails.get(key) === queued) this.admissionTails.delete(key);
@@ -2034,6 +2758,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
   ): void {
     void scope;
     const predicted = Math.max(1, Math.floor(logicalQueries));
+    const probeObservation = isActivityProbeBudgetKey(observation.budgetKey);
     const cost = Math.max(0, Math.floor(observation.cost));
     const remaining = Math.max(0, Math.floor(observation.remaining));
     this.state.observedCostMultiplier = Math.max(
@@ -2062,10 +2787,12 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
         1,
         Math.floor((this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE) / GRAPHQL_BUDGET_DEBIT_SAFETY),
       );
-    this.state.observedMaxDebit = Math.max(
-      this.state.observedMaxDebit,
-      Math.min(debit, maximumAdmissibleUnknownDebit),
-    );
+    if (!probeObservation) {
+      this.state.observedMaxDebit = Math.max(
+        this.state.observedMaxDebit,
+        Math.min(debit, maximumAdmissibleUnknownDebit),
+      );
+    }
     let measuredDebit = Math.max(debit, cost);
     const priorDebitWasProvisional = this.state.provisionalDebitKeys[observation.budgetKey] === true;
     if (exhausted && this.state.observedCapacity !== null) {
@@ -2097,7 +2824,7 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       this.state.observedDebitRates[observation.budgetKey] = priorDebitWasProvisional && !exhausted
         ? debitRate
         : Math.max(this.state.observedDebitRates[observation.budgetKey] ?? 0, debitRate);
-      if (debit > 0 || exhausted) {
+      if (!probeObservation && (debit > 0 || exhausted)) {
         this.state.observedMaxDebitRate = Math.max(this.state.observedMaxDebitRate, debitRate);
       }
     }
@@ -2116,10 +2843,12 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
         debit,
         exhausted ? this.state.observedCapacity ?? 0 : 0,
       );
-      const pacedDebit = Math.max(
-        admission.budgetDebit,
-        this.estimatedDebit(predicted, observation.budgetKey, observation.pageSize ?? undefined),
-      );
+      const pacedDebit = probeObservation
+        ? Math.max(1, admission.budgetDebit)
+        : Math.max(
+          admission.budgetDebit,
+          this.estimatedDebit(predicted, observation.budgetKey, observation.pageSize ?? undefined),
+        );
       this.state.sharedNextAdmissionAt = Math.max(
         admission.admittedAt + GRAPHQL_MIN_QUERY_INTERVAL_MS,
         admission.admittedAt + this.pacingIntervalForDebit(Math.ceil(pacedDebit / 2)),
@@ -2169,22 +2898,32 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     this.claimWaiters.clear();
   }
 
-  charge(scope: HistoricalRateScope, logicalQueries: number, budgetKey: string, pageSize?: number): void {
-    if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize)) {
-      const retryAt = Math.max(Date.now() + 1_000, this.capacityAvailableAt(logicalQueries, budgetKey, pageSize));
+  charge(
+    scope: HistoricalRateScope,
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize?: number,
+    rangeDays?: number,
+  ): void {
+    if (!this.canCharge(scope, logicalQueries, budgetKey, pageSize, rangeDays)) {
+      const retryAt = Math.max(
+        Date.now() + 1_000,
+        this.capacityAvailableAt(logicalQueries, budgetKey, pageSize, rangeDays),
+      );
       this.state.capacityWaitUntil = retryAt;
       throw new HistoricalRateLimitError(429, retryAt, "Initial Analytics quota is reserved until rolling budget capacity is available");
     }
     const amount = Math.max(1, Math.floor(logicalQueries));
     const admittedAt = Date.now();
-    const estimatedDebit = this.estimatedDebit(amount, budgetKey, pageSize);
+    const estimatedDebit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays);
+    const pacingDebit = this.estimatedDebit(amount, budgetKey, pageSize, false, rangeDays);
     this.state.admissions.push({ admittedAt, logicalQueries: amount, physicalRequests: 1, budgetDebit: 0, budgetKey });
     if (this.state.reportedRemaining !== null) {
       this.state.reportedRemaining = Math.max(0, this.reportedAvailable() - estimatedDebit);
       this.state.reportedAt = admittedAt;
     }
     this.state.capacityWaitUntil = null;
-    this.state.sharedNextAdmissionAt = admittedAt + this.pacingIntervalForDebit(Math.ceil(estimatedDebit / 2));
+    this.state.sharedNextAdmissionAt = admittedAt + this.pacingIntervalForDebit(Math.ceil(pacingDebit / 2));
   }
 
   snapshot(): InitialGraphqlQuotaState & {
@@ -2227,6 +2966,10 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       zoneLastAdmissionAt: { ...this.state.zoneLastAdmissionAt },
       sharedNextAdmissionAt: this.state.sharedNextAdmissionAt,
       capacityWaitUntil: this.state.capacityWaitUntil,
+      protectedHeadKey: this.state.protectedHeadKey,
+      protectedHeadAdmitAt: this.state.protectedHeadAdmitAt,
+      protectedHeadDebit: this.state.protectedHeadDebit,
+      protectedHeadLogicalQueries: this.state.protectedHeadLogicalQueries,
       pausedUntil: this.state.pausedUntil,
       rateLimitedAt: this.state.rateLimitedAt,
       accountPausedUntil: this.state.accountPausedUntil,
@@ -2317,7 +3060,13 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     }
   }
 
-  private capacityAvailableAt(logicalQueries: number, budgetKey = "", pageSize?: number, now = Date.now()): number {
+  private capacityAvailableAt(
+    logicalQueries: number,
+    budgetKey = "",
+    pageSize?: number,
+    rangeDays?: number,
+    now = Date.now(),
+  ): number {
     this.compact(now);
     const amount = Math.max(1, Math.floor(logicalQueries));
     const logicalUsed = this.logicalUsed;
@@ -2326,7 +3075,8 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
       ? now
       : (this.state.admissions[0]?.admittedAt ?? now) + GRAPHQL_WINDOW_MS;
     if (this.state.reportedRemaining !== null) {
-      const deficit = this.estimatedDebit(amount, budgetKey, pageSize) + GRAPHQL_REPORTED_BUDGET_RESERVE - this.reportedAvailable();
+      const deficit = this.estimatedDebit(amount, budgetKey, pageSize, true, rangeDays)
+        + GRAPHQL_REPORTED_BUDGET_RESERVE - this.reportedAvailable();
       let released = 0;
       let budgetAvailableAt = now;
       if (deficit > 0) {
@@ -2359,23 +3109,41 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     );
   }
 
-  private estimatedDebit(logicalQueries: number, budgetKey: string, pageSize?: number): number {
+  private estimatedDebit(
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize?: number,
+    includeProbeRangeReservation = true,
+    rangeDays?: number,
+  ): number {
     const observed = budgetKey ? this.state.observedDebits[budgetKey] : undefined;
     const observedRate = budgetKey ? this.state.observedDebitRates[budgetKey] : undefined;
+    const relatedProbe = observed === undefined
+      ? this.relatedActivityProbeEstimate(budgetKey, rangeDays)
+      : null;
     const requestedRows = pageSize ? Math.max(1, pageSize * logicalQueries) : null;
-    const pageRate = observedRate ?? Math.max(DEFAULT_UNSEEN_PAGE_UNIT_DEBIT, this.state.observedMaxDebitRate);
+    const pageRate = observedRate ?? DEFAULT_UNSEEN_PAGE_UNIT_DEBIT;
     const shapedDebit = requestedRows === null ? null : Math.ceil(requestedRows * pageRate);
-    const globalDebit = observed ?? this.unseenDebitBaseline();
+    const unseenGlobalDebit = pageSize !== undefined && pageSize <= 2
+      ? this.state.observedMaxCost
+      : Math.max(this.state.observedMaxCost, this.unseenDebitBaseline(budgetKey));
+    const globalDebit = observed ?? relatedProbe?.debit ?? unseenGlobalDebit;
     const debit = observedRate !== undefined && shapedDebit !== null
       ? shapedDebit
-      : observed === undefined && shapedDebit !== null
-        ? globalDebit > 0 ? Math.min(globalDebit, shapedDebit) : shapedDebit
-        : globalDebit;
+      : relatedProbe !== null
+        ? relatedProbe.debit
+        : observed === undefined && shapedDebit !== null
+          ? globalDebit > 0 ? Math.min(globalDebit, shapedDebit) : shapedDebit
+          : globalDebit;
     const safety = observed === undefined ? GRAPHQL_BUDGET_DEBIT_SAFETY : 1.1;
     const estimate = Math.max(this.estimatedCost(logicalQueries), Math.ceil(debit * safety));
-    return this.state.observedCapacity === null
-      ? estimate
-      : Math.min(estimate, Math.max(1, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE));
+    if (this.state.observedCapacity === null) return estimate;
+    const usableCapacity = Math.max(1, this.state.observedCapacity - GRAPHQL_REPORTED_BUDGET_RESERVE);
+    const probeRangeDays = activityProbeRangeDays(budgetKey);
+    const rangeAwareProbeFloor = !includeProbeRangeReservation || probeRangeDays === null
+      ? 0
+      : Math.ceil(usableCapacity * Math.min(1, probeRangeDays / ACTIVITY_PROBE_REFERENCE_RANGE_DAYS));
+    return Math.min(Math.max(estimate, rangeAwareProbeFloor), usableCapacity);
   }
 
   private pacingIntervalForDebit(debit: number): number {
@@ -2390,13 +3158,18 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     );
   }
 
-  private pacingAvailableAt(logicalQueries: number, budgetKey: string, pageSize?: number): number {
+  private pacingAvailableAt(
+    logicalQueries: number,
+    budgetKey: string,
+    pageSize?: number,
+    rangeDays?: number,
+  ): number {
     const previous = this.state.admissions.at(-1);
     if (!previous) return Date.now();
     const previousDebit = previous.budgetDebit > 0
       ? previous.budgetDebit
-      : this.estimatedDebit(previous.logicalQueries, previous.budgetKey);
-    const nextDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize);
+      : this.estimatedDebit(previous.logicalQueries, previous.budgetKey, undefined, false);
+    const nextDebit = this.estimatedDebit(logicalQueries, budgetKey, pageSize, false, rangeDays);
     return previous.admittedAt + this.pacingIntervalForDebit(Math.ceil((previousDebit + nextDebit) / 2));
   }
 
@@ -2411,17 +3184,81 @@ class InitialGraphqlQuota implements HistoricalRateBudget {
     );
   }
 
+  private relatedActivityProbeEstimate(
+    budgetKey: string,
+    targetRangeDays?: number,
+  ): { budgetKey: string; debit: number; observedDebit: number; rangeDays: number } | null {
+    if (!budgetKey || isActivityProbeBudgetKey(budgetKey) || !targetRangeDays) return null;
+    const relatedProbePrefix = `${budgetKey}${ACTIVITY_PROBE_BUDGET_KEY_SUFFIX}:`;
+    const candidates = Object.entries(this.state.observedDebits)
+      .flatMap(([candidateKey, value]) => {
+        const rangeDays = activityProbeRangeDays(candidateKey);
+        return candidateKey.startsWith(relatedProbePrefix)
+          && rangeDays !== null
+          && this.state.provisionalDebitKeys[candidateKey] !== true
+          && Number.isFinite(value)
+          && value > 0
+          ? [{ budgetKey: candidateKey, observedDebit: value, rangeDays }]
+          : [];
+      })
+      .sort((left, right) => {
+        const leftDistance = Math.abs(Math.log(left.rangeDays / targetRangeDays));
+        const rightDistance = Math.abs(Math.log(right.rangeDays / targetRangeDays));
+        return leftDistance - rightDistance || right.observedDebit - left.observedDebit;
+      });
+    const selected = candidates[0];
+    if (!selected) return null;
+    const scaledDebit = Math.ceil(selected.observedDebit * targetRangeDays / selected.rangeDays);
+    return {
+      ...selected,
+      debit: Math.max(this.state.observedMaxCost, scaledDebit),
+    };
+  }
+
+  private estimateSource(budgetKey: string, targetRangeDays?: number): Record<string, unknown> {
+    const observed = budgetKey ? this.state.observedDebits[budgetKey] : undefined;
+    if (observed !== undefined) {
+      return {
+        estimateSource: this.state.provisionalDebitKeys[budgetKey] === true
+          ? "dataset_detail_provisional"
+          : "dataset_detail",
+        sourceBudgetKey: budgetKey,
+        sourceDebit: observed,
+        targetRangeDays,
+      };
+    }
+    const relatedProbe = this.relatedActivityProbeEstimate(budgetKey, targetRangeDays);
+    if (relatedProbe) {
+      return {
+        estimateSource: "dataset_probe",
+        sourceBudgetKey: relatedProbe.budgetKey,
+        sourceDebit: relatedProbe.observedDebit,
+        sourceRangeDays: relatedProbe.rangeDays,
+        scaledSourceDebit: relatedProbe.debit,
+        targetRangeDays,
+      };
+    }
+    return { estimateSource: "account_fallback", targetRangeDays };
+  }
+
   private unseenDebitBaseline(excludeBudgetKey?: string): number {
+    const probeShape = excludeBudgetKey !== undefined && isActivityProbeBudgetKey(excludeBudgetKey);
     const debits = Object.entries(this.state.observedDebits)
       .filter(([budgetKey, value]) => (
         budgetKey !== excludeBudgetKey
+        && isActivityProbeBudgetKey(budgetKey) === probeShape
         && this.state.provisionalDebitKeys[budgetKey] !== true
         && Number.isFinite(value)
         && value > 0
       ))
       .map(([, value]) => value)
       .sort((left, right) => left - right);
-    if (debits.length < 12) return debits.at(-1) ?? this.state.observedMaxCost;
+    if (debits.length < 12) return debits.at(-1)
+      ?? (probeShape
+        ? this.state.observedMaxCost
+        : excludeBudgetKey && this.state.provisionalDebitKeys[excludeBudgetKey] === true
+          ? this.state.observedMaxCost
+          : Math.max(this.state.observedMaxCost, this.state.observedMaxDebit));
     return debits[Math.max(0, Math.ceil(debits.length * 0.9) - 1)] ?? this.state.observedMaxDebit;
   }
 
@@ -2534,6 +3371,10 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId:
     zoneLastAdmissionAt: {},
     sharedNextAdmissionAt: null,
     capacityWaitUntil: null,
+    protectedHeadKey: null,
+    protectedHeadAdmitAt: null,
+    protectedHeadDebit: 0,
+    protectedHeadLogicalQueries: 0,
     pausedUntil: null,
     rateLimitedAt: null,
     accountPausedUntil: null,
@@ -2702,6 +3543,24 @@ async function loadInitialGraphqlQuota(db: D1Database, accountId: string, jobId:
       }));
       state.sharedNextAdmissionAt = boundedFutureAdmissionAt(parsed.sharedNextAdmissionAt, now);
       state.capacityWaitUntil = boundedPauseAt(parsed.capacityWaitUntil, now);
+      state.protectedHeadKey = sameJob && typeof parsed.protectedHeadKey === "string"
+        ? parsed.protectedHeadKey
+        : null;
+      state.protectedHeadAdmitAt = sameJob && Number.isFinite(parsed.protectedHeadAdmitAt)
+        ? Math.max(now, Number(parsed.protectedHeadAdmitAt))
+        : null;
+      state.protectedHeadDebit = sameJob && Number.isFinite(parsed.protectedHeadDebit)
+        ? Math.max(0, Number(parsed.protectedHeadDebit))
+        : 0;
+      state.protectedHeadLogicalQueries = sameJob && Number.isFinite(parsed.protectedHeadLogicalQueries)
+        ? Math.max(0, Math.floor(Number(parsed.protectedHeadLogicalQueries)))
+        : 0;
+      if (state.protectedHeadKey === null || state.protectedHeadAdmitAt === null) {
+        state.protectedHeadKey = null;
+        state.protectedHeadAdmitAt = null;
+        state.protectedHeadDebit = 0;
+        state.protectedHeadLogicalQueries = 0;
+      }
       if (!sameJob) state.jobId = jobId;
     } catch {
       // Corrupt quota state starts a fresh bounded window.
@@ -2767,6 +3626,14 @@ async function requeueRunningInitialSlices(db: D1Database, jobId: string): Promi
     `UPDATE backfill_slices SET status='pending',next_eligible_at=?2,updated_at=?2
      WHERE backfill_job_id=?1 AND status='running'`,
   ).bind(jobId, now).run();
+}
+
+async function supersedeRetiredInitialSlices(db: D1Database, jobId: string): Promise<void> {
+  await db.prepare(
+    `UPDATE backfill_slices SET status='superseded',error='Collector removed',next_eligible_at=NULL,updated_at=?2
+     WHERE backfill_job_id=?1 AND status!='superseded'
+       AND json_extract(scope_key,'$.dataset') IN (${RETIRED_INITIAL_DATASETS.map(() => "?").join(",")})`,
+  ).bind(jobId, Date.now(), ...RETIRED_INITIAL_DATASETS).run();
 }
 
 async function initialSlicesPending(db: D1Database, jobId: string): Promise<boolean> {

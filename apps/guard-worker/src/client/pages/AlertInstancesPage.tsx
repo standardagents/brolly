@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { dateTime, number } from "../format";
 import type { AlertInstanceView, DataQuality } from "../types";
+import { ResourceIdentity } from "../components/ResourceIdentity";
 import { Button, CellStack, EmptyState, Notice, Panel, PanelHead, SeverityBadge, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 import { QualityBadge } from "./UsagePage";
 import { useAlertLevels } from "../onboarding/levels";
@@ -57,7 +58,7 @@ export function AlertInstancesPage({ token }: { token: string }) {
               {instances.map(instance => (
                 <Tr key={instance.id}>
                   <Td><CellStack title={<><SeverityBadge severity={severity(instance.priority, board.levels.length)} /> {instance.label}</>} sub={instance.metricDefinitionId} /></Td>
-                  <Td><CellStack title={instance.displayName} sub={<>{instance.productFamily} · {instance.cloudflareId}</>} /></Td>
+                  <Td><ResourceIdentity identity={{ ...instance, productFamily: instance.productFamily }} /></Td>
                   <Td numeric><strong>{number(instance.observedValue)}</strong><small className="block text-faint">line {number(instance.thresholdValue)}</small></Td>
                   <Td><QualityBadge quality={instance.dataQuality as DataQuality} />{instance.historical ? <small className="ml-2 text-faint">historical</small> : null}</Td>
                   <Td><CellStack title={new Date(instance.periodStartAt).toLocaleDateString()} sub={`through ${new Date(instance.periodEndAt).toLocaleDateString()}`} /></Td>

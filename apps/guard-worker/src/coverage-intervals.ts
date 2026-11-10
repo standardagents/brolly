@@ -40,23 +40,27 @@ export interface MetricDatasetGroup {
 
 const SPECIAL_METRIC_SOURCES: Record<string, MetricDatasetGroup[]> = {
   "billing:authoritative_usage": [{ alternatives: ["billable-usage"], root: "account" }],
-  "workers:requests": [{ alternatives: ["workersInvocationsAdaptive"], root: "account" }],
-  "workers:cpu_ms": [{ alternatives: ["workersInvocationsAdaptive"], root: "account" }],
+  "workers:requests": [{ alternatives: [metricCoverageDataset("workersInvocationsAdaptive", "requests")], root: "account" }],
+  "workers:cpu_ms": [{ alternatives: [metricCoverageDataset("workersInvocationsAdaptive", "cpu_ms")], root: "account" }],
   "workers:cache_requests": [{ alternatives: ["billable-usage"], root: "account" }],
-  "durable_objects:requests": [{ alternatives: ["durableObjectsInvocationsAdaptiveGroups"], root: "account" }],
-  "durable_objects:duration_gb_seconds": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
+  "durable_objects:requests": [{ alternatives: [metricCoverageDataset("durableObjectsInvocationsAdaptiveGroups", "requests")], root: "account" }],
+  "durable_objects:duration_gb_seconds": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "duration_gb_seconds")], root: "account" }],
   "durable_objects:incoming_websocket_messages": [
-    { alternatives: ["durableObjectsInvocationsAdaptiveGroups"], root: "account" },
-    { alternatives: ["durableObjectsPeriodicGroups"], root: "account" },
+    { alternatives: [metricCoverageDataset("durableObjectsInvocationsAdaptiveGroups", "incoming_websocket_messages")], root: "account" },
+    { alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "incoming_websocket_messages")], root: "account" },
   ],
-  "durable_objects:rows_read": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
-  "durable_objects:rows_written": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
-  "durable_objects:kv_read_units": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
-  "durable_objects:kv_write_units": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
-  "durable_objects:kv_delete_requests": [{ alternatives: ["durableObjectsPeriodicGroups"], root: "account" }],
-  "durable_objects:sql_storage_bytes": [{ alternatives: ["durableObjectsSqlStorageGroups"], root: "account" }],
-  "durable_objects:kv_storage_bytes": [{ alternatives: ["durableObjectsStorageGroups"], root: "account" }],
+  "durable_objects:rows_read": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "rows_read")], root: "account" }],
+  "durable_objects:rows_written": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "rows_written")], root: "account" }],
+  "durable_objects:kv_read_units": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_read_units")], root: "account" }],
+  "durable_objects:kv_write_units": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_write_units")], root: "account" }],
+  "durable_objects:kv_delete_requests": [{ alternatives: [metricCoverageDataset("durableObjectsPeriodicGroups", "kv_delete_requests")], root: "account" }],
+  "durable_objects:sql_storage_bytes": [{ alternatives: [metricCoverageDataset("durableObjectsSqlStorageGroups", "sql_storage_bytes")], root: "account" }],
+  "durable_objects:kv_storage_bytes": [{ alternatives: [metricCoverageDataset("durableObjectsStorageGroups", "kv_storage_bytes")], root: "account" }],
 };
+
+export function metricCoverageDataset(dataset: string, metric: string): string {
+  return `${dataset}#${metric}`;
+}
 
 const PRODUCT_METRIC_SOURCES = new Map<string, MetricDatasetGroup[]>();
 for (const product of PRODUCT_USAGE_DEFINITIONS) {
@@ -65,11 +69,14 @@ for (const product of PRODUCT_USAGE_DEFINITIONS) {
       const id = `${product.family}:${metric.metric}`;
       const groups = PRODUCT_METRIC_SOURCES.get(id) ?? [];
       if (source.fallbackFor) {
-        const group = groups.find(item => item.alternatives.includes(source.fallbackFor!));
-        if (group) group.alternatives.push(source.dataset);
-        else groups.push({ alternatives: [source.fallbackFor, source.dataset], root: source.root ?? "account" });
-      } else if (!groups.some(item => item.alternatives.includes(source.dataset))) {
-        groups.push({ alternatives: [source.dataset], root: source.root ?? "account" });
+        const preferred = metricCoverageDataset(source.fallbackFor, metric.metric);
+        const fallback = metricCoverageDataset(source.dataset, metric.metric);
+        const group = groups.find(item => item.alternatives.includes(preferred));
+        if (group) group.alternatives.push(fallback);
+        else groups.push({ alternatives: [preferred, fallback], root: source.root ?? "account" });
+      } else {
+        const dataset = metricCoverageDataset(source.dataset, metric.metric);
+        if (!groups.some(item => item.alternatives.includes(dataset))) groups.push({ alternatives: [dataset], root: source.root ?? "account" });
       }
       PRODUCT_METRIC_SOURCES.set(id, groups);
     }
@@ -237,14 +244,16 @@ function groupState(
     : requestedZone
       ? [requestedZone]
       : [...new Set([
-        ...intervals.filter(row => group.alternatives.includes(row.dataset) && row.scope_key).map(row => row.scope_key),
-        ...pending.filter(row => group.alternatives.includes(row.dataset)).flatMap(row => row.scopeKeys).filter(Boolean),
+        ...intervals.filter(row => group.alternatives.some(alternative => coverageDatasetBase(alternative) === coverageDatasetBase(row.dataset)) && row.scope_key).map(row => row.scope_key),
+        ...pending.filter(row => group.alternatives.some(alternative => coverageDatasetBase(alternative) === row.dataset)).flatMap(row => row.scopeKeys).filter(Boolean),
       ])];
   if (!scopes.length) return { state: "unavailable", reason: "Cloudflare did not expose coverage for this dataset." };
   const partitions = scopes.map(scopeKey => {
-    const candidates = intervals.filter(row => group.alternatives.includes(row.dataset)
+    const exactCandidates = intervals.filter(row => group.alternatives.includes(row.dataset)
       && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
-    const active = pending.some(row => group.alternatives.includes(row.dataset)
+    const candidates = exactCandidates.length ? exactCandidates : intervals.filter(row => group.alternatives.some(alternative => coverageDatasetBase(alternative) === row.dataset)
+      && row.scope_key === scopeKey && row.starts_at < endsAt && row.ends_at > startsAt);
+    const active = pending.some(row => group.alternatives.some(alternative => coverageDatasetBase(alternative) === row.dataset)
       && row.scopeKeys.includes(scopeKey) && row.startsAt < endsAt && row.endsAt > startsAt);
     const measured = candidates.find(row => row.state === "measured");
     if (measured) return { state: "measured" as const };
@@ -257,6 +266,11 @@ function groupState(
       : { state: "unavailable" as const, reason: "No collection evidence was recorded for this interval." };
   });
   return combinePartitions(partitions);
+}
+
+function coverageDatasetBase(dataset: string): string {
+  const separator = dataset.indexOf("#");
+  return separator < 0 ? dataset : dataset.slice(0, separator);
 }
 
 function combinePartitions(values: DayCoverage[]): DayCoverage {

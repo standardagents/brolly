@@ -61,7 +61,12 @@ async function usageResponse(db: D1Database, url: URL): Promise<Response> {
   const from = validDay(url.searchParams.get("from")) ?? "0000-01-01";
   const to = validDay(url.searchParams.get("to")) ?? "9999-12-31";
   const [resource, daily, current, definitions, oldest] = await Promise.all([
-    db.prepare(`SELECT * FROM resources WHERE id=?1 LIMIT 1`).bind(resourceId).first<Record<string, unknown>>(),
+    db.prepare(
+      `SELECT r.*,parent.cloudflare_id AS parent_cloudflare_id,parent.cloudflare_name AS parent_cloudflare_name,
+         parent.name_kind AS parent_name_kind,parent.resource_type AS parent_resource_type
+       FROM resources r LEFT JOIN resources parent ON parent.id=r.parent_resource_id
+       WHERE r.id=?1 LIMIT 1`,
+    ).bind(resourceId).first<Record<string, unknown>>(),
     db.prepare(
       `SELECT local_day,period_start_at,period_end_at,metrics_json,estimated_cost_usd,
          authoritative_allocated_cost_usd,completeness,sampling_json,sealed,revision,revised_at
@@ -141,21 +146,22 @@ async function resourcesResponse(db: D1Database, accountId: string, url: URL): P
   const limit = Math.min(MAX_PAGE, Math.max(1, Number(url.searchParams.get("limit") ?? 250)));
   const cursor = parseResourceCursor(url.searchParams.get("cursor"));
   const [result, families] = await Promise.all([db.prepare(
-    `SELECT r.*,
+    `SELECT r.*,parent.cloudflare_id AS parent_cloudflare_id,parent.cloudflare_name AS parent_cloudflare_name,
+       parent.name_kind AS parent_name_kind,parent.resource_type AS parent_resource_type,
        (SELECT COUNT(*) FROM resources child WHERE child.parent_resource_id=r.id) AS child_count,
        (SELECT MAX(u.revised_at) FROM usage_daily u WHERE u.resource_id=r.id) AS usage_updated_at,
        (SELECT MIN(u.local_day) FROM usage_daily u WHERE u.resource_id=r.id) AS oldest_day,
        (SELECT COUNT(*) FROM alert_instances i WHERE i.target_resource_id=r.id AND i.status='open') AS open_alerts
-     FROM resources r WHERE r.account_id=?1
+     FROM resources r LEFT JOIN resources parent ON parent.id=r.parent_resource_id WHERE r.account_id=?1
        AND (?2 IS NULL OR r.parent_resource_id=?2)
        AND (?3 IS NULL OR r.product_family=?3)
-       AND (?4 IS NULL OR lower(r.display_name) LIKE '%' || ?4 || '%' OR lower(r.cloudflare_id) LIKE '%' || ?4 || '%')
+       AND (?4 IS NULL OR lower(COALESCE(r.cloudflare_name,'')) LIKE '%' || ?4 || '%' OR lower(r.cloudflare_id) LIKE '%' || ?4 || '%')
        AND (?5 IS NULL
          OR r.product_family>?5
          OR r.product_family=?5 AND r.resource_type>?6
-         OR r.product_family=?5 AND r.resource_type=?6 AND r.display_name>?7
-         OR r.product_family=?5 AND r.resource_type=?6 AND r.display_name=?7 AND r.id>?8)
-     ORDER BY r.product_family,r.resource_type,r.display_name,r.id LIMIT ?9`,
+         OR r.product_family=?5 AND r.resource_type=?6 AND COALESCE(r.cloudflare_name,r.cloudflare_id)>?7
+         OR r.product_family=?5 AND r.resource_type=?6 AND COALESCE(r.cloudflare_name,r.cloudflare_id)=?7 AND r.id>?8)
+     ORDER BY r.product_family,r.resource_type,COALESCE(r.cloudflare_name,r.cloudflare_id),r.id LIMIT ?9`,
   ).bind(accountId, parent, family, query, cursor?.[0] ?? null, cursor?.[1] ?? null, cursor?.[2] ?? null, cursor?.[3] ?? null, limit + 1).all<Record<string, unknown>>(),
   db.prepare(`SELECT DISTINCT product_family FROM resources WHERE account_id=?1 AND product_family!='account' ORDER BY product_family`)
     .bind(accountId).all<{ product_family: string }>()]);
@@ -164,7 +170,7 @@ async function resourcesResponse(db: D1Database, accountId: string, url: URL): P
   return Response.json({
     resources: page.map(mapResource),
     nextCursor: result.results.length > limit && last
-      ? JSON.stringify([last.product_family, last.resource_type, last.display_name, last.id])
+      ? JSON.stringify([last.product_family, last.resource_type, last.cloudflare_name ?? last.cloudflare_id, last.id])
       : null,
     families: families.results.map(row => row.product_family),
     generatedAt: Date.now(),
@@ -285,8 +291,13 @@ async function createBackfill(request: Request, db: D1Database, accountId: strin
 async function rulesResponse(db: D1Database, accountId: string): Promise<Response> {
   const [rules, lines] = await Promise.all([
     db.prepare(
-      `SELECT r.*,target.display_name AS target_display_name,target.resource_type AS target_resource_type
+      `SELECT r.*,COALESCE(target.cloudflare_name,target.cloudflare_id) AS target_display_name,target.resource_type AS target_resource_type,
+         target.cloudflare_id AS target_cloudflare_id,target.cloudflare_name AS target_cloudflare_name,
+         target.name_kind AS target_name_kind,target.product_family AS target_product_family,
+         parent.cloudflare_id AS target_parent_cloudflare_id,parent.cloudflare_name AS target_parent_cloudflare_name,
+         parent.name_kind AS target_parent_name_kind,parent.resource_type AS target_parent_resource_type
        FROM alert_rules r LEFT JOIN resources target ON target.id=r.target_resource_id
+       LEFT JOIN resources parent ON parent.id=target.parent_resource_id
        WHERE r.account_id=?1 AND r.retired=0 ORDER BY r.created_at,r.id`,
     ).bind(accountId).all<Record<string, unknown>>(),
     db.prepare(
@@ -371,7 +382,8 @@ async function updateLine(request: Request, db: D1Database, id: string, actor: s
 async function instancesResponse(db: D1Database, accountId: string, url: URL): Promise<Response> {
   const status = url.searchParams.get("status");
   const result = await db.prepare(
-    `SELECT i.*,r.metric_definition_id,l.label,l.color,l.priority,target.display_name,target.product_family,target.cloudflare_id
+    `SELECT i.*,r.metric_definition_id,l.label,l.color,l.priority,target.cloudflare_name,target.name_kind,
+       target.resource_type,target.product_family,target.cloudflare_id
      FROM alert_instances i JOIN alert_rules r ON r.id=i.alert_rule_id
      JOIN alert_lines l ON l.id=i.alert_line_id JOIN resources target ON target.id=i.target_resource_id
      WHERE r.account_id=?1 AND (?2 IS NULL OR i.status=?2)
@@ -530,7 +542,15 @@ function mapResource(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: row.id, accountId: row.account_id, parentResourceId: row.parent_resource_id,
     productFamily: row.product_family, resourceType: row.resource_type, cloudflareId: row.cloudflare_id,
-    displayName: row.display_name, firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at,
+    cloudflareName: row.cloudflare_name ?? null, nameKind: row.name_kind,
+    parentIdentity: row.parent_cloudflare_id == null ? null : {
+      cloudflareId: row.parent_cloudflare_id,
+      cloudflareName: row.parent_cloudflare_name ?? null,
+      nameKind: row.parent_name_kind,
+      resourceType: row.parent_resource_type,
+      productFamily: row.product_family,
+    },
+    firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at,
     lastActiveAt: row.last_active_at, coverageStatus: row.coverage_status,
     controlCapability: row.control_capability, runtimeFuseStatus: row.runtime_fuse_status,
     autoQuarantinePolicy: row.auto_quarantine_policy, tier: row.tier, excluded: Number(row.excluded) === 1,
@@ -570,6 +590,16 @@ function mapRule(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: row.id, accountId: row.account_id, targetResourceId: row.target_resource_id,
     targetDisplayName: row.target_display_name ?? null, targetResourceType: row.target_resource_type ?? null,
+    targetIdentity: row.target_cloudflare_id == null ? null : {
+      cloudflareId: row.target_cloudflare_id, cloudflareName: row.target_cloudflare_name ?? null,
+      nameKind: row.target_name_kind, resourceType: row.target_resource_type,
+      productFamily: row.target_product_family,
+      parentIdentity: row.target_parent_cloudflare_id == null ? null : {
+        cloudflareId: row.target_parent_cloudflare_id, cloudflareName: row.target_parent_cloudflare_name ?? null,
+        nameKind: row.target_parent_name_kind, resourceType: row.target_parent_resource_type,
+        productFamily: row.target_product_family,
+      },
+    },
     targetSelector: row.target_selector_json ? parseObject(String(row.target_selector_json)) : null,
     metricDefinitionId: row.metric_definition_id, measurement: row.measurement, period: row.period,
     notificationTargetIds: parseArray(String(row.notification_target_ids_json ?? "[]")),

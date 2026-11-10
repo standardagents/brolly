@@ -84,7 +84,7 @@ try {
     reportState(state);
     captureMilestones(state);
     if (terminalStatus(state.job?.status)) {
-      const summary = summarize(state, startedAt, milestones);
+      const summary = summarize(state, startedAt, milestones, serverLogPath);
       record("run_complete", summary);
       console.log(JSON.stringify({ artifactPath, serverLogPath, ...summary }, null, 2));
       process.exitCode = state.failed > 0 ? 2 : 0;
@@ -388,18 +388,38 @@ function captureMilestones(state) {
   if (!milestones.workersReadyAt && workers && Number(workers.pending) === 0) milestones.workersReadyAt = Date.now();
 }
 
-function summarize(state, start, marks) {
+function summarize(state, start, marks, logPath) {
   return {
     status: state.job?.status ?? "missing",
     durationMs: Date.now() - start,
     billingReadyMs: marks.billingReadyAt ? marks.billingReadyAt - start : null,
     durableObjectsReadyMs: marks.durableObjectsReadyAt ? marks.durableObjectsReadyAt - start : null,
     workersReadyMs: marks.workersReadyAt ? marks.workersReadyAt - start : null,
-    queryUnitsUsed: Number(state.quota?.sharedUsed ?? 0),
-    physicalRequestsUsed: Number(state.quota?.physicalUsed ?? 0),
+    finalRollingQueryUnits: Number(state.quota?.sharedUsed ?? 0),
+    finalRollingPhysicalRequests: Number(state.quota?.physicalUsed ?? 0),
+    graphql: graphqlRequestSummary(logPath),
     slices: { complete: state.complete, pending: state.pending, failed: state.failed },
     collectors: state.collectors,
     storage: storageSummary(),
+  };
+}
+
+function graphqlRequestSummary(logPath) {
+  const marker = "brolly.initial_graphql_budget ";
+  const events = readFileSync(logPath, "utf8").split(/\r?\n/).flatMap(line => {
+    const offset = line.indexOf(marker);
+    if (offset < 0) return [];
+    try { return [JSON.parse(line.slice(offset + marker.length))]; } catch { return []; }
+  });
+  return {
+    physicalRequests: events.length,
+    logicalQueries: events.reduce((sum, event) => sum + Number(event.logicalQueries ?? 0), 0),
+    minimumReportedRemaining: events.length
+      ? Math.min(...events.map(event => Number(event.remaining ?? Number.POSITIVE_INFINITY)))
+      : null,
+    maximumObservedDebit: events.length
+      ? Math.max(...events.map(event => Number(event.debit ?? 0)))
+      : null,
   };
 }
 

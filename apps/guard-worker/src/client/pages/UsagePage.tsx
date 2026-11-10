@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type SelectHTMLAttributes } 
 import { api } from "../api";
 import { dataSize, dateTime, money, number, relativeTime } from "../format";
 import type { DataQuality, LedgerResource, UsagePoint, UsageResponse } from "../types";
-import { Button, EmptyState, Icon, Notice, Panel, PanelHead, Pill, ProductIcon, Table, TableScroll, Td, Th, Tr } from "../components/ui";
+import { ResourceIdentity, identityCollisions } from "../components/ResourceIdentity";
+import { Button, EmptyState, Icon, Notice, Panel, PanelHead, Pill, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 
 export function UsagePage({ token }: { token: string }) {
   const [resources, setResources] = useState<LedgerResource[]>([]);
@@ -17,7 +18,7 @@ export function UsagePage({ token }: { token: string }) {
   const [error, setError] = useState("");
 
   const loadResources = useCallback(async (append = false) => {
-    const params = new URLSearchParams({ limit: "500" });
+    const params = new URLSearchParams({ limit: "100" });
     if (family) params.set("family", family);
     if (search.trim()) params.set("q", search.trim());
     if (append && nextCursor) params.set("cursor", nextCursor);
@@ -52,10 +53,7 @@ export function UsagePage({ token }: { token: string }) {
       .finally(() => setLoading(false));
   }, [selectedId, token]);
 
-  const visibleResources = useMemo(() => resources.filter(resource =>
-    (!family || resource.productFamily === family)
-    && (!search.trim() || `${resource.displayName} ${resource.cloudflareId}`.toLowerCase().includes(search.trim().toLowerCase())),
-  ), [family, resources, search]);
+  const collisions = useMemo(() => identityCollisions(resources), [resources]);
   const availableMetrics = usage ? metricIds(usage.points).map(id => usage.metricDefinitions.find(item => item.id === id) ?? {
     id, displayName: id.split(":").at(-1)?.replaceAll("_", " ") ?? id, unit: "count",
   }) : [];
@@ -86,18 +84,17 @@ export function UsagePage({ token }: { token: string }) {
             {families.map(item => <option key={item} value={item}>{display(item)}</option>)}
           </ToolbarSelect>
         </div>
-        {visibleResources.length ? (
+        {resources.length ? (
           <TableScroll>
             <Table>
               <thead><tr><Th>Resource</Th><Th>Scope</Th><Th>Coverage</Th><Th>Last activity</Th><Th>Alerts</Th></tr></thead>
               <tbody>
-                {visibleResources.map(resource => (
-                  <Tr key={resource.id} clickable className={selectedId === resource.id ? "bg-orange-soft" : undefined} onClick={() => setSelectedId(resource.id)}>
+                {resources.map(resource => (
+                  <Tr key={resource.id} className={selectedId === resource.id ? "bg-orange-soft" : undefined}>
                     <Td>
-                      <span className="flex min-w-0 flex-col gap-[3px]">
-                        <strong className="flex items-center gap-2"><ProductIcon family={resource.productFamily} />{resource.displayName}</strong>
-                        <small className="overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-faint">{resource.cloudflareId}</small>
-                      </span>
+                      <button type="button" className="block w-full min-w-0 cursor-pointer text-left" onClick={() => setSelectedId(resource.id)} aria-label={`Open usage for ${resource.cloudflareName ?? resource.cloudflareId}`}>
+                        <ResourceIdentity identity={{ ...resource, productFamily: resource.productFamily }} collision={collisions.has(resource.cloudflareId)} />
+                      </button>
                     </Td>
                     <Td>{scopeLabel(resource.resourceType)}</Td>
                     <Td><QualityBadge quality={resource.coverageStatus} /></Td>
@@ -120,7 +117,7 @@ export function UsagePage({ token }: { token: string }) {
         <Panel>
           <PanelHead
             eyebrow={`${display(usage.resource.productFamily)} · ${scopeLabel(usage.resource.resourceType)}`}
-            title={usage.resource.displayName}
+            title={<ResourceIdentity identity={{ ...usage.resource, productFamily: usage.resource.productFamily }} showIcon={false} />}
             sub={usage.oldestRetainedAt ? `Individual history begins ${usage.oldestRetainedAt}.` : "Individual history is still being collected."}
             actions={
               <ToolbarSelect aria-label="Metric" value={metricId} onChange={event => setMetricId(event.target.value)}>

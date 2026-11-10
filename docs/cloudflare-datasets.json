@@ -2817,8 +2817,8 @@
         "datetimeHour",
         "datetimeMinute"
       ],
-      "coverage": "adapter",
-      "billable": true
+      "coverage": "unclassified",
+      "billable": false
     },
     {
       "root": "account",
@@ -5942,8 +5942,8 @@
         "datetimeHour",
         "datetimeMinute"
       ],
-      "coverage": "adapter",
-      "billable": true
+      "coverage": "unclassified",
+      "billable": false
     },
     {
       "root": "zone",
@@ -6333,8 +6333,8 @@
         "datetimeHour",
         "datetimeMinute"
       ],
-      "coverage": "adapter",
-      "billable": true
+      "coverage": "unclassified",
+      "billable": false
     },
     {
       "root": "zone",

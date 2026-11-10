@@ -51,11 +51,30 @@ describe("risk tolerance policy validation", () => {
   it("validates saved cost and usage maps in both limit windows", () => {
     const value = policy();
     value.limits = {
-      day: { account: { cost: { warning: 5, critical: 10, emergency: 20 }, usage: { requests: { warning: 100, critical: 200, emergency: 500 } } } },
+      day: {
+        account: { cost: { warning: 5, critical: 10, emergency: 20 }, usage: {} },
+        "family:workers": { cost: {}, usage: { "workers:requests": { warning: 100, critical: 200, emergency: 500 } } },
+      },
       cycle: { account: { cost: {}, usage: {} } },
     };
     expect(validPolicy(value, false, LEVELS)).toBe(true);
-    value.limits.day.account!.usage.requests = { warning: 100, critical: 90, emergency: 500 };
+    value.limits.day["family:workers"]!.usage["workers:requests"] = { warning: 100, critical: 90, emergency: 500 };
     expect(validPolicy(value, false, LEVELS)).toBe(false);
+  });
+
+  it("rejects internal billing metrics and metrics saved under the wrong product", () => {
+    const dynamic = policy();
+    dynamic.limits = {
+      day: { "family:workers": { cost: {}, usage: { "workers:worker_build_minutes": { warning: 1, critical: 2, emergency: 3 } } } },
+      cycle: {},
+    };
+    expect(validPolicy(dynamic, false, LEVELS)).toBe(false);
+
+    const wrongProduct = policy();
+    wrongProduct.limits = {
+      day: { "family:d1": { cost: {}, usage: { "workers:requests": { warning: 1, critical: 2, emergency: 3 } } } },
+      cycle: {},
+    };
+    expect(validPolicy(wrongProduct, false, LEVELS)).toBe(false);
   });
 });

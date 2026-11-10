@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type PointerEvent, type SetStateAction } from "react";
-import { costSeries, useUsageSeries } from "../components/limits-chart/api";
+import { costSeries, useUsageSeries, type UsageSeriesState } from "../components/limits-chart/api";
 import { cycleIndexFor, daysBetween } from "../components/limits-chart/cycles";
 import { LevelValueField } from "../components/limits-chart/LevelValueField";
 import { levelColor } from "../components/limits-chart/LimitsChart";
@@ -25,15 +25,17 @@ const PRESETS: Array<{ id: Exclude<RiskTolerancePreset, "custom">; label: string
   { id: "growth", label: "Growth" },
 ];
 
-export function RiskToleranceStep({ token, policy, levels, setPolicy, accountName = null, accountId = "" }: {
+export function RiskToleranceStep({ token, policy, levels, setPolicy, accountName = null, accountId = "", usage: sharedUsage }: {
   token: string;
   policy: Policy;
   levels: AlertLevel[];
   setPolicy: Dispatch<SetStateAction<Policy>>;
   accountName?: string | null;
   accountId?: string;
+  usage?: UsageSeriesState;
 }) {
-  const usage = useUsageSeries(token, "account");
+  const fetchedUsage = useUsageSeries(token, "account", !sharedUsage);
+  const usage = sharedUsage ?? fetchedUsage;
   const order = useMemo(() => levels.map(level => level.id), [levels]);
   const tolerance = normalizeRiskTolerance(policy.riskTolerance, order);
   // First render: a policy without tolerance starts on Balanced with the

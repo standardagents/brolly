@@ -4,7 +4,7 @@ export type ProductUsageFamily =
   | "workers_ai" | "queues" | "d1" | "r2" | "kv" | "pages" | "images"
   | "stream" | "vectorize" | "hyperdrive" | "ai_gateway" | "containers"
   | "browser_rendering" | "workflows" | "worker_builds" | "analytics_engine"
-  | "log_explorer" | "zones" | "email";
+  | "log_explorer" | "email";
 
 export type ProductUsageCollector = `graphql:${ProductUsageFamily}`;
 
@@ -29,6 +29,8 @@ export interface ProductDatasetDefinition {
   timeField: string;
   dimensions?: string[];
   resourceDimension?: string;
+  /** The resource dimension is a Cloudflare-supplied name rather than an opaque identifier. */
+  resourceDimensionIsName?: boolean;
   parentDimension?: string;
   metrics: DatasetMetric[];
   /** Used only when the preferred dataset is unavailable for a specific scope. */
@@ -62,8 +64,13 @@ const dataset = (
 ): ProductDatasetDefinition => ({ dataset: name, alias: name.replace(/[^A-Za-z0-9_]/g, "_"), timeKind, timeField, metrics, ...options });
 
 const R2_CLASS_A_ACTIONS = [
-  "PutObject", "CopyObject", "ListBuckets", "ListObjects", "CreateMultipartUpload",
-  "UploadPart", "CompleteMultipartUpload", "AbortMultipartUpload", "DeleteObject",
+  "PutBucket", "PutObject", "CopyObject", "ListBuckets", "ListObjects", "CreateMultipartUpload",
+  "UploadPart", "UploadPartCopy", "CompleteMultipartUpload", "ListMultipartUploads", "ListParts",
+  "PutBucketEncryption", "PutBucketCors", "PutBucketLifecycleConfiguration", "LifecycleStorageTierTransition",
+];
+const R2_CLASS_B_ACTIONS = [
+  "HeadBucket", "HeadObject", "GetObject", "GetBucketEncryption", "GetBucketLocation",
+  "GetBucketCors", "GetBucketLifecycleConfiguration",
 ];
 
 /**
@@ -92,13 +99,13 @@ export const PRODUCT_USAGE_DEFINITIONS: readonly ProductUsageDefinition[] = [
   definition("r2", "R2", 90, "resource", [
     dataset("r2OperationsAdaptiveGroups", "time", "datetime", [
       metric("class_a", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
-      metric("class_b", "count", "sum", ["requests"], { actions: R2_CLASS_A_ACTIONS }),
+      metric("class_b", "count", "sum", ["requests"], { actions: R2_CLASS_B_ACTIONS }),
       metric("egress_bytes", "bytes", "sum", ["responseBytes"]),
-    ], { dimensions: ["bucketName", "actionType"], resourceDimension: "bucketName" }),
+    ], { dimensions: ["bucketName", "actionType"], resourceDimension: "bucketName", resourceDimensionIsName: true }),
     dataset("r2StorageAdaptiveGroups", "time", "datetime", [metric("storage_bytes", "bytes", "max", ["payloadSize", "metadataSize"])], {
-      dimensions: ["bucketName"], resourceDimension: "bucketName",
+      dimensions: ["bucketName"], resourceDimension: "bucketName", resourceDimensionIsName: true,
     }),
-  ]),
+  ], ["retrieval_bytes"]),
   definition("kv", "Workers KV", 90, "namespace", [
     dataset("kvOperationsAdaptiveGroups", "date", "date", [
       metric("reads", "count", "sum", ["requests"], { actions: ["read"] }),
@@ -112,24 +119,23 @@ export const PRODUCT_USAGE_DEFINITIONS: readonly ProductUsageDefinition[] = [
   ]),
   definition("pages", "Pages Functions", 90, "resource", [
     dataset("pagesFunctionsInvocationsAdaptiveGroups", "time", "datetime", [metric("requests", "requests", "sum", ["requests"])], {
-      dimensions: ["scriptName"], resourceDimension: "scriptName",
+      dimensions: ["scriptName"], resourceDimension: "scriptName", resourceDimensionIsName: true,
     }),
-  ], ["builds"]),
+  ]),
   definition("images", "Images", 31, "account", [
-    dataset("imagesRequestsAdaptiveGroups", "date", "date", [metric("delivery", "requests", "sum", ["requests"])]),
     dataset("imagesTransformationsAdaptiveGroups", "date", "date", [metric("transformations", "count", "sum", ["billableEventCount"])]),
-  ], ["stored_images"]),
+  ], ["stored_images", "delivery"]),
   definition("stream", "Stream", 90, "resource", [
-    dataset("streamMinutesViewedAdaptiveGroups", "date", "date", [metric("minutes_delivered", "milliseconds", "sum", ["minutesViewed"], { factor: 60_000 })], {
+    dataset("streamMinutesViewedAdaptiveGroups", "date", "date", [metric("minutes_delivered", "count", "sum", ["minutesViewed"])], {
       dimensions: ["uid"], resourceDimension: "uid",
     }),
   ], ["minutes_stored"]),
   definition("vectorize", "Vectorize", 32, "resource", [
     dataset("vectorizeV2QueriesAdaptiveGroups", "time", "datetime", [metric("queried_dimensions", "count", "sum", ["queriedVectorDimensions"])], {
-      dimensions: ["indexName"], resourceDimension: "indexName",
+      dimensions: ["indexName"], resourceDimension: "indexName", resourceDimensionIsName: true,
     }),
     dataset("vectorizeV2StorageAdaptiveGroups", "time", "datetime", [metric("stored_dimensions", "count", "max", ["storedVectorDimensions"])], {
-      dimensions: ["indexName"], resourceDimension: "indexName",
+      dimensions: ["indexName"], resourceDimension: "indexName", resourceDimensionIsName: true,
     }),
   ]),
   definition("hyperdrive", "Hyperdrive", 32, "resource", [
@@ -142,11 +148,11 @@ export const PRODUCT_USAGE_DEFINITIONS: readonly ProductUsageDefinition[] = [
       metric("requests", "requests", "count"),
       metric("tokens", "count", "sum", ["cachedTokensIn", "cachedTokensOut", "uncachedTokensIn", "uncachedTokensOut"]),
       metric("cost_usd", "usd", "sum", ["cost"]),
-    ], { dimensions: ["gateway"], resourceDimension: "gateway" }),
-  ]),
+    ], { dimensions: ["gateway"], resourceDimension: "gateway", resourceDimensionIsName: true }),
+  ], ["logpush_requests"]),
   definition("containers", "Containers", 32, "resource", [
     dataset("containersUsageAdaptiveGroups", "date", "date", [
-      metric("vcpu_seconds", "milliseconds", "sum", ["cpuTimeSec"], { factor: 1_000 }),
+      metric("vcpu_seconds", "count", "sum", ["cpuTimeSec"]),
       metric("memory_gb_seconds", "gb_seconds", "sum", ["allocatedMemory"], { factor: 1 / 1_000_000_000 }),
       metric("disk_gb_seconds", "gb_seconds", "sum", ["allocatedDisk"], { factor: 1 / 1_000_000_000 }),
       metric("egress_bytes", "bytes", "sum", ["txBytes"]),
@@ -154,38 +160,31 @@ export const PRODUCT_USAGE_DEFINITIONS: readonly ProductUsageDefinition[] = [
   ]),
   definition("browser_rendering", "Browser Rendering", 32, "account", [
     dataset("browserRenderingBrowserTimeUsageAdaptiveGroups", "time", "datetime", [
-      metric("sessions", "count", "count"), metric("session_minutes", "milliseconds", "sum", ["totalSessionDurationMs"]),
+      metric("sessions", "count", "count"), metric("browser_hours", "count", "sum", ["totalSessionDurationMs"], { factor: 1 / 3_600_000 }),
     ]),
-  ]),
+  ], ["concurrent_browsers"]),
   definition("workflows", "Workflows", 32, "resource", [
-    dataset("workflowsAdaptiveGroups", "time", "datetimeHour", [metric("requests", "requests", "count")], {
-      dimensions: ["workflowName"], resourceDimension: "workflowName",
+    dataset("workflowsAdaptiveGroups", "time", "datetimeHour", [
+      metric("requests", "requests", "count"), metric("steps", "count", "sum", ["stepCount"]),
+    ], {
+      dimensions: ["workflowName"], resourceDimension: "workflowName", resourceDimensionIsName: true,
     }),
-  ], ["cpu_ms", "steps", "storage_bytes"]),
+  ], ["cpu_ms", "storage_bytes"]),
   definition("worker_builds", "Worker Builds", 32, "account", [
-    dataset("workersBuildsBuildMinutesAdaptiveGroups", "date", "date", [metric("build_minutes", "milliseconds", "sum", ["buildMinutes"], { factor: 60_000 })]),
+    dataset("workersBuildsBuildMinutesAdaptiveGroups", "date", "date", [metric("build_minutes", "count", "sum", ["buildMinutes"])]),
   ]),
   definition("analytics_engine", "Analytics Engine", 31, "resource", [
     dataset("workersAnalyticsEngineAdaptiveGroups", "time", "datetime", [metric("data_points_written", "count", "count")], {
-      dimensions: ["dataset"], resourceDimension: "dataset",
+      dimensions: ["dataset"], resourceDimension: "dataset", resourceDimensionIsName: true,
     }),
-  ], ["data_points_read", "queries", "storage_bytes"]),
+  ], ["read_queries"]),
   definition("log_explorer", "Log Explorer", 32, "resource", [
     dataset("logExplorerIngestionAdaptiveGroups", "time", "datetime", [metric("ingested_bytes", "bytes", "sum", ["billableBytes"])], {
-      dimensions: ["dataset", "zoneTag"], resourceDimension: "dataset", parentDimension: "zoneTag",
+      dimensions: ["dataset", "zoneTag"], resourceDimension: "dataset", resourceDimensionIsName: true, parentDimension: "zoneTag",
     }),
-  ], ["queries", "storage_bytes"]),
-  definition("zones", "Zones", 30, "zone", [
-    dataset("httpRequests1dGroups", "date", "date", [
-      metric("requests", "requests", "sum", ["requests"]), metric("bandwidth_bytes", "bytes", "sum", ["bytes"]),
-    ], { root: "zone" }),
-    dataset("httpRequestsAdaptiveGroups", "time", "datetime", [
-      metric("requests", "requests", "count"), metric("bandwidth_bytes", "bytes", "sum", ["edgeResponseBytes"]),
-    ], { root: "zone", fallbackFor: "httpRequests1dGroups" }),
-  ]),
+  ], ["storage_bytes"]),
   definition("email", "Email", 30, "zone", [
     dataset("emailSendingAdaptiveGroups", "time", "datetime", [metric("sent", "count", "count")], { root: "zone" }),
-    dataset("emailRoutingAdaptiveGroups", "time", "datetime", [metric("routed", "count", "count")], { root: "zone" }),
   ]),
 ] as const;
 
@@ -200,8 +199,36 @@ export function productDefinitionForDataset(name: string): ProductUsageDefinitio
   return BY_DATASET.get(name);
 }
 
-export function buildProductDatasetQuery(definition: ProductUsageDefinition, source: ProductDatasetDefinition, limit = 10_000): string {
-  const { selection, variableType } = productDatasetSelection(source, limit);
+/** Keep only aggregate fields Cloudflare reports for this account's live schema. */
+export function projectProductDataset(
+  source: ProductDatasetDefinition,
+  availableFields: readonly string[] | undefined,
+): ProductDatasetDefinition {
+  if (availableFields === undefined || availableFields.length === 0) return source;
+  const normalizeField = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const available = new Set(availableFields.map(normalizeField));
+  const metrics = source.metrics.flatMap(item => {
+    if (item.aggregate === "count") return [item];
+    const fields = (item.fields ?? []).filter(field => {
+      const normalized = normalizeField(field);
+      return available.has(normalized) || available.has(normalizeField(`${item.aggregate}_${field}`));
+    });
+    return fields.length ? [{ ...item, fields }] : [];
+  });
+  // Settings responses have changed shape across GraphQL schema versions.
+  // A populated but unrecognized field list is insufficient evidence that an
+  // enabled dataset lacks every required aggregate. Query it and validate the
+  // returned rows instead.
+  return { ...source, metrics: metrics.length ? metrics : source.metrics };
+}
+
+export function buildProductDatasetQuery(
+  definition: ProductUsageDefinition,
+  source: ProductDatasetDefinition,
+  limit = 10_000,
+  aggregateOnly = false,
+): string {
+  const { selection, variableType } = productDatasetSelection(source, limit, aggregateOnly);
   if ((source.root ?? "account") === "zone") {
     return `query BrollyProductUsage($zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } }`;
   }
@@ -213,9 +240,10 @@ export function buildAccountZoneProductDatasetQuery(
   definition: ProductUsageDefinition,
   source: ProductDatasetDefinition,
   limit = 10_000,
+  aggregateOnly = false,
 ): string {
   if ((source.root ?? "account") !== "zone") throw new TypeError(`${source.dataset} is not a zone dataset`);
-  const { selection, variableType } = productDatasetSelection(source, limit);
+  const { selection, variableType } = productDatasetSelection(source, limit, aggregateOnly);
   return `query BrollyAccountZoneProductUsage($account: String!, $zones: [string!]!, $start: ${variableType}!, $end: ${variableType}!) { viewer { accounts(filter: { accountTag: $account }) { zones(filter: { zoneTag_in: $zones }) { zoneTag ${selection} } } } }`;
 }
 
@@ -229,15 +257,22 @@ export function accountZoneProductDatasetVariables(
   return { ...productDatasetVariables(source, accountId, startsAt, endsAt, zoneIds), account: accountId };
 }
 
-function productDatasetSelection(source: ProductDatasetDefinition, limit: number): { selection: string; variableType: "Date" | "Time" } {
+function productDatasetSelection(
+  source: ProductDatasetDefinition,
+  limit: number,
+  aggregateOnly = false,
+): { selection: string; variableType: "Date" | "Time" } {
   const variableType = source.timeKind === "date" ? "Date" : "Time";
   const filter = source.timeKind === "date"
     ? `${source.timeField}_geq: $start, ${source.timeField}_leq: $end`
     : `${source.timeField}_geq: $start, ${source.timeField}_lt: $end`;
   const aggregates = [...new Set(source.metrics.map(item => item.aggregate))];
-  const dimensions = [...new Set(["date", ...(source.dimensions ?? [])])];
+  const probeDimensions = (source.dimensions ?? []).filter(dimension => dimension === "actionType");
+  const dimensions = aggregateOnly
+    ? probeDimensions
+    : [...new Set(["date", ...(source.dimensions ?? [])])];
   const body = [
-    `dimensions { ${dimensions.join(" ")} }`,
+    dimensions.length ? `dimensions { ${dimensions.join(" ")} }` : "",
     aggregates.includes("count") ? "count" : "",
     ...(["sum", "max"] as const).map(aggregate => {
       const fields = [...new Set(source.metrics.filter(item => item.aggregate === aggregate).flatMap(item => item.fields ?? []))];
@@ -286,19 +321,26 @@ export function normalizeProductDataset(
       const scope = zoneTag ? "zone" : resource ? definition.scope : "account";
       const id = zoneTag ?? resource ?? definition.family;
       const asset: AssetRef = {
-        accountId, family: definition.family, id, name: id, scope,
+        accountId, family: definition.family, id,
+        ...(source.resourceDimensionIsName ? { name: id, nameKind: "named" as const } : { nameKind: "id_only" as const }),
+        scope,
         ...(parent ? { parentId: parent } : {}), tier: "unclassified",
       };
       for (const item of source.metrics) {
         if (item.actions?.length) {
           const actions = item.actions.map(value => value.toLowerCase());
-          const matches = action ? actions.includes(action) : false;
-          if (item.metric === "class_b" ? matches : !matches) continue;
+          if (!action || !actions.includes(action)) continue;
         }
         const aggregate = item.aggregate === "count" ? row : recordValue(row[item.aggregate]);
-        const raw = item.aggregate === "count"
-          ? numberValue(row.count)
-          : (item.fields ?? []).reduce((sum, field) => sum + numberValue(aggregate[field]), 0);
+        const fields = item.fields ?? [];
+        if (item.aggregate === "count" && !Object.hasOwn(row, "count")) continue;
+        if (item.aggregate !== "count" && !fields.some(field => Object.hasOwn(aggregate, field))) continue;
+        const values = item.aggregate === "count"
+          ? [numericValue(row.count)]
+          : fields.map(field => numericValue(aggregate[field]));
+        const present = values.filter((value): value is number => value !== undefined);
+        if (!present.length) continue;
+        const raw = present.reduce((sum, value) => sum + value, 0);
         const value = raw * (item.factor ?? 1);
         if (!Number.isFinite(value)) continue;
         const key = `${bounds.start}:${asset.scope}:${asset.id}:${item.metric}`;
@@ -332,7 +374,11 @@ function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value.length ? value : undefined; }
-function numberValue(value: unknown): number { const parsed = Number(value ?? 0); return Number.isFinite(parsed) ? parsed : 0; }
+function numericValue(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function dailyBounds(day: string | undefined, startsAt: number, endsAt: number): { start: number; end: number } {
   if (!day) return { start: startsAt, end: endsAt };

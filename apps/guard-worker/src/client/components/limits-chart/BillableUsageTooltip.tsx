@@ -2,7 +2,7 @@ import { money } from "../../format";
 import { formatLimitValue } from "./format";
 
 /** Shared shell for chart readouts and live line-value chips. */
-export const FLOAT_CHIP = "pointer-events-none absolute z-10 whitespace-nowrap rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
+export const FLOAT_CHIP = "pointer-events-none absolute z-10 rounded-[6px] border border-line bg-panel px-2 py-1 text-[11px] leading-[1.45] shadow-[0_2px_8px_rgba(0,0,0,.08)]";
 
 interface BillableUsageTooltipProps {
   x: number;
@@ -22,7 +22,7 @@ interface BillableUsageTooltipProps {
 /** Cycle-end usage marker details with the billed meter's list-rate estimate. */
 export function BillableUsageTooltip({ x, y, width, color, label, day, dayOfCycle, cycleDays, total, included, costUsd, unit }: BillableUsageTooltipProps) {
   return (
-    <div data-billable-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
+    <div data-billable-tooltip role="status" className={`${FLOAT_CHIP} whitespace-nowrap -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
       style={{ left: x, top: y - 12 }}>
       <b className="font-[720]" style={{ color }}>{label} usage</b>
       <span className="mt-0.5 block text-muted">{day} · Cycle: {dayOfCycle} of {cycleDays}</span>

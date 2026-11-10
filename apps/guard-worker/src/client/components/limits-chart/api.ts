@@ -10,7 +10,7 @@ export interface UsageSeriesResponse {
   found: boolean;
   today: string;
   fromDay?: string;
-  metrics: Record<string, { key: string; label: string; unit: string; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string }; aggregationKind?: AggregationKind }>;
+  metrics: Record<string, { key: string; label: string; unit: string; role?: "billable" | "shared_billing" | "quota" | "provider_cost"; productLimit?: boolean; billingKind?: "independent" | "shared" | "conditional" | "quota_only" | "announced" | "provider" | "none"; condition?: string; sharedBillingMetricId?: string; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string }; aggregationKind?: AggregationKind }>;
   series: Array<{ day: string; costUsd: number; metrics: Record<string, number>; sealed: boolean }>;
   coverage?: Record<string, CoverageSpan[]>;
   costCoverage?: CoverageSpan[];
@@ -218,11 +218,11 @@ export function metricAggregationKind(data: UsageSeriesResponse, metricId: strin
  * bills into another meter (WebSocket messages into Durable Objects requests)
  * is folded into that meter's row and never listed on its own.
  */
-export function billableMetricIds(data: UsageSeriesResponse): string[] {
-  const totals = new Map<string, number>();
-  for (const point of data.series) for (const [id, value] of Object.entries(point.metrics)) totals.set(id, (totals.get(id) ?? 0) + value);
+export function limitMetricIds(data: UsageSeriesResponse): string[] {
   return Object.entries(data.metrics)
-    .filter(([, metric]) => metric.billable && !metric.billedVia)
-    .sort(([left], [right]) => (totals.get(right) ?? 0) - (totals.get(left) ?? 0))
+    .filter(([, metric]) => (metric.productLimit ?? metric.billable) && !metric.billedVia)
     .map(([id]) => id);
 }
+
+/** Compatibility name for callers that have not adopted the broader limit roles. */
+export const billableMetricIds = limitMetricIds;

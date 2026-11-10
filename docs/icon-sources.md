@@ -26,7 +26,6 @@ official `cloudflare/cloudflare-docs` repository, `production` branch,
 | Worker Builds | `dynamic-workers.svg` |
 | Analytics Engine | `analytics.svg` |
 | Log Explorer | `log-explorer.svg` |
-| Zones | `dns.svg` |
 | Email | `email-routing.svg` |
 
 - Source directory: <https://github.com/cloudflare/cloudflare-docs/tree/production/src/icons>

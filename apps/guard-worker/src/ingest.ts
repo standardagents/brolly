@@ -5,7 +5,7 @@ import type { Env } from "./env.js";
 import { expandUsageObservations, LedgerStore } from "./ledger-store.js";
 import { productUsageDefinition, type ProductUsageCollector } from "./product-usage.js";
 import type { CoverageResult, LedgerRunBudget, MetricSample, UsageObservation } from "@standardagents/brolly-core";
-import { coverageStateFromResults, saveCoverageIntervals, type CoverageIntervalInput } from "./coverage-intervals.js";
+import { coverageStateFromResults, metricCoverageDataset, saveCoverageIntervals, type CoverageIntervalInput } from "./coverage-intervals.js";
 
 export type UsageCollector = "graphql:durable-objects" | "graphql:workers" | ProductUsageCollector | "billing";
 
@@ -119,7 +119,8 @@ function collectorCoverageIntervals(
 ): CoverageIntervalInput[] {
   const coverage = result.coverage;
   if (options.collector === "graphql:workers") {
-    return [interval(options, "workersInvocationsAdaptive", coverage.filter(item => item.metric !== "cache_requests"))];
+    return coverage.filter(item => item.metric !== "cache_requests")
+      .map(item => interval(options, metricCoverageDataset("workersInvocationsAdaptive", item.metric), [item]));
   }
   if (options.collector === "graphql:durable-objects") {
     const sources: Array<[string, string[]]> = [
@@ -128,20 +129,26 @@ function collectorCoverageIntervals(
       ["durableObjectsSqlStorageGroups", ["sql_storage_bytes"]],
       ["durableObjectsStorageGroups", ["kv_storage_bytes"]],
     ];
-    return sources.map(([dataset, metrics]) => interval(options, dataset, coverage.filter(item => metrics.includes(item.metric))));
+    return sources.flatMap(([dataset, metrics]) => coverage.filter(item => metrics.includes(item.metric))
+      .map(item => interval(options, metricCoverageDataset(dataset, item.metric), [item])));
   }
   if (!definition) return [];
-  if ("datasetCoverage" in result) return result.datasetCoverage.flatMap(item => item.scopeKeys.map(scopeKey => ({
-    accountId: options.env.BROLLY_ACCOUNT_ID,
-    dataset: item.dataset,
-    scopeKey,
-    startsAt: options.startsAt,
-    endsAt: options.endsAt,
-    state: item.state,
-    reason: item.reason,
-  })));
-  return definition.datasets.map(source => interval(options, source.dataset,
-    coverage.filter(item => source.metrics.some(metric => metric.metric === item.metric))));
+  if ("datasetCoverage" in result) return result.datasetCoverage.flatMap(item => {
+    const source = definition.datasets.find(candidate => candidate.dataset === item.dataset);
+    if (!source) return [];
+    return source.metrics.flatMap(metric => item.scopeKeys.map(scopeKey => ({
+      accountId: options.env.BROLLY_ACCOUNT_ID,
+      dataset: metricCoverageDataset(item.dataset, metric.metric),
+      scopeKey,
+      startsAt: options.startsAt,
+      endsAt: options.endsAt,
+      state: item.state,
+      reason: item.reason,
+    })));
+  });
+  return definition.datasets.flatMap(source => coverage
+    .filter(item => source.metrics.some(metric => metric.metric === item.metric))
+    .map(item => interval(options, metricCoverageDataset(source.dataset, item.metric), [item])));
 }
 
 function interval(options: IngestWindowOptions, dataset: string, coverage: CoverageResult[]): CoverageIntervalInput {

@@ -161,6 +161,16 @@ export interface InitialIngestionDays {
   gaps: number;
   failedWindows: number;
   errors: string[];
+  issues?: Array<{
+    dataset: string;
+    label: string;
+    fromDay: string;
+    toDay: string;
+    affectedDays: number;
+    affectedScopes: number | null;
+    scope: "account" | "zones";
+    reason: string;
+  }>;
 }
 
 export interface InitialIngestionResponse {
@@ -233,7 +243,7 @@ export interface DashboardData {
 }
 
 export interface Asset {
-  accountId: string; family: string; id: string; parentId: string | null; name: string | null; scope: string;
+  accountId: string; family: string; id: string; parentId: string | null; parentName?: string | null; name: string | null; scope: string;
   tier: AssetTier; tags: Record<string, string>; discoveredAt: number; seenAt: number; incidentCount: number; lastSignalAt: number | null;
 }
 
@@ -299,6 +309,19 @@ export interface ReleaseStatus {
 }
 
 export type DataQuality = "complete" | "partial" | "sampled" | "stale" | "missing";
+export type ResourceNameKind = "named" | "id_only" | "brolly";
+
+export interface ResourceIdentityData {
+  cloudflareId: string;
+  cloudflareName: string | null;
+  nameKind: ResourceNameKind;
+  resourceType: string;
+  productFamily?: string;
+}
+
+export interface ResourceIdentityView extends ResourceIdentityData {
+  parentIdentity?: ResourceIdentityData | null;
+}
 
 export interface LedgerResource {
   id: string;
@@ -307,7 +330,9 @@ export interface LedgerResource {
   productFamily: string;
   resourceType: string;
   cloudflareId: string;
-  displayName: string;
+  cloudflareName: string | null;
+  nameKind: ResourceNameKind;
+  parentIdentity: ResourceIdentityData | null;
   firstSeenAt: number;
   lastSeenAt: number;
   lastActiveAt: number | null;
@@ -380,6 +405,7 @@ export interface AlertRuleView {
   targetResourceId: string | null;
   targetDisplayName: string | null;
   targetResourceType: string | null;
+  targetIdentity: ResourceIdentityView | null;
   targetSelector: Record<string, string> | null;
   metricDefinitionId: string;
   measurement: "usage" | "estimated_cost" | "billed_cost";
@@ -418,7 +444,9 @@ export interface AlertInstanceView {
   label: string;
   color: string;
   priority: number;
-  displayName: string;
+  cloudflareName: string | null;
+  nameKind: ResourceNameKind;
+  resourceType: string;
   productFamily: string;
   cloudflareId: string;
 }

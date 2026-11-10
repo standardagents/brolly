@@ -47,6 +47,8 @@ interface ResourceRow {
   resource_type: string;
   cloudflare_id: string;
   display_name: string;
+  cloudflare_name: string | null;
+  name_kind: Resource["nameKind"];
   first_seen_at: number;
   last_seen_at: number;
   last_active_at: number | null;
@@ -463,7 +465,7 @@ async function prepareAggregateContributorAction(
     if (resource && manualActionEligible(resource, instance) && !await hasDeniedAncestor(db, resource.id, budget)) {
       await insertPreparedAction(
         db, instance, resource, now, false,
-        `${resource.displayName} is the leading contributor; operator approval is required`, budget,
+        `${resourceLabel(resource)} is the leading contributor; operator approval is required`, budget,
       );
     }
     return null;
@@ -506,7 +508,7 @@ async function prepareAggregateContributorAction(
     : null;
   return insertPreparedAction(
     db, instance, resource, now, true,
-    `${resource.displayName} was the deterministic top contributor in two consecutive complete scans`, budget,
+    `${resourceLabel(resource)} was the deterministic top contributor in two consecutive complete scans`, budget,
   );
 }
 
@@ -549,7 +551,7 @@ async function prepareAmbiguousContributorApproval(
     if (!resource || actionMode(resource.productFamily, effective) !== "prepare" || !manualActionEligible(resource, instance) || await hasDeniedAncestor(db, resource.id, budget)) continue;
     await insertPreparedAction(
       db, instance, resource, now, false,
-      `${resource.displayName} is among the leading contributors; attribution requires operator review`, budget,
+      `${resourceLabel(resource)} is among the leading contributors; attribution requires operator review`, budget,
     );
     return;
   }
@@ -772,7 +774,8 @@ function resourceFromRow(row: ResourceRow): Resource {
   return {
     id: row.id, accountId: row.account_id, parentResourceId: row.parent_resource_id,
     productFamily: row.product_family, resourceType: row.resource_type, cloudflareId: row.cloudflare_id,
-    displayName: row.display_name, firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at,
+    cloudflareName: row.cloudflare_name, nameKind: row.name_kind,
+    firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at,
     lastActiveAt: row.last_active_at, coverageStatus: row.coverage_status,
     controlCapability: row.control_capability, runtimeFuseStatus: row.runtime_fuse_status,
     autoQuarantinePolicy: row.auto_quarantine_policy, tier: row.tier, excluded: row.excluded === 1,
@@ -784,10 +787,24 @@ function assetFromResource(resource: Resource): AssetRef {
   const scope = resource.resourceType.split(":").at(-1);
   return {
     accountId: resource.accountId, family: resource.productFamily, id: resource.cloudflareId,
-    parentId: resource.parentResourceId ?? undefined, name: resource.displayName,
+    parentId: resource.parentResourceId ?? undefined,
+    ...(resource.cloudflareName ? { name: resource.cloudflareName } : {}), nameKind: resource.nameKind,
     scope: scope === "object" || scope === "namespace" || scope === "resource" || scope === "zone" || scope === "account" ? scope : "resource",
     tier: resource.tier, tags: resource.metadata,
   };
+}
+
+function resourceLabel(resource: Resource): string {
+  const id = compactCloudflareId(resource.cloudflareId);
+  if (resource.cloudflareName) return `${resource.cloudflareName} (${id})`;
+  if (resource.productFamily === "durable_objects" && resource.resourceType.endsWith(":object")) {
+    return `${resource.metadata.durableObjectClass ?? "Durable Object"} ${id}`;
+  }
+  return `${resource.productFamily.replaceAll("_", " ")} ${id}`;
+}
+
+function compactCloudflareId(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
 }
 
 function actionFromStoredRow(row: Record<string, unknown>, resource: Resource): ControlAction {

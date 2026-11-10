@@ -3,6 +3,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { LimitsChartDual, type WindowLimits } from "../src/client/components/limits-chart/LimitsChartDual";
+import { displayCoverageReason } from "../src/client/components/limits-chart/LimitsChart";
 import type { UsageSeriesResponse } from "../src/client/components/limits-chart/api";
 import { hover, leave, pointerMove } from "./pointer";
 
@@ -75,6 +76,10 @@ function Harness({ dayCost = {}, cycleCost = {}, costOnly = false, emptyUsage = 
 }
 
 describe("LimitsChartDual tolerance behavior", () => {
+  it("keeps coverage reasons compact and removes internal dataset keys", () => {
+    expect(displayCoverageReason("containersUsageAdaptiveGroups: Cloudflare retains 32 days for this dataset.")).toBe("Cloudflare retains 32 days for this dataset.");
+    expect(displayCoverageReason("Cloudflare returned no data.")).toBe("Cloudflare returned no data.");
+  });
   it("renders family usage rows, the included band, and allotment-anchored cycle seeds", async () => {
     const container = await render(<Harness data={familyQuotaResponse} />);
     expect(container.textContent).toContain("20K reqs included");

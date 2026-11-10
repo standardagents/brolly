@@ -91,6 +91,14 @@ export const INCLUDED_COLOR = "#2e9d62";
 /** Level ramp, lowest to highest severity: amber → red → magenta → deep plum. */
 const LEVEL_PALETTE = ["#e79021", "#e0632a", "#c9412c", "#a8232f", "#8c1d45", "#701a58", "#521a5c", "#3a1748"];
 
+/** Remove an internal GraphQL dataset key from a user-facing coverage reason. */
+export function displayCoverageReason(reason: string): string {
+  const separator = reason.indexOf(": ");
+  if (separator < 1) return reason;
+  const prefix = reason.slice(0, separator);
+  return /^[a-z][A-Za-z0-9_]+$/.test(prefix) ? reason.slice(separator + 2) : reason;
+}
+
 /** Default color for a level by board position, so any level count reads as an ordered ramp. */
 export function levelColor(index: number, count: number): string {
   if (count <= 1) return LEVEL_PALETTE[2]!;
@@ -475,7 +483,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
     const rows: Array<[string, string]> = [];
     if (hovered.missing) {
       rows.push(["Coverage", hovered.coverage === "pending" ? "Importing" : "Unavailable"]);
-      if (hovered.coverageReason) rows.push(["Reason", hovered.coverageReason]);
+      if (hovered.coverageReason) rows.push(["Reason", displayCoverageReason(hovered.coverageReason)]);
       return rows;
     }
     if (hovered.coverage === "partial") rows.push(["Coverage", "Partial"]);
@@ -852,7 +860,7 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
         const { x: markerX, y: markerY } = markerPoint(item);
         const x = Math.min(Math.max(markerX, PLOT.left), width - plotRight);
         return (
-          <div data-free-exhausted-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
+          <div data-free-exhausted-tooltip role="status" className={`${FLOAT_CHIP} whitespace-nowrap -translate-y-full ${x > width * 0.7 ? "-translate-x-full" : x < width * 0.3 ? "" : "-translate-x-1/2"}`}
             style={{ left: x, top: markerY - 12 }}>
             <span className="flex items-baseline justify-between gap-4">
               <b className="font-[720]" style={{ color: INCLUDED_COLOR }}>{exhausted ? "Free usage exhausted" : "Free usage remaining"}</b>
@@ -885,14 +893,14 @@ export function LimitsChart({ kind, unit, window: limitWindow, series, cycles: c
       ))}
       {hovered && (
         // Near either edge the tooltip hangs inward from the pointer instead of centering, so it never clips.
-        <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} -translate-y-full ${hoverDay!.x > width * 0.7 ? "-translate-x-full" : hoverDay!.x < width * 0.3 ? "" : "-translate-x-1/2"}`}
+        <div data-chart-tooltip role="status" className={`${FLOAT_CHIP} w-max max-w-[22rem] -translate-y-full ${hoverDay!.x > width * 0.7 ? "-translate-x-full" : hoverDay!.x < width * 0.3 ? "" : "-translate-x-1/2"}`}
           // The anchor side eases across when it flips near an edge; the position itself tracks the pointer directly.
           style={{ left: Math.min(Math.max(hoverDay!.x, PLOT.left), width - plotRight), top: hoverDay!.y - 10, transition: `translate 220ms ${EASE}` }}>
           <b className="font-[720]">{dayLabel(hovered.day)}</b>{hovered.projected && <span className="ml-1.5 text-[10px] font-[700] uppercase tracking-[.06em] text-faint">Projected</span>}
-          <span className="mt-1 grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+          <span className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
             {hoverRows.map(([label, value], index) => <span key={label} className="contents">
               <span className={index === 0 ? "text-ink" : "text-muted"}>{label}</span>
-              <span className={`text-right tabular-nums ${index === 0 ? "font-[720] text-ink" : "text-muted"}`}>{value}</span>
+              <span className={`text-right tabular-nums [overflow-wrap:anywhere] ${index === 0 ? "font-[720] text-ink" : "text-muted"}`}>{value}</span>
             </span>)}
           </span>
         </div>

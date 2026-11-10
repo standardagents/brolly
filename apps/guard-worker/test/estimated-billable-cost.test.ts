@@ -80,6 +80,25 @@ describe("estimated billable cost series", () => {
     expect(series[1]?.costUsd).toBeCloseTo(200_000 * (0.15 / 1_000_000), 12);
   });
 
+  it("depletes Workers pools with Pages Functions and Workflows usage", () => {
+    const series = estimatedBillableCostSeries([
+      point("2026-08-01", {
+        "workers:requests": 4_000_000,
+        "pages:requests": 3_000_000,
+        "workflows:requests": 3_000_000,
+        "workers:cpu_ms": 20_000_000,
+        "workflows:cpu_ms": 10_000_000,
+      }),
+      point("2026-08-02", {
+        "pages:requests": 1_000_000,
+        "workflows:cpu_ms": 2_000_000,
+      }),
+    ], [CYCLE], [REQUESTS, CPU], "paid");
+
+    expect(series[0]?.costUsd).toBe(0);
+    expect(series[1]?.costUsd).toBeCloseTo(0.34, 12);
+  });
+
   it("sorts the returned daily points without mutating the input", () => {
     const input = [
       point("2026-08-02", { "workers:requests": 12_000_000 }),

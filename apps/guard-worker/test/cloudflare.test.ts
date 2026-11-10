@@ -171,7 +171,7 @@ describe("Cloudflare product dataset discovery", () => {
       }
       return Response.json({ data: { viewer: {
         accounts: [{ settings: {
-          d1AnalyticsAdaptiveGroups: { enabled: true, availableFields: ["rowsRead"], notOlderThan: 7_776_000, maxPageSize: 10_000 },
+          d1AnalyticsAdaptiveGroups: { enabled: true, availableFields: ["dimensions_date", "sum_rowsRead"], notOlderThan: 7_776_000, maxPageSize: 10_000 },
         } }],
         zones: [{ zoneTag: "zone-1", settings: {
           emailSendingAdaptiveGroups: { enabled: true, availableFields: ["datetime"], notOlderThan: 2_592_000, maxPageSize: 10_000 },

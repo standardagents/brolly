@@ -133,33 +133,61 @@ export async function onboardingData(env: Env): Promise<Record<string, unknown>>
 
 export async function assetList(request: Request, env: Env): Promise<Record<string, unknown>> {
   const url = new URL(request.url);
-  const clauses = ["account_id=?1"];
+  const clauses = ["a.account_id=?1"];
   const values: unknown[] = [env.BROLLY_ACCOUNT_ID];
   const family = url.searchParams.get("family");
   const tier = url.searchParams.get("tier");
   const search = url.searchParams.get("search")?.trim();
-  if (family) { values.push(family); clauses.push(`family=?${values.length}`); }
-  if (tier) { values.push(tier); clauses.push(`tier=?${values.length}`); }
-  if (search) { values.push(`%${search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`); clauses.push(`(name LIKE ?${values.length} ESCAPE '\\' OR asset_id LIKE ?${values.length} ESCAPE '\\')`); }
+  if (family) { values.push(family); clauses.push(`a.family=?${values.length}`); }
+  if (tier) { values.push(tier); clauses.push(`a.tier=?${values.length}`); }
+  if (search) { values.push(`%${search.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`); clauses.push(`(a.name LIKE ?${values.length} ESCAPE '\\' OR a.asset_id LIKE ?${values.length} ESCAPE '\\')`); }
+  const cursor = parseAssetCursor(url.searchParams.get("cursor"));
+  const cursorStart = values.length + 1;
+  values.push(cursor?.[0] ?? null, cursor?.[1] ?? null, cursor?.[2] ?? null, cursor?.[3] ?? null);
   const requestedLimit = Number(url.searchParams.get("limit") ?? 100);
   const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(250, Math.floor(requestedLimit))) : 100;
-  values.push(limit);
+  values.push(limit + 1);
   const result = await env.DB.prepare(
-    `SELECT a.*,
-      (SELECT COUNT(*) FROM incidents i WHERE i.account_id=a.account_id AND i.family=a.family AND i.asset_id=a.asset_id AND i.status!='resolved' AND i.metric!='telemetry_coverage') AS incident_count,
-      (SELECT MAX(end_at) FROM metric_samples s WHERE s.account_id=a.account_id AND s.family=a.family AND s.asset_id=a.asset_id) AS last_signal_at
-     FROM assets a WHERE ${clauses.join(" AND ")}
-     ORDER BY incident_count DESC,seen_at DESC LIMIT ?${values.length}`,
+    `WITH listed AS (
+       SELECT a.*,parent.name AS parent_name,
+         (SELECT COUNT(*) FROM incidents i WHERE i.account_id=a.account_id AND i.family=a.family AND i.asset_id=a.asset_id AND i.status!='resolved' AND i.metric!='telemetry_coverage') AS incident_count,
+         (SELECT MAX(end_at) FROM metric_samples s WHERE s.account_id=a.account_id AND s.family=a.family AND s.asset_id=a.asset_id) AS last_signal_at
+       FROM assets a LEFT JOIN assets parent
+         ON parent.account_id=a.account_id AND parent.family=a.family AND parent.asset_id=a.parent_id
+       WHERE ${clauses.join(" AND ")}
+     ) SELECT * FROM listed
+     WHERE (?${cursorStart} IS NULL
+       OR incident_count < ?${cursorStart}
+       OR incident_count = ?${cursorStart} AND seen_at < ?${cursorStart + 1}
+       OR incident_count = ?${cursorStart} AND seen_at = ?${cursorStart + 1} AND family > ?${cursorStart + 2}
+       OR incident_count = ?${cursorStart} AND seen_at = ?${cursorStart + 1} AND family = ?${cursorStart + 2} AND asset_id > ?${cursorStart + 3})
+     ORDER BY incident_count DESC,seen_at DESC,family,asset_id LIMIT ?${values.length}`,
   ).bind(...values).all<Row>();
+  const page = result.results.slice(0, limit);
+  const last = page.at(-1);
   return {
-    assets: result.results.map(row => ({
+    assets: page.map(row => ({
       accountId: String(row.account_id), family: String(row.family), id: String(row.asset_id),
-      parentId: row.parent_id == null ? null : String(row.parent_id), name: row.name == null ? null : String(row.name),
+      parentId: row.parent_id == null ? null : String(row.parent_id), parentName: row.parent_name == null ? null : String(row.parent_name),
+      name: row.name == null ? null : String(row.name),
       scope: String(row.scope), tier: String(row.tier), tags: parseJson(String(row.metadata_json ?? "{}")),
       discoveredAt: Number(row.discovered_at), seenAt: Number(row.seen_at), incidentCount: Number(row.incident_count),
       lastSignalAt: row.last_signal_at == null ? null : Number(row.last_signal_at),
     })),
+    nextCursor: result.results.length > limit && last
+      ? JSON.stringify([Number(last.incident_count), Number(last.seen_at), String(last.family), String(last.asset_id)])
+      : null,
   };
+}
+
+function parseAssetCursor(value: string | null): [number, number, string, string] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.length === 4 && Number.isFinite(parsed[0]) && Number.isFinite(parsed[1])
+      && typeof parsed[2] === "string" && typeof parsed[3] === "string"
+      ? [Number(parsed[0]), Number(parsed[1]), parsed[2], parsed[3]] : null;
+  } catch { return null; }
 }
 
 function incidentView(row: Row): Record<string, unknown> {
@@ -293,7 +321,7 @@ function familyLabel(family: string): string {
   const labels: Record<string, string> = {
     durable_objects: "Durable Objects", workers: "Workers", workers_ai: "Workers AI", ai_gateway: "AI Gateway",
     d1: "D1", r2: "R2", kv: "Workers KV", queues: "Queues", vectorize: "Vectorize", hyperdrive: "Hyperdrive",
-    pages: "Pages", zones: "Zones", images: "Images", stream: "Stream", email: "Email", billing: "Billing",
+    pages: "Pages", images: "Images", stream: "Stream", email: "Email", billing: "Billing",
   };
   return labels[family] ?? family.replaceAll("_", " ").replace(/\b\w/g, value => value.toUpperCase());
 }

@@ -34,7 +34,8 @@ import { createServer as createNetServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
-import type { AlertLevel, InitialIngestionResponse, NotificationProvider, NotificationTarget, PlanTier } from "./src/client/types.ts";
+import { productLimitMetric } from "@standardagents/brolly-core";
+import type { AlertLevel, Asset, InitialIngestionResponse, NotificationProvider, NotificationTarget, PlanTier } from "./src/client/types.ts";
 import { estimatedBillableCostBreakdownSeries } from "./src/estimated-billable-cost.js";
 import { BILLED_VIA, WORKERS_PAID_INCLUDED } from "./src/included-quota.js";
 import type { UsageSeriesResponse } from "./src/usage-series.ts";
@@ -620,7 +621,7 @@ const alertLevels: AlertLevel[] = [
   { id: "emergency", position: 2, label: "Emergency", entries: [] },
 ];
 
-const assets = [
+const friendlyAssets: Asset[] = [
   { accountId: "placeholder-demo-account", family: "workers", id: "api-gateway", parentId: null, name: "api-gateway", scope: "resource", tier: "critical", tags: { env: "production" }, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 1, lastSignalAt: now - 6 * 60_000 },
   { accountId: "placeholder-demo-account", family: "workers", id: "image-resizer", parentId: null, name: "image-resizer", scope: "resource", tier: "standard", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - 40 * 60_000 },
   { accountId: "placeholder-demo-account", family: "workers", id: "brolly-guard", parentId: null, name: "brolly-guard", scope: "resource", tier: "control_plane", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - 6 * 60_000 },
@@ -630,24 +631,95 @@ const assets = [
   { accountId: "placeholder-demo-account", family: "queues", id: "ingest-queue", parentId: null, name: "ingest-queue", scope: "resource", tier: "disposable", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: null },
 ];
 
+const namedNamespace: Asset = {
+  accountId: "placeholder-demo-account", family: "durable_objects", id: "namespace-agent-thread-production",
+  parentId: null, name: "AgentThreadProductionNamespaceWithRegionalFailover", scope: "namespace", tier: "standard",
+  tags: { cloudflareWorkerScript: "api-gateway" }, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000,
+  incidentCount: 0, lastSignalAt: now - 8 * 60_000,
+};
+const idOnlyNamespace: Asset = {
+  accountId: "placeholder-demo-account", family: "durable_objects", id: "namespace-7f8a9b0c1d2e3f4a",
+  parentId: null, name: null, scope: "namespace", tier: "standard", tags: { cloudflareWorkerScript: "image-resizer" },
+  discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - 12 * 60_000,
+};
+const objectIds = [
+  `12345678${"a".repeat(50)}999999`,
+  `12345678${"b".repeat(50)}999999`,
+  ...Array.from({ length: 118 }, (_, index) => (index + 1).toString(16).padStart(64, index % 2 ? "d" : "e")),
+];
+const productionEnvelopeAssets: Asset[] = [
+  {
+    accountId: "placeholder-demo-account", family: "workers", id: "sa-production-worker-with-a-very-long-generated-deployment-prefix-region-east",
+    parentId: null, name: "sa-production-worker-with-a-very-long-generated-deployment-prefix-region-east", scope: "resource", tier: "standard", tags: {},
+    discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - 9 * 60_000,
+  },
+  {
+    accountId: "placeholder-demo-account", family: "workers", id: "sa-production-worker-with-a-very-long-generated-deployment-prefix-region-west",
+    parentId: null, name: "sa-production-worker-with-a-very-long-generated-deployment-prefix-region-west", scope: "resource", tier: "standard", tags: {},
+    discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - 11 * 60_000,
+  },
+  namedNamespace,
+  idOnlyNamespace,
+  ...objectIds.map((id, index): Asset => ({
+    accountId: "placeholder-demo-account", family: "durable_objects", id,
+    parentId: index < 60 ? namedNamespace.id : idOnlyNamespace.id, name: null, scope: "object", tier: "standard",
+    tags: { cloudflareWorkerScript: index < 60 ? "api-gateway" : "image-resizer" },
+    discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000, incidentCount: index === 0 ? 1 : 0,
+    lastSignalAt: now - (index + 3) * 60_000,
+  })),
+  {
+    accountId: "placeholder-demo-account", family: "kv", id: "c2f6487a9d09457e8d3398484726211abc", parentId: null, name: null,
+    scope: "namespace", tier: "standard", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000,
+    incidentCount: 0, lastSignalAt: now - HOUR,
+  },
+  {
+    accountId: "placeholder-demo-account", family: "d1", id: "76af8b34-5c68-4df8-93f2-3925060e0408", parentId: null, name: null,
+    scope: "resource", tier: "standard", tags: {}, discoveredAt: now - 20 * 24 * HOUR, seenAt: now - 6 * 60_000,
+    incidentCount: 0, lastSignalAt: now - HOUR,
+  },
+  {
+    accountId: "placeholder-demo-account", family: "containers", id: "4dd5ce8c8a5bd8fe35f9c151bcba031cde3be643369a63bb3a0cb3c4439f9367",
+    parentId: null, name: null, scope: "resource", tier: "unclassified", tags: {}, discoveredAt: now - 20 * 24 * HOUR,
+    seenAt: now - 6 * 60_000, incidentCount: 0, lastSignalAt: now - HOUR,
+  },
+];
+
+const rawAssets = [...friendlyAssets, ...productionEnvelopeAssets];
+const assets = rawAssets.map(asset => ({
+  ...asset,
+  parentName: asset.parentId ? rawAssets.find(item => item.family === asset.family && item.id === asset.parentId)?.name ?? null : null,
+}));
+
 const ledgerResources = [
   {
     id: "placeholder-demo-account:account:account:placeholder-demo-account",
     accountId: "placeholder-demo-account", parentResourceId: null, productFamily: "account",
-    resourceType: "account", cloudflareId: "placeholder-demo-account", displayName: "Demo Cloudflare account",
+    resourceType: "account", cloudflareId: "placeholder-demo-account", cloudflareName: "Demo Cloudflare account", nameKind: "brolly", parentIdentity: null,
     firstSeenAt: now - 20 * 24 * HOUR, lastSeenAt: now - 6 * 60_000, lastActiveAt: now - 6 * 60_000,
     coverageStatus: "complete", controlCapability: "none", runtimeFuseStatus: "unknown",
     autoQuarantinePolicy: "deny", tier: "unclassified", excluded: false, metadata: {},
     childCount: 4, usageUpdatedAt: now - 6 * 60_000, oldestDay: "2026-07-24", openAlerts: 1,
   },
-  ...assets.map(asset => ({
+  ...assets.map(asset => {
+    const parent = asset.parentId ? assets.find(item => item.family === asset.family && item.id === asset.parentId) : null;
+    return ({
     id: `placeholder-demo-account:${asset.family}:${asset.family}%3A${asset.scope}:${asset.id}`,
     accountId: asset.accountId,
-    parentResourceId: `placeholder-demo-account:${asset.family}:product:${asset.family}`,
+    parentResourceId: parent
+      ? `placeholder-demo-account:${parent.family}:${parent.family}%3A${parent.scope}:${parent.id}`
+      : `placeholder-demo-account:${asset.family}:product:${asset.family}`,
     productFamily: asset.family,
     resourceType: `${asset.family}:${asset.scope}`,
     cloudflareId: asset.id,
-    displayName: asset.name ?? asset.id,
+    cloudflareName: asset.name ?? null,
+    nameKind: asset.name ? "named" : "id_only",
+    parentIdentity: parent ? {
+      cloudflareId: parent.id,
+      cloudflareName: parent.name,
+      nameKind: parent.name ? "named" : "id_only",
+      resourceType: `${parent.family}:${parent.scope}`,
+      productFamily: parent.family,
+    } : null,
     firstSeenAt: asset.discoveredAt,
     lastSeenAt: asset.seenAt,
     lastActiveAt: asset.lastSignalAt,
@@ -662,7 +734,7 @@ const ledgerResources = [
     usageUpdatedAt: asset.lastSignalAt,
     oldestDay: "2026-07-24",
     openAlerts: asset.incidentCount,
-  })),
+  }); }),
 ];
 
 const metricDefinitions = [
@@ -696,8 +768,29 @@ function demoUsageSeries(scope: string): UsageSeriesResponse {
     ? WORKERS_PAID_INCLUDED
     : family ? WORKERS_PAID_INCLUDED.filter(item => item.metricId.startsWith(`${family}:`)) : [];
   const estimate = estimatedBillableCostBreakdownSeries(response.series, response.cycles, allotments, demoPlan.planTier);
+  const metrics = Object.fromEntries(Object.entries(response.metrics).flatMap(([id, metric]) => {
+    const presentation = productLimitMetric(id);
+    return presentation ? [[id, {
+      ...metric,
+      label: presentation.label,
+      unit: presentation.unit,
+      role: presentation.role,
+      productLimit: true,
+      billingKind: presentation.billingKind,
+      ...(presentation.condition ? { condition: presentation.condition } : {}),
+      ...(presentation.sharedBillingMetricId ? { sharedBillingMetricId: presentation.sharedBillingMetricId } : {}),
+      billable: presentation.role === "billable" || presentation.role === "shared_billing",
+    }]] : [];
+  }));
+  const metricIds = new Set(Object.keys(metrics));
+  const series = response.series.map(point => ({
+    ...point,
+    metrics: Object.fromEntries(Object.entries(point.metrics).filter(([id]) => metricIds.has(id))),
+  }));
   return {
     ...response,
+    metrics,
+    series,
     estimatedBillableCostSeries: estimate.total,
     estimatedBillableCostByMetric: estimate.byMetric,
   };
@@ -886,8 +979,8 @@ const demoAlertInstances = [{
   dataQuality: "complete", status: "open", firstBreachedAt: now - 2 * HOUR, lastBreachedAt: now - 6 * 60_000,
   nextNotificationAt: null, notificationCount: 1, acknowledgedAt: null, acknowledgedBy: null,
   linkedActionId: null, historical: 0, metricDefinitionId: "account:estimated_cost_usd",
-  label: "Warning", color: "#f59e0b", priority: 50, displayName: "Demo Cloudflare account",
-  productFamily: "account", cloudflareId: "placeholder-demo-account",
+  label: "Warning", color: "#f59e0b", priority: 50, cloudflareName: "Demo Cloudflare account", nameKind: "brolly",
+  resourceType: "account", productFamily: "account", cloudflareId: "placeholder-demo-account",
 }];
 
 function demoApi(): Plugin {
@@ -930,14 +1023,26 @@ function demoApi(): Plugin {
         if (url.pathname === "/api/providers" && get) return send({ providers });
         if (url.pathname === "/api/alert-levels" && get) return send({ levels: alertLevels });
         if (url.pathname === "/api/cloudflare-zones" && get) return send({ accountId: session.account.id, zones: [{ id: "zone-1", name: "example.com" }, { id: "zone-2", name: "example.net" }] });
-        if (url.pathname === "/api/assets" && get) return send({ assets });
+        if (url.pathname === "/api/assets" && get) {
+          const query = url.searchParams.get("search")?.toLowerCase();
+          const family = url.searchParams.get("family");
+          const tier = url.searchParams.get("tier");
+          const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
+          const offset = Math.max(0, Number(url.searchParams.get("cursor") ?? 0));
+          const matching = assets.filter(item => (!family || item.family === family)
+            && (!tier || item.tier === tier)
+            && (!query || item.name?.toLowerCase().includes(query) || item.id.toLowerCase().includes(query)));
+          return send({ assets: matching.slice(offset, offset + limit), nextCursor: offset + limit < matching.length ? String(offset + limit) : null });
+        }
         if (url.pathname === "/api/ledger/resources" && get) {
           const query = url.searchParams.get("q")?.toLowerCase();
           const family = url.searchParams.get("family");
-          const resources = ledgerResources.filter(item =>
+          const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
+          const offset = Math.max(0, Number(url.searchParams.get("cursor") ?? 0));
+          const matching = ledgerResources.filter(item =>
             (!family || item.productFamily === family)
-            && (!query || item.displayName.toLowerCase().includes(query) || item.cloudflareId.toLowerCase().includes(query)));
-          return send({ resources, families: [...new Set(ledgerResources.map(item => item.productFamily).filter(item => item !== "account"))].sort(), nextCursor: null, generatedAt: Date.now() });
+            && (!query || item.cloudflareName?.toLowerCase().includes(query) || item.cloudflareId.toLowerCase().includes(query)));
+          return send({ resources: matching.slice(offset, offset + limit), families: [...new Set(ledgerResources.map(item => item.productFamily).filter(item => item !== "account"))].sort(), nextCursor: offset + limit < matching.length ? String(offset + limit) : null, generatedAt: Date.now() });
         }
         if (url.pathname === "/api/metric-definitions" && get) return send({ metricDefinitions });
         if (url.pathname === "/api/usage-series" && get) return send(demoUsageSeries(url.searchParams.get("scope") ?? "account"));

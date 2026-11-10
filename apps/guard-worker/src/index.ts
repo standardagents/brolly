@@ -1,7 +1,7 @@
 import type { Env } from "./env.js";
 import { runMonitor } from "./monitor.js";
 import { executeCloudflareControl, executeDeploymentFuseControl, prepareCloudflareControl, rollbackCloudflareControl } from "./control.js";
-import { DEFAULT_POLICY, METRIC_CATALOG, RunBudget, assetBudgetKey, type AssetRef, type ControlAction, type Policy } from "@standardagents/brolly-core";
+import { DEFAULT_POLICY, METRIC_CATALOG, RunBudget, assetBudgetKey, productLimitMetric, type AssetRef, type ControlAction, type Policy } from "@standardagents/brolly-core";
 import { assetList, dashboardData, onboardingData } from "./dashboard-api.js";
 import { configurationData, refreshConfiguration } from "./configuration.js";
 import { authRoute, authenticate, configuredEnv } from "./auth.js";
@@ -598,8 +598,10 @@ export function validPolicy(policy: Policy, requireEveryFamily = false, levelIds
     const validBooleanMap = (values: Record<string, boolean> | undefined) => !values || Object.values(values).every(value => typeof value === "boolean");
     for (const scopes of [policy.limits.day, policy.limits.cycle]) {
       if (!scopes || typeof scopes !== "object") return false;
-      for (const scope of Object.values(scopes)) {
+      for (const [scopeKey, scope] of Object.entries(scopes)) {
         if (!scope || !validOptionalSpend(scope.cost) || !scope.usage || Object.values(scope.usage).some(value => !validOptionalSpend(value))) return false;
+        const scopeFamily = scopeKey.match(/^(?:family|asset):([^:]+)/)?.[1] ?? null;
+        if (Object.keys(scope.usage).some(metricId => productLimitMetric(metricId)?.family !== scopeFamily)) return false;
         if (scope.enabled !== undefined && typeof scope.enabled !== "boolean") return false;
       }
     }

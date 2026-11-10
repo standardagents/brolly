@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import { billableMetricIds, costSeries, metricAggregationKind, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
+import { costSeries, metricAggregationKind, metricIncluded, metricPool, rowSeries, useUsageSeries, type UsageSeriesResponse } from "./api";
 import { cycleCumulative, denseSeries, visibleWindow, type AggregationKind, type DayPoint } from "./cycles";
 import { displayPercent, windowBaseline, windowDefaults } from "./defaults";
 import { compactLimitValue, unitLabel } from "./format";

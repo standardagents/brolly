@@ -1,4 +1,4 @@
-import { resourceHashBucket, resourceId } from "@standardagents/brolly-core";
+import { PRODUCT_LIMIT_METRICS, productLimitMetric, resourceHashBucket, resourceId, type ProductMetricBillingKind, type ProductMetricRole } from "@standardagents/brolly-core";
 import { BILLED_VIA, INCLUDED_QUOTA_CATALOG_VERSION, includedAllotmentsForTier, type PlanTier, type PlanTierSource } from "./included-quota.js";
 import { estimatedBillableCostBreakdownSeries, type EstimatedBillableCostPoint } from "./estimated-billable-cost.js";
 import { readPlanState } from "./plan-tier.js";
@@ -27,7 +27,7 @@ export interface UsageSeriesResponse {
   found: boolean;
   today: string;
   /** Metric id → metadata for the metrics present in the series. */
-  metrics: Record<string, { key: string; label: string; unit: string; aggregationKind: "sum" | "maximum" | "latest"; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string } }>;
+  metrics: Record<string, { key: string; label: string; unit: string; aggregationKind: "sum" | "maximum" | "latest"; role?: Exclude<ProductMetricRole, "supporting">; productLimit?: boolean; billingKind?: ProductMetricBillingKind; condition?: string; sharedBillingMetricId?: string; billable: boolean; includedPerCycle?: number; billedVia?: { metricId: string; ratio: number; label: string } }>;
   series: UsageSeriesPoint[];
   /** Per-metric evidence for interpreting absent rows as zero or unavailable. */
   coverage: Record<string, CoverageSpan[]>;
@@ -63,7 +63,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const scope = url.searchParams.get("scope") ?? "account";
   const id = scopeResourceId(accountId, scope);
   if (!id) return Response.json({ error: "scope must be account, family:<family>, or asset:<family>:<scope>:<id>" }, { status: 400 });
-  const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 120)));
+  const days = Math.min(400, Math.max(1, Number(url.searchParams.get("days") ?? 90)));
   const today = new Date(now).toISOString().slice(0, 10);
   const from = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
   const shard = shardLocation(id);
@@ -80,7 +80,7 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
          AND resource_hash_bucket=?4 AND local_day>=?5 AND local_day<=?6
          AND (json_extract(payload_json,'$.sealedAt') IS NULL OR updated_at>json_extract(payload_json,'$.sealedAt'))`,
     ).bind(accountId, shard.productFamily, shard.scopeType, shard.bucket, from, today).all<{ local_day: string; payload_json: string }>(),
-    db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; aggregation_kind: "sum" | "maximum" | "latest"; billing_mapping: string | null }>(),
+    db.prepare(`SELECT id,metric_key,display_name,unit,aggregation_kind,billing_mapping,collector_key FROM metric_definitions WHERE active=1`).all<{ id: string; metric_key: string; display_name: string; unit: string; aggregation_kind: "sum" | "maximum" | "latest"; billing_mapping: string | null; collector_key: string }>(),
     db.prepare(`SELECT starts_at,ends_at,approximate FROM billing_cycles WHERE account_id=?1 AND ends_at>=?2 ORDER BY starts_at ASC`)
       .bind(accountId, now - (days + 31) * 86_400_000).all<{ starts_at: number; ends_at: number; approximate: number }>(),
     readPlanState(db),
@@ -116,38 +116,59 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
   const familyAllotments = family ? includedAllotments.filter(item => metricFamily(item.metricId) === family) : [];
   const includedByMetric = new Map(familyAllotments.map(item => [item.metricId, item.includedPerCycle]));
   const scopeFamily = family ?? scope.match(/^asset:([^:]+):/)?.[1] ?? null;
-  const visibleDefinitions = definitions.results.filter(definition =>
+  const scopedDefinitions = definitions.results.filter(definition =>
     present.has(definition.id) || scope === "account" || definition.id.startsWith(`${scopeFamily}:`));
-  const coverage = await coverageSpansForMetrics(db, accountId, visibleDefinitions.map(item => item.id), from, today, scope);
+  const presentationOrder = new Map(PRODUCT_LIMIT_METRICS.map((metric, index) => [metric.id, index]));
+  const visibleDefinitions = scopedDefinitions
+    .filter(definition => Boolean(productLimitMetric(definition.id)))
+    .sort((left, right) => (presentationOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (presentationOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+  // Cost estimation can depend on internal billing metrics that are omitted
+  // from the product-limit rows. Keep those metrics in the cost coverage
+  // calculation while exposing coverage only for rows the user can see.
+  const estimatedCostMetricIds = scopedDefinitions
+    .filter(item => item.collector_key !== "billing:billable-usage" && !item.metric_key.includes("cost_usd"))
+    .map(item => item.id);
+  const estimatedCoverage = await coverageSpansForMetrics(db, accountId, estimatedCostMetricIds, from, today, scope);
+  const coverage = Object.fromEntries(visibleDefinitions.map(definition => [definition.id, estimatedCoverage[definition.id] ?? []]));
   const billingCoverage = (await coverageSpansForMetrics(
     db, accountId, ["billing:authoritative_usage"], from, today, scope,
   ))["billing:authoritative_usage"] ?? [];
   const metrics = Object.fromEntries(visibleDefinitions
     .map(definition => {
+      const presentation = productLimitMetric(definition.id)!;
       const included = includedByMetric.get(definition.id);
       return [definition.id, {
         key: definition.metric_key,
-        label: definition.display_name,
-        unit: definition.unit,
+        label: presentation.label,
+        unit: presentation.unit,
         aggregationKind: definition.aggregation_kind,
-        billable: Boolean(definition.billing_mapping) || Boolean(BILLED_VIA[definition.id]),
+        role: presentation.role,
+        productLimit: true as const,
+        billingKind: presentation.billingKind,
+        ...(presentation.condition ? { condition: presentation.condition } : {}),
+        ...(presentation.sharedBillingMetricId ? { sharedBillingMetricId: presentation.sharedBillingMetricId } : {}),
+        billable: presentation.role === "billable" || presentation.role === "shared_billing",
         ...(included === undefined ? {} : { includedPerCycle: included }),
         ...(BILLED_VIA[definition.id] ? { billedVia: BILLED_VIA[definition.id] } : {}),
       }];
   }));
 
-  const cycleRows = cycles.results.map(cycle => ({ startsAt: cycle.starts_at, endsAt: cycle.ends_at, approximate: cycle.approximate === 1 }));
+  const cycleRows = resolvedBillingCycles(cycles.results);
   const billableCostAllotments = scope === "account" ? includedAllotments : familyAllotments;
   const billableCost = scope === "account" || family
     ? estimatedBillableCostBreakdownSeries(series, cycleRows, billableCostAllotments, planState.planTier)
     : { total: [], byMetric: {} };
-  const billableMetricIds = visibleDefinitions.filter(item => Boolean(item.billing_mapping) || Boolean(BILLED_VIA[item.id])).map(item => item.id);
-  const estimatedCostCoverage = combineCoverageSpans(coverage, billableMetricIds, from, today);
+  const estimatedCostCoverage = combineCoverageSpans(estimatedCoverage, estimatedCostMetricIds, from, today);
   const costCoverage = scope.startsWith("asset:")
     ? estimatedCostCoverage
     : alternativeCoverageSpans([billingCoverage, estimatedCostCoverage], from, today);
+  const visibleMetricIds = new Set(visibleDefinitions.map(item => item.id));
+  const visibleSeries = series.map(point => ({
+    ...point,
+    metrics: Object.fromEntries(Object.entries(point.metrics).filter(([metricId]) => visibleMetricIds.has(metricId))),
+  }));
   const body: UsageSeriesResponse = {
-    scope, resourceId: id, found: Boolean(resource), today, fromDay: from, metrics, series, coverage, costCoverage,
+    scope, resourceId: id, found: Boolean(resource), today, fromDay: from, metrics, series: visibleSeries, coverage, costCoverage,
     estimatedBillableCostSeries: billableCost.total,
     estimatedBillableCostByMetric: billableCost.byMetric,
     cycles: cycleRows,
@@ -156,6 +177,38 @@ export async function usageSeriesResponse(db: D1Database, accountId: string, url
     planTierSource: planState.planTierSource,
   };
   return Response.json(body);
+}
+
+interface StoredBillingCycle {
+  starts_at: number;
+  ends_at: number;
+  approximate: number;
+}
+
+/**
+ * Prefer Cloudflare cycle boundaries over provisional calendar cycles. Older
+ * Brolly versions derived a missing PayGo end as the next month boundary,
+ * which shortened anchor-day cycles. Repair that recognizable shape while
+ * reading so existing installations do not draw or calculate overlapping
+ * cycles.
+ */
+export function resolvedBillingCycles(rows: readonly StoredBillingCycle[]): UsageSeriesResponse["cycles"] {
+  const normalized = rows.map(row => {
+    const startsAt = Number(row.starts_at);
+    let endsAt = Number(row.ends_at);
+    const start = new Date(startsAt);
+    const legacyEnd = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1);
+    if (row.approximate === 0 && start.getUTCDate() !== 1 && endsAt === legacyEnd) {
+      const lastDayNextMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 2, 0)).getUTCDate();
+      endsAt = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(start.getUTCDate(), lastDayNextMonth));
+    }
+    return { startsAt, endsAt, approximate: row.approximate === 1 };
+  }).filter(cycle => Number.isFinite(cycle.startsAt) && Number.isFinite(cycle.endsAt) && cycle.endsAt > cycle.startsAt);
+  const authoritative = normalized.filter(cycle => !cycle.approximate);
+  const selected = normalized.filter(cycle => !cycle.approximate || !authoritative.some(exact =>
+    cycle.startsAt < exact.endsAt && cycle.endsAt > exact.startsAt));
+  const unique = new Map(selected.map(cycle => [`${cycle.startsAt}:${cycle.endsAt}`, cycle]));
+  return [...unique.values()].sort((left, right) => left.startsAt - right.startsAt || left.endsAt - right.endsAt);
 }
 
 function shardLocation(id: string): { productFamily: string; scopeType: string; bucket: number } {

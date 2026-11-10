@@ -20,6 +20,10 @@ const IGNORABLE_DATASETS: Record<string, string> = {
   firewallEventsAdaptiveGroups: "Security event telemetry does not represent a billable product meter.",
   httpRequests1mGroups: "Fine-grained HTTP telemetry is a general analytics dataset, not a product meter.",
   httpRequests1dGroups: "Fine-grained HTTP telemetry is a general analytics dataset, not a product meter.",
+  httpRequestsAdaptiveGroups: "HTTP traffic analytics does not represent a generic billable Zone meter.",
+  httpRequestsOverviewAdaptiveGroups: "HTTP traffic analytics does not represent a generic billable Zone meter.",
+  imagesRequestsAdaptiveGroups: "Generic image requests do not establish Images Delivered billing usage.",
+  emailRoutingAdaptiveGroups: "Inbound Email Routing is free and does not establish an Email Service billing meter.",
 };
 
 // Workers and Durable Objects use specialized collectors in cloudflare.ts.

@@ -1,7 +1,7 @@
 import { familyControl } from "@standardagents/brolly-core";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { LimitsChartDual, levelColor, useUsageSeries } from "../components/limits-chart";
-import { rowSeries, metricIncluded, billableMetricIds, costSeries, metricAggregationKind, metricSeries } from "../components/limits-chart/api";
+import { rowSeries, metricIncluded, limitMetricIds, costSeries, metricAggregationKind, metricSeries, type UsageSeriesResponse } from "../components/limits-chart/api";
 import { windowDefaults } from "../components/limits-chart/defaults";
 import type { LevelValues } from "../components/limits-chart/levels";
 import { Expander, Icon, ProductIcon, Spinner, Switch } from "../components/ui";
@@ -69,7 +69,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy, read
   setPolicy: Dispatch<SetStateAction<Policy>>;
   readiness: InitialIngestionResponse["readiness"]["products"];
 }) {
-  const families = data.families;
+  const families = data.families.filter(family => family.family !== "unknown");
   const STICKY_TOP = useStickyTop();
   const chartLevels = useMemo(() => levels.map((level, index) => ({ id: level.id, label: level.label, color: levelColor(index, levels.length) })), [levels]);
   // One open row across the whole step: opening a row anywhere closes the
@@ -172,7 +172,7 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy, read
                     <button type="button" onClick={() => jumpTo(scope)} aria-current={active ? "true" : undefined}
                       className={`flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left font-[680] transition-colors ${active ? "bg-orange-soft text-orange-deep" : "text-muted hover:bg-panel-soft hover:text-ink"} ${familyOn ? "" : "opacity-50"}`}>
                       <ProductIcon family={family.family} size="sm" />
-                      <span className="min-w-0 flex-1 truncate">{family.label}{deviated.size > 0 && <span className="ml-0.5 text-orange" title="Some limits differ from the tolerance defaults">*</span>}</span>
+                      <span className="min-w-0 flex-1 truncate" title={family.label}>{family.label}{deviated.size > 0 && <span className="ml-0.5 text-orange" title="Some limits differ from the tolerance defaults">*</span>}</span>
                       {familyControl(family.family) && <Icon name="shield" className="size-3.5 flex-none opacity-70" aria-label="Quarantine available" />}
                     </button>
                     <Expander open={active && items.length > 0}>
@@ -183,10 +183,10 @@ export function ProductLimitsStep({ token, data, policy, levels, setPolicy, read
                             const changed = deviated.has(item.id);
                             return (
                               <li key={item.id}>
-                                <button type="button" onClick={() => jumpTo(scope, item.id)} aria-current={itemActive ? "true" : undefined}
+                                <button type="button" onClick={() => jumpTo(scope, item.id)} aria-current={itemActive ? "true" : undefined} data-product-limit-item={item.id}
                                   className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12.5px] ${changed ? "font-bold text-ink" : "text-muted hover:text-ink"}`}>
                                   <i className={`size-1.5 flex-none rounded-full ${itemActive ? "bg-orange" : "bg-transparent"}`} aria-hidden="true" />
-                                  <span className="truncate">{item.label}{changed && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</span>
+                                  <span className="min-w-0 flex-1 truncate" title={item.label}>{item.label}{changed && <span className="ml-0.5 text-orange" title="Differs from the tolerance defaults">*</span>}</span>
                                 </button>
                               </li>
                             );
@@ -270,7 +270,7 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     if (!usage.data) return;
     const data = usage.data;
     const hasUsage = data.series.some(point => point.costUsd > 0 || Object.values(point.metrics).some(value => value > 0));
-    const metricIds = billableMetricIds(data);
+    const metricIds = limitMetricIds(data);
     // An item is "deviated" when either window's saved values differ from
     // its defaults: tolerance for the day window, the daily multiple for the
     // cycle window.
@@ -290,17 +290,18 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     onInfo(scope, { hasUsage, deviated, items: [{ id: "cost", label: "Cost" }, ...metricIds.map(id => ({ id, label: data.metrics[id]?.label ?? id }))] });
   }, [usage.data, onInfo, scope, order, tolerance, dayLimits, cycleLimits]);
   const control = familyControl(family);
+  const costHistory = usage.data ? productCostHistory(usage.data) : null;
 
   // content-visibility keeps offscreen product sections out of layout and
   // paint, so expanding a row reflows only the visible part of the page.
   return (
-    <section ref={setRefs} className="min-w-0 pb-12 [contain-intrinsic-size:auto_500px] [content-visibility:auto] last:pb-0" style={{ scrollMarginTop: STICKY_TOP + 8 }} aria-label={`${label} limits`}>
+    <section ref={setRefs} className="min-w-0 pb-12 [contain-intrinsic-size:auto_500px] [content-visibility:auto] last:pb-0" style={{ scrollMarginTop: STICKY_TOP + 8 }} aria-label={`${label} limits`} data-product-family={family}>
       {/* Sticky under the page header and step rail; the next product's header pushes it away. */}
       {/* pr-5 with the -mx-2 bleed puts the Monitored switch on the same right
           edge as the px-3-inset row switches below it. */}
       <header className="sticky z-20 -mx-2 mb-4 flex items-center gap-3 border-b border-line bg-panel pl-2 pr-5 pt-4 pb-3" style={{ top: STICKY_TOP }}>
         <ProductIcon family={family} />
-        <h3 className="text-[17px] font-[750]">{label}</h3>
+        <h3 className="min-w-0 truncate text-[17px] font-[750]" title={label}>{label}</h3>
         <ProductImportStatus readiness={readiness} />
         <span className="ml-1 inline-flex items-center gap-1.5">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2.5 py-1 text-[11px] font-bold text-chip-ink"><Icon name="bell" className="size-3.5" /> Alerts</span>
@@ -319,6 +320,14 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
       {usage.data && !near && <div className="h-[320px]" aria-hidden="true" />}
       {usage.data && near && (
         <div className={familyEnabled ? "" : "pointer-events-none opacity-55 saturate-0"} aria-disabled={!familyEnabled}>
+        {costHistory && (
+          <p className="mb-2 text-[11px] text-muted" data-product-cost-state={costHistory.state}>
+            {costHistory.allMeasuredZero && <>Recorded cost is $0 across {costHistory.measuredDays} measured {costHistory.measuredDays === 1 ? "day" : "days"}. </>}
+            {costHistory.pendingDays > 0 && <>Cost data is still importing for {costHistory.pendingDays} {costHistory.pendingDays === 1 ? "day" : "days"}. </>}
+            {costHistory.partialDays > 0 && <>Cost data is partial for {costHistory.partialDays} {costHistory.partialDays === 1 ? "day" : "days"}. </>}
+            {costHistory.unavailableDays > 0 && <>Cost data is unavailable for {costHistory.unavailableDays} {costHistory.unavailableDays === 1 ? "day" : "days"}.</>}
+          </p>
+        )}
         <LimitsChartDual
           data={usage.data}
           levels={levels}
@@ -336,6 +345,39 @@ const ProductSection = memo(function ProductSection({ ref, token, scope, family,
     </section>
   );
 });
+
+export function productCostHistory(data: UsageSeriesResponse): {
+  state: "measured-zero" | "partial" | "pending" | "unavailable";
+  measuredDays: number;
+  missingDays: number;
+  pendingDays: number;
+  partialDays: number;
+  unavailableDays: number;
+  allMeasuredZero: boolean;
+} | null {
+  const points = costSeries(data);
+  const measured = points.filter(point => !point.missing);
+  const missing = points.filter(point => point.missing);
+  const pendingDays = missing.filter(point => point.coverage === "pending").length;
+  const partialDays = missing.filter(point => point.coverage === "partial").length;
+  const unavailableDays = missing.length - pendingDays - partialDays;
+  const allMeasuredZero = measured.length > 0 && measured.every(point => point.value === 0);
+  if (missing.length === 0) {
+    return allMeasuredZero ? {
+      state: "measured-zero", measuredDays: measured.length, missingDays: 0,
+      pendingDays: 0, partialDays: 0, unavailableDays: 0, allMeasuredZero,
+    } : null;
+  }
+  const state = measured.length > 0 || partialDays > 0 || pendingDays > 0 && unavailableDays > 0
+    ? "partial"
+    : pendingDays > 0
+      ? "pending"
+      : "unavailable";
+  return {
+    state, measuredDays: measured.length, missingDays: missing.length,
+    pendingDays, partialDays, unavailableDays, allMeasuredZero,
+  };
+}
 
 function ProductImportStatus({ readiness }: {
   readiness: InitialIngestionResponse["readiness"]["products"][string];

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RunBudget } from "@standardagents/brolly-core";
+import { PRODUCT_METRIC_CONTRACTS, RunBudget, productMetricContract } from "@standardagents/brolly-core";
 import { HISTORICAL_DATASETS, HistoricalAnalyticsClient, HistoricalRateLimitError } from "../src/historical-analytics.js";
 import type { Env } from "../src/env.js";
 
@@ -9,6 +9,138 @@ const DAY_MS = 86_400_000;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("historical Analytics collection", () => {
+  it("plans only GraphQL datasets that feed Product Limits", () => {
+    expect(HISTORICAL_DATASETS.some(spec => spec.dataset === "aiGatewayRequestsAdaptiveGroups")).toBe(false);
+    expect(HISTORICAL_DATASETS.filter(spec => spec.kind === "product").every(spec =>
+      spec.source?.metrics.length && spec.source.metrics.every(metric => productMetricContract(`${spec.family}:${metric.metric}`)?.productLimit === true),
+    )).toBe(true);
+    expect(HISTORICAL_DATASETS.find(spec => spec.dataset === "queueMessageOperationsAdaptiveGroups")?.source?.metrics.map(metric => metric.metric))
+      .toEqual(["operations"]);
+  });
+
+  it("plans a collector for every GraphQL-backed Product Limit contract", () => {
+    const missing = PRODUCT_METRIC_CONTRACTS.filter(contract => contract.productLimit
+      && (contract.historySource === "graphql" || contract.historySource === "graphql_or_billing"))
+      .filter(contract => !HISTORICAL_DATASETS.some(spec => spec.family === contract.family && (
+        spec.source?.metrics.some(metric => metric.metric === contract.metricKey) ?? true
+      )));
+
+    expect(missing.map(contract => contract.id)).toEqual([]);
+  });
+
+  it("marks a requested aggregate unavailable when returned rows omit its field", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+      d1AnalyticsAdaptiveGroups: [{
+        dimensions: { date: "2026-08-15", databaseId: "database-1" },
+        sum: { rowsRead: 10 },
+      }],
+    }] } } })));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    const result = await client.collect({
+      dataset: "d1AnalyticsAdaptiveGroups",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+      availableFields: ["dimensions_date", "dimensions_databaseId", "sum_rowsRead", "sum_rowsWritten"],
+    });
+
+    expect(result.samples.map(sample => [sample.metric, sample.value])).toEqual([["rows_read", 10]]);
+    expect(result.coverage.find(item => item.metric === "rows_read")).toMatchObject({ state: "healthy" });
+    expect(result.coverage.find(item => item.metric === "rows_written")).toMatchObject({
+      state: "unavailable",
+      detail: expect.stringContaining("returned rows without the aggregate field"),
+    });
+  });
+
+  it("marks action metrics unavailable when Cloudflare mixes known and unknown operations", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+      r2OperationsAdaptiveGroups: [
+        {
+          dimensions: { bucketName: "bucket-1", actionType: "GetObject" },
+          sum: { requests: 2, responseBytes: 8 },
+        },
+        {
+          dimensions: { bucketName: "bucket-1", actionType: "NewUnclassifiedOperation" },
+          sum: { requests: 5, responseBytes: 12 },
+        },
+      ],
+    }] } } })));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    const result = await client.collect({
+      dataset: "r2OperationsAdaptiveGroups",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+    });
+
+    expect(result.coverage.find(item => item.metric === "class_a")?.state).toBe("unavailable");
+    expect(result.coverage.find(item => item.metric === "class_b")?.state).toBe("unavailable");
+  });
+
+  it("treats a successful empty product query as measured zero", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+      vectorizeV2QueriesAdaptiveGroups: [],
+    }] } } })));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    const result = await client.collect({
+      dataset: "vectorizeV2QueriesAdaptiveGroups",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 1,
+      activityProbe: true,
+    });
+
+    expect(result).toMatchObject({ complete: true, rows: 0, samples: [] });
+    expect(result.coverage).toEqual([
+      expect.objectContaining({ family: "vectorize", metric: "queried_dimensions", state: "healthy" }),
+    ]);
+  });
+
+  it("marks a missing account root unavailable instead of measured zero", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [] } } })));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    const product = await client.collect({
+      dataset: "vectorizeV2QueriesAdaptiveGroups",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 1,
+      activityProbe: true,
+    });
+    const workers = await client.collect({
+      dataset: "workersInvocationsAdaptive",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+    });
+
+    expect(product.coverage.every(item => item.state === "unavailable")).toBe(true);
+    expect(workers.coverage.every(item => item.state === "unavailable")).toBe(true);
+  });
+
+  it("marks null special aggregates unavailable instead of zero", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: { viewer: { accounts: [{
+      workersInvocationsAdaptive: [{
+        dimensions: { date: "2026-08-15", scriptName: "worker-1" },
+        sum: { requests: null, cpuTimeUs: null },
+      }],
+    }] } } })));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
+
+    const result = await client.collect({
+      dataset: "workersInvocationsAdaptive",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+    });
+
+    expect(result.samples).toEqual([]);
+    expect(result.coverage.every(item => item.state === "unavailable")).toBe(true);
+  });
+
   it("uses nested account zone batches and reports an absent zone node", async () => {
     let request: Request | undefined;
     const rateBudget = { admit: vi.fn(async () => undefined), observe: vi.fn(), pauseUntil: vi.fn() };
@@ -27,7 +159,7 @@ describe("historical Analytics collection", () => {
     );
 
     const result = await client.collect({
-      dataset: "httpRequestsAdaptiveGroups",
+      dataset: "emailSendingAdaptiveGroups",
       startsAt: Date.UTC(2026, 7, 15),
       endsAt: Date.UTC(2026, 7, 16),
       maxPageSize: 10_000,
@@ -40,7 +172,9 @@ describe("historical Analytics collection", () => {
     expect(body.query).toContain("zoneTag_in: $zones");
     expect(body.query).toContain("cost viewer { budget");
     expect(body.variables).toMatchObject({ account: "account-1", zones: [zoneId] });
-    expect(rateBudget.admit).toHaveBeenCalledWith({ kind: "account" }, 1, "httpRequestsAdaptiveGroups", 2);
+    expect(rateBudget.admit).toHaveBeenCalledWith(
+      { kind: "account" }, 1, "emailSendingAdaptiveGroups", 2, [zoneId], 1,
+    );
     expect(rateBudget.observe).toHaveBeenCalledWith(
       { kind: "account" },
       1,
@@ -68,6 +202,26 @@ describe("historical Analytics collection", () => {
     })).rejects.toBeInstanceOf(HistoricalRateLimitError);
   });
 
+  it("keeps the shared lane available after an HTTP 200 query-budget rejection", async () => {
+    const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      errors: [{ message: "Rate limiter budget depleted. Please try again after 5 minutes.", extensions: { code: "budget" } }],
+    })));
+    const client = new HistoricalAnalyticsClient(
+      env, new RunBudget(), undefined, async () => "token", undefined,
+      { accountBasedRateLimit: true, rateBudget },
+    );
+
+    await expect(client.collect({
+      dataset: "workersInvocationsAdaptive",
+      startsAt: Date.UTC(2026, 7, 15),
+      endsAt: Date.UTC(2026, 7, 16),
+      maxPageSize: 10_000,
+    })).rejects.toBeInstanceOf(HistoricalRateLimitError);
+
+    expect(rateBudget.pauseUntil).not.toHaveBeenCalled();
+  });
+
   it("keeps named account-based rate limits scoped to the affected zone", async () => {
     const zoneId = "a".repeat(32);
     const rateBudget = { admit: vi.fn(async () => undefined), pauseUntil: vi.fn() };
@@ -83,7 +237,7 @@ describe("historical Analytics collection", () => {
     );
 
     await expect(client.collect({
-      dataset: "httpRequestsAdaptiveGroups",
+      dataset: "emailSendingAdaptiveGroups",
       startsAt: Date.UTC(2026, 7, 15),
       endsAt: Date.UTC(2026, 7, 16),
       maxPageSize: 10_000,
@@ -162,7 +316,7 @@ describe("historical Analytics collection", () => {
     expect(queries).toHaveLength(1);
     expect(queries[0]).toContain("imagesTransformationsAdaptiveGroups(limit: 30,");
     expect(rateBudget.admit).toHaveBeenCalledWith(
-      { kind: "account" }, 1, "imagesTransformationsAdaptiveGroups", 30,
+      { kind: "account" }, 1, "imagesTransformationsAdaptiveGroups", 30, [], 29,
     );
     expect(rateBudget.observe).toHaveBeenCalledWith(
       { kind: "account" }, 1, expect.objectContaining({ pageSize: 30 }),
@@ -209,6 +363,24 @@ describe("historical Analytics collection", () => {
 });
 
 describe("historical Analytics capability discovery", () => {
+  it("keeps an enabled dataset available when settings fields use an unrecognized shape", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body);
+      const settings = body.includes("d1AnalyticsAdaptiveGroups")
+        ? { d1AnalyticsAdaptiveGroups: { ...setting(), availableFields: ["fields.rowsRead", "fields.rowsWritten"] } }
+        : {};
+      return Response.json({ data: { viewer: { accounts: [{ settings }] } } });
+    }));
+    const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token", async () => []);
+
+    const capabilities = await client.discoverCapabilities();
+
+    expect(capabilities.find(item => item.dataset === "d1AnalyticsAdaptiveGroups")).toMatchObject({
+      enabled: true,
+      state: "healthy",
+    });
+  });
+
   it("resumes capability discovery from persisted progress after a query epoch fills", async () => {
     const zoneIds = Array.from({ length: 55 }, (_, index) => (index + 1).toString(16).padStart(32, "0"));
     const settings = Object.fromEntries(HISTORICAL_DATASETS.map(spec => [spec.dataset, setting()]));
@@ -237,7 +409,7 @@ describe("historical Analytics capability discovery", () => {
     let seed = [] as Awaited<ReturnType<HistoricalAnalyticsClient["discoverCapabilities"]>>;
     const first = new HistoricalAnalyticsClient(
       env, new RunBudget(), undefined, async () => "token", async () => zoneIds,
-      { accountBasedRateLimit: true, rateBudget: budget(160) },
+      { accountBasedRateLimit: true, rateBudget: budget(50) },
     );
 
     await expect(first.discoverCapabilities({ onProgress: values => { seed = [...values]; } }))
@@ -248,7 +420,7 @@ describe("historical Analytics capability discovery", () => {
     phase = 2;
     const second = new HistoricalAnalyticsClient(
       env, new RunBudget(), undefined, async () => "token", async () => zoneIds,
-      { accountBasedRateLimit: true, rateBudget: budget(160) },
+      { accountBasedRateLimit: true, rateBudget: budget(100) },
     );
     const capabilities = await second.discoverCapabilities({ seed });
     const primaryZoneDatasets = HISTORICAL_DATASETS.filter(spec => spec.root === "zone" && !spec.fallbackFor);
@@ -281,23 +453,20 @@ describe("historical Analytics capability discovery", () => {
     expect(requests.length).toBeGreaterThan(1);
   });
 
-  it("isolates a zone dataset that makes a combined settings query fail", async () => {
+  it("isolates a denied zone dataset", async () => {
     const zoneId = "a".repeat(32);
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       const body = String(init?.body);
-      if (body.includes("httpRequestsAdaptiveGroups")) {
-        return Response.json({ errors: [{ message: "httpRequestsAdaptiveGroups is not authorized" }] });
+      if (body.includes("emailSendingAdaptiveGroups")) {
+        return Response.json({ errors: [{ message: "emailSendingAdaptiveGroups is not authorized" }] });
       }
-      const settings: Record<string, ReturnType<typeof setting>> = {};
-      if (body.includes("emailSendingAdaptiveGroups")) settings.emailSendingAdaptiveGroups = setting();
-      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, settings }] } } });
+      return Response.json({ data: { viewer: { zones: [{ zoneTag: zoneId, settings: {} }] } } });
     }));
     const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token", async () => [zoneId]);
 
     const capabilities = await client.discoverCapabilities();
 
-    expect(capabilities.find(item => item.dataset === "httpRequestsAdaptiveGroups" && item.zoneId === zoneId)?.state).toBe("permission_denied");
-    expect(capabilities.find(item => item.dataset === "emailSendingAdaptiveGroups" && item.zoneId === zoneId)?.state).toBe("healthy");
+    expect(capabilities.find(item => item.dataset === "emailSendingAdaptiveGroups" && item.zoneId === zoneId)?.state).toBe("permission_denied");
   });
 
   it("isolates a denied zone during product collection and preserves valid zone rows", async () => {
@@ -307,12 +476,12 @@ describe("historical Analytics capability discovery", () => {
       const body = JSON.parse(String(init?.body)) as { variables?: { zones?: string[] } };
       const zones = body.variables?.zones ?? [];
       if (zones.includes(deniedZone)) return Response.json({ errors: [{ message: `zone ${deniedZone} is not authorized` }] });
-      return Response.json({ data: { viewer: { zones: zones.map(zoneTag => ({ zoneTag, httpRequestsAdaptiveGroups: [{ dimensions: { date: "2026-08-15" }, count: 7 }] })) } } });
+      return Response.json({ data: { viewer: { zones: zones.map(zoneTag => ({ zoneTag, emailSendingAdaptiveGroups: [{ dimensions: { date: "2026-08-15" }, count: 7 }] })) } } });
     }));
     const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
 
     const result = await client.collect({
-      dataset: "httpRequestsAdaptiveGroups",
+      dataset: "emailSendingAdaptiveGroups",
       startsAt: Date.UTC(2026, 7, 15),
       endsAt: Date.UTC(2026, 7, 16),
       maxPageSize: 10_000,
@@ -320,7 +489,7 @@ describe("historical Analytics capability discovery", () => {
     });
 
     expect(result.rows).toBe(1);
-    expect(result.samples).toHaveLength(2);
+    expect(result.samples).toHaveLength(1);
     expect(result.complete).toBe(false);
     expect(result.coverage.every(item => item.state === "permission_denied")).toBe(true);
     expect(result.coverage[0]?.detail).toContain(deniedZone);
@@ -334,12 +503,12 @@ describe("historical Analytics capability discovery", () => {
       const body = JSON.parse(String(init?.body)) as { variables?: { zones?: string[] } };
       const zones = body.variables?.zones ?? [];
       requests.push(zones);
-      return Response.json({ data: { viewer: { zones: zones.map(zoneTag => ({ zoneTag, httpRequestsAdaptiveGroups: [] })) } } });
+      return Response.json({ data: { viewer: { zones: zones.map(zoneTag => ({ zoneTag, emailSendingAdaptiveGroups: [] })) } } });
     }));
     const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
 
     const result = await client.collect({
-      dataset: "httpRequestsAdaptiveGroups",
+      dataset: "emailSendingAdaptiveGroups",
       startsAt: Date.UTC(2026, 7, 15),
       endsAt: Date.UTC(2026, 7, 16),
       maxPageSize: 10_000,
@@ -358,7 +527,7 @@ describe("historical Analytics capability discovery", () => {
     const client = new HistoricalAnalyticsClient(env, new RunBudget(), undefined, async () => "token");
 
     await expect(client.collect({
-      dataset: "httpRequestsAdaptiveGroups",
+      dataset: "emailSendingAdaptiveGroups",
       startsAt: Date.UTC(2026, 7, 15),
       endsAt: Date.UTC(2026, 7, 16),
       maxPageSize: 10_000,
@@ -382,9 +551,7 @@ describe("historical Analytics capability discovery", () => {
       return Response.json({ data: { viewer: { zones: zones.map(zoneTag => ({
         zoneTag,
         settings: {
-          httpRequestsAdaptiveGroups: setting(),
           emailSendingAdaptiveGroups: setting(),
-          emailRoutingAdaptiveGroups: setting(),
         },
       })) } } });
     }));
@@ -400,9 +567,9 @@ describe("historical Analytics capability discovery", () => {
     const zoneCapabilities = capabilities.filter(item => item.root === "zone");
 
     expect(requestedZoneBatches.every(batch => batch.length <= 10)).toBe(true);
-    expect(zoneCapabilities.filter(item => item.zoneId === unauthorized)).toHaveLength(4);
+    expect(zoneCapabilities.filter(item => item.zoneId === unauthorized)).toHaveLength(1);
     expect(new Set(zoneCapabilities.filter(item => item.zoneId === unauthorized).map(item => item.state))).toEqual(new Set(["permission_denied"]));
-    expect(zoneCapabilities.filter(item => item.zoneId !== unauthorized && item.enabled)).toHaveLength(11 * 3);
+    expect(zoneCapabilities.filter(item => item.zoneId !== unauthorized && item.enabled)).toHaveLength(11);
   });
 });
 

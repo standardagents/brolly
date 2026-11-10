@@ -64,7 +64,18 @@ describe("initial import progress", () => {
   it("keeps unavailable source data behind a counted error popover", async () => {
     const ingestion: InitialIngestionResponse = {
       job: { id: "job", status: "running", startedAt: 1, updatedAt: 2 },
-      days: { total: 90, complete: 10, pending: 80, gaps: 77, failedWindows: 18, errors: ["coverage gap"] },
+      days: {
+        total: 90,
+        complete: 10,
+        pending: 80,
+        gaps: 77,
+        failedWindows: 18,
+        errors: ["coverage gap"],
+        issues: [
+          { dataset: "httpRequests1dGroups", label: "Zones", fromDay: "2026-06-01", toDay: "2026-08-28", affectedDays: 89, affectedScopes: 50, scope: "zones", reason: "query budget" },
+          { dataset: "imagesTransformationsAdaptiveGroups", label: "Images", fromDay: "2026-07-30", toDay: "2026-08-28", affectedDays: 30, affectedScopes: null, scope: "account", reason: "query budget" },
+        ],
+      },
       collectors: [collector(100, 10)],
       readiness: pendingReadiness(),
     };
@@ -73,10 +84,12 @@ describe("initial import progress", () => {
     const trigger = container.querySelector<HTMLButtonElement>("[data-import-error-trigger]");
 
     expect(progress?.getAttribute("aria-valuenow")).toBe("10");
+    expect(progress?.dataset.importErrors).toBe("2");
+    expect(trigger?.getAttribute("aria-label")).toBe("2 import coverage issues");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => trigger?.click());
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
-    expect(document.body.querySelector("[role='dialog']")).not.toBeNull();
+    expect(document.body.querySelectorAll("[data-import-coverage-issue]")).toHaveLength(2);
   });
 
   it("includes an exact capacity wait in the total ETA", async () => {

@@ -33,7 +33,7 @@ export class Store {
     const statements = assets.map(asset => this.db.prepare(
         `INSERT INTO assets(account_id,family,asset_id,parent_id,name,scope,tier,metadata_json,discovered_at,seen_at)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
-         ON CONFLICT(account_id,family,asset_id) DO UPDATE SET parent_id=excluded.parent_id,name=excluded.name,scope=excluded.scope,
+         ON CONFLICT(account_id,family,asset_id) DO UPDATE SET parent_id=excluded.parent_id,name=COALESCE(excluded.name,assets.name),scope=excluded.scope,
            tier=CASE WHEN excluded.tier='control_plane' THEN 'control_plane' ELSE assets.tier END,
            metadata_json=json_patch(assets.metadata_json,excluded.metadata_json),seen_at=excluded.seen_at
          WHERE (excluded.tier='control_plane' AND assets.tier!='control_plane')
@@ -41,6 +41,14 @@ export class Store {
             OR assets.seen_at < excluded.seen_at - 3600000`,
       ).bind(asset.accountId, asset.family, asset.id, asset.parentId ?? null, asset.name ?? null, asset.scope, asset.tier, JSON.stringify(asset.tags ?? {}), now));
     await this.runBatches(statements);
+    const suppliedNames = assets.filter(asset => asset.nameKind === "named" && asset.name);
+    await this.runBatches(suppliedNames.map(asset => this.db.prepare(
+      `UPDATE resources SET display_name=?4,cloudflare_name=?4,name_kind='named',
+         metadata_json=json_patch(metadata_json,?5)
+       WHERE account_id=?1 AND product_family=?2 AND cloudflare_id=?3
+         AND name_kind!='brolly'
+         AND (cloudflare_name IS NOT ?4 OR name_kind!='named' OR json_patch(metadata_json,?5)!=metadata_json)`,
+    ).bind(asset.accountId, asset.family, asset.id, asset.name, JSON.stringify(asset.tags ?? {}))));
   }
 
   async saveCoverage(items: CoverageResult[]): Promise<void> {

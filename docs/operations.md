@@ -52,16 +52,16 @@ days. Initial ingestion uses Cloudflare's account-based Analytics limiter. A
 persisted rolling ledger records Cloudflare's returned GraphQL budget and each
 observed five-minute debit. A known dataset reserves 110% of its measured
 page-unit rate. An unseen query with a bounded result page uses a conservative
-per-row estimate. After twelve measured query shapes, unseen work reserves 125%
-of the observed 90th-percentile debit. Earlier work uses the largest measured
-debit. A successful response that reaches zero marks its full-window estimate
+per-row estimate and the observed GraphQL cost for its logical-query count. A
+successful response that reaches zero marks its full-window estimate
 as provisional. The next clean measurement replaces that estimate with at
 least the account baseline. Queries without a bounded page use the same
 adaptive account baseline.
 All paths retain a small fixed reserve. Otherwise work resumes
 when the earliest recorded debit expires. Responses without budget telemetry
-use a conservative 270-unit fallback. Zone settings and usage are nested
-under the connected account in batches of at most ten zones. Physical requests
+use a conservative 270-unit fallback. Zone settings are nested under the
+connected account in batches of at most ten zones. Historical usage uses the
+same ten-zone bound. Physical requests
 use one shared lane with a 1.2-second minimum interval. Each interval uses the
 average of the previous measured debit and the next predicted debit. This
 centers expensive requests across the surrounding time and distributes
@@ -69,8 +69,29 @@ lower-cost completions through the rolling window. Each zone in a batch consumes
 one logical query unit during admission. Each invocation allows at most
 300 physical GraphQL requests. One import lease covers browser and cron starts.
 Billing finishes before Analytics starts. Analytics candidates are ordered by
-Durable Objects, Workers, and billed family cost. A waiting candidate yields to
-eligible lower-cost work. The highest-priority eligible candidate runs first.
+Durable Objects, Workers, and billed family cost. A paced Durable Objects or
+Workers slice receives a persisted admission deadline and debit reservation.
+A lower-cost activity probe may use capacity inside that fixed gap when its
+request preserves both reservations. Every candidate uses the shared paced
+lane.
+`brolly.initial_graphql_priority_reserved` records the protected slice ID,
+dataset, admission deadline, predicted debit, logical query count, estimate
+source, source budget key, source debit, and source and target range lengths.
+`brolly.initial_graphql_priority_admitted` records the protected slice ID,
+dataset, scheduled deadline, actual admission time, and reserved debit. A
+residual request must preserve the recorded deadline and reserved capacity.
+The first detailed request after a positive activity probe receives a protected
+calibration reservation against reported remaining capacity. An unseen detail
+uses reliable probe debit for the same dataset plus the standard safety margin.
+The closest probe range is scaled to the detail range, and the probe evidence
+remains a floor for small result pages. Unrelated product debits do not enlarge
+that reservation. It
+does not wait for a fresh window unless the dataset is scan-heavy or Cloudflare
+reports a budget failure. Probe and detail debit observations remain separate. A probe
+reserves a share of the observed Cloudflare budget based on its date range. If
+that share does not fit, `brolly.initial_graphql_probe_split` records the range
+that was bisected before a Cloudflare request. The resulting leaf ranges retain
+complete, non-overlapping coverage of the original interval.
 When a smaller clean-window retry succeeds, pending slices for that dataset
 return to measured pacing from the observed debit.
 Capability discovery and collection retain a 12-second wall-time margin before
@@ -82,15 +103,24 @@ Date-based resource datasets use their discovered resource count to shrink
 later page limits. The bound includes 20% headroom, at least eight extra rows,
 and one truncation sentinel. A truncated result still follows the normal range
 split and retry path.
-Images Transformations waits for a fresh GraphQL window because its daily result
-size does not bound Cloudflare's underlying event-scan cost.
+Each non-priority Product Limits range starts with a one-row aggregate activity
+probe. Empty ranges complete as measured zero. A positive range promotes every
+pending probe for that dataset to detailed collection. Only one probe for a
+dataset can remain in flight during this decision. Images Transformations uses daily aggregate queries with
+a two-row bound. This shape limits its event scan and provides daily chart data
+without a second query.
 When a successful HTTP response reports that one query exhausted the remaining
 GraphQL budget, the importer defers that dataset until a fully recovered
-window. Other eligible datasets can continue while it waits. A second failure
-against recovered capacity quarters ranges of four days or more, which avoids
-another predictable recovery cycle. Later failures bisect the range. A single-day range receives one
-fresh-window retry before becoming unavailable coverage. A successful smaller
-retry returns its pending siblings to measured pacing. A successful query that
+window. Eligible ordinary slices drain before that retry receives a protected
+reservation. The HTTP 200 rejection leaves the shared lane available. HTTP 429
+responses retain their account or named-scope cooldown. A recovered
+grouped-zone failure splits the zone group before changing its date range.
+Account and single-zone failures quarter ranges of four days or more. Later
+failures bisect the range. Each new request shape starts with fresh failure
+accounting. A single-zone, single-day range receives one fresh-window retry
+before that slice becomes unavailable coverage. Sibling slices remain pending
+at a lower priority so other datasets can use later budget windows.
+A successful smaller retry returns its pending siblings to measured pacing. A successful query that
 leaves zero budget records a provisional full-window estimate.
 Capability results are checkpointed after each successful discovery request.
 Planning resumes from that checkpoint when the rolling ledger has capacity.
@@ -108,7 +138,8 @@ Setup can continue while the scheduler finishes eligible slices. One progress
 row combines weighted work across every planned source
 partition. It shows the completed percentage and an estimated remaining time.
 The collapsed row opens to show per-source percentages and completed window
-counts. A counted warning control contains unavailable window details. Progress
+counts. A counted warning control groups failures by dataset and reports the
+affected date range and zone count. Progress
 polling uses a five-second active interval and retries transient request
 failures with bounded backoff. A lease takeover
 returns interrupted running slices to the pending queue.
@@ -315,7 +346,8 @@ weighted work across every planned source partition. The row shows an estimated
 remaining time after progress begins. Its quota countdown is combined with the
 larger of paced-request work and observed throughput, which avoids counting the
 same wait twice. The collapsed row opens to per-source
-progress. A counted warning control contains unavailable window details.
+progress. A counted warning control groups failures by dataset and reports the
+affected date range and zone count.
 During a Cloudflare rate-limit wait, the row shows the retry countdown and the
 completion estimate.
 Risk tolerance and account limits open when Billing reaches a terminal state.

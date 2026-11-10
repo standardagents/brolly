@@ -1,4 +1,4 @@
-import { METRIC_CATALOG, localDayAt, localDayBounds, resourceId, type LedgerRunBudget } from "@standardagents/brolly-core";
+import { localDayAt, localDayBounds, productMetricContractsForFamily, resourceId, type LedgerRunBudget } from "@standardagents/brolly-core";
 import type { AccumulatorChange } from "./ledger-accumulator.js";
 import type { BillingUsageRecord, CloudflareClient } from "./cloudflare.js";
 import type { Env } from "./env.js";
@@ -53,7 +53,7 @@ export async function reconcileBilling(
     const chargeStart = safeDate(record.ChargePeriodStart, now - 86_400_000);
     const chargeEnd = safeDate(record.ChargePeriodEnd, now);
     const startsAt = safeDate(record.BillingPeriodStart, Date.UTC(new Date(chargeStart).getUTCFullYear(), new Date(chargeStart).getUTCMonth(), 1));
-    const endsAt = safeDate(record.BillingPeriodEnd, Date.UTC(new Date(startsAt).getUTCFullYear(), new Date(startsAt).getUTCMonth() + 1, 1));
+    const endsAt = billingCycleEnd(startsAt, record.BillingPeriodEnd);
     const currency = record.BillingCurrency ?? "USD";
     const cycleId = `${env.BROLLY_ACCOUNT_ID}:${startsAt}:${endsAt}`;
     const cost = record.BilledCost ?? record.EffectiveCost ?? record.ListCost ?? 0;
@@ -212,6 +212,21 @@ export async function reconcileBilling(
       ].filter(Boolean).join("; "),
     } : {}),
   };
+}
+
+/**
+ * Cloudflare's PayGo response supplies a cycle start without a corresponding
+ * end. Preserve the account's anchor day when deriving the next monthly
+ * boundary, clamping end-of-month anchors to the last day of the next month.
+ */
+export function billingCycleEnd(startsAt: number, suppliedEnd?: string): number {
+  const parsed = suppliedEnd ? Date.parse(suppliedEnd) : NaN;
+  if (Number.isFinite(parsed) && parsed > startsAt) return parsed;
+  const start = new Date(startsAt);
+  const year = start.getUTCFullYear();
+  const month = start.getUTCMonth();
+  const lastDayNextMonth = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+  return Date.UTC(year, month + 1, Math.min(start.getUTCDate(), lastDayNextMonth));
 }
 
 function billingMissingRanges(records: BillingUsageRecord[], startsAt: number, endsAt: number): Array<{ from: string; to: string }> {
@@ -458,10 +473,12 @@ function normalizeMetric(value: string): string {
 }
 
 export function billingCatalogMetric(family: string, billingMetric: string): string | null {
-  const product = METRIC_CATALOG.find(item => item.family === family && item.family !== "unknown");
-  if (!product) return null;
-  return [...product.metrics].sort((left, right) => right.length - left.length)
-    .find(metric => billingMetric === metric || billingMetric.includes(metric)) ?? null;
+  const normalized = normalizeMetric(billingMetric);
+  const match = productMetricContractsForFamily(family).find(metric =>
+    ["independent", "conditional", "announced"].includes(metric.billingKind)
+    && [metric.metricKey, `${family}_${metric.metricKey}`, ...(metric.billingAliases ?? [])]
+      .some(alias => normalizeMetric(alias) === normalized));
+  return match?.metricKey ?? null;
 }
 
 function displayFamily(family: string): string {

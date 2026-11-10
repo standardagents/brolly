@@ -1,4 +1,10 @@
+import { PRODUCT_METRIC_CONTRACTS } from "@standardagents/brolly-core";
 import { BILLED_VIA, type IncludedAllotment, type PlanTier } from "./included-quota.js";
+
+const SHARED_BILLING_METERS: Readonly<Record<string, string>> = Object.fromEntries(PRODUCT_METRIC_CONTRACTS
+  .flatMap(metric => metric.billingKind === "shared" && metric.sharedBillingMetricId
+    ? [[metric.id, metric.sharedBillingMetricId] as const]
+    : []));
 
 /**
  * The usage fields needed to derive the secondary cost series. The server's
@@ -132,7 +138,6 @@ export function estimatedBillableCostBreakdownSeries(
  * WebSocket messages, for example, consume Durable Objects requests at 20:1.
  */
 function foldBilledVia(metrics: Readonly<Record<string, number>>): Record<string, number> {
-  if (!Object.keys(metrics).some(metricId => BILLED_VIA[metricId])) return { ...metrics };
   const folded: Record<string, number> = { ...metrics };
   for (const [metricId, target] of Object.entries(BILLED_VIA)) {
     const value = folded[metricId];
@@ -140,6 +145,12 @@ function foldBilledVia(metrics: Readonly<Record<string, number>>): Record<string
     delete folded[metricId];
     const converted = Math.max(0, Number.isFinite(value) ? value : 0) / target.ratio;
     folded[target.metricId] = (folded[target.metricId] ?? 0) + converted;
+  }
+  for (const [metricId, targetMetricId] of Object.entries(SHARED_BILLING_METERS)) {
+    const value = folded[metricId];
+    if (value === undefined) continue;
+    delete folded[metricId];
+    folded[targetMetricId] = (folded[targetMetricId] ?? 0) + Math.max(0, Number.isFinite(value) ? value : 0);
   }
   return folded;
 }

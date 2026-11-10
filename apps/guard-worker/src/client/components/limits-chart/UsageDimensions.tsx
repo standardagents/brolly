@@ -26,12 +26,15 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
   aggregationKind?: AggregationKind;
   className?: string;
 }) {
-  const { bars, freeAreas } = useMemo(() => {
+  const { coverageGaps, baselines, bars, freeAreas } = useMemo(() => {
     const derived = deriveSeries(series, cycles, today, aggregationKind);
     const included = typeof includedPerCycle === "number" && Number.isFinite(includedPerCycle) && includedPerCycle > 0 ? includedPerCycle : undefined;
-    let points = window === "cycle" ? derived.cumulative.map(point => point.cumulative) : derived.dense.map(point => point.value);
+    const source = window === "cycle"
+      ? derived.cumulative.map(point => ({ value: point.cumulative, missing: Boolean(point.missing) }))
+      : derived.dense.map(point => ({ value: point.value, missing: Boolean(point.missing) }));
+    let points = source;
     const poolCumulative = window === "cycle" && included && poolSeries ? deriveSeries(poolSeries, cycles, today, aggregationKind).cumulative.map(point => point.cumulative) : undefined;
-    let tops = window === "cycle" && included ? includedTops(points, poolCumulative, included) : [];
+    let tops = window === "cycle" && included ? includedTops(points.map(point => point.value), poolCumulative, included) : [];
     // One bar per day fits the 120-unit viewBox for the usual three-cycle
     // window; only longer histories bucket to the peak per bucket.
     const MAX_BARS = 120;
@@ -40,8 +43,9 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
       const buckets = Array.from({ length: MAX_BARS }, (_, bucket) => {
         const from = Math.floor(bucket * size);
         const to = Math.max(from + 1, Math.floor((bucket + 1) * size));
-        let peak = from;
-        for (let index = from + 1; index < to; index += 1) if (points[index]! > points[peak]!) peak = index;
+        const measured = Array.from({ length: to - from }, (_, offset) => from + offset).filter(index => !points[index]!.missing);
+        let peak = measured[0] ?? from;
+        for (const index of measured.slice(1)) if (points[index]!.value > points[peak]!.value) peak = index;
         return peak;
       });
       points = buckets.map(peak => points[peak]!);
@@ -54,13 +58,30 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
     // logarithmic unless the whole history sits inside the free allotment.
     const maxCycleTotal = Math.max(0, ...derived.cumulative.map(point => point.cumulative));
     const mode = recommendedUsageScale(derived.dense.map(point => point.value), maxCycleTotal, included);
-    const axis = chooseAxis(points, [], mode);
+    const axis = chooseAxis(points.filter(point => !point.missing).map(point => point.value), [], mode);
     const order = levels.map(level => level.id);
     const colorById = new Map(levels.map(level => [level.id, level.color]));
     const width = 120;
     const height = 28;
     const slot = width / Math.max(1, points.length);
     const yFor = (value: number) => height - axis.position(value) * (height - 1);
+    // Every source day owns one baseline segment. Keeping this layer at full
+    // resolution preserves coverage gaps even when long histories bucket the
+    // taller value bars.
+    const baselineHeight = 1.2;
+    const baselineSlot = width / Math.max(1, source.length);
+    const coverageGaps = source.flatMap((point, index) => point.missing ? [{
+      key: index,
+      x: index * baselineSlot,
+      width: baselineSlot + 0.2,
+    }] : []);
+    const baselines = source.flatMap((point, index) => point.missing ? [] : [{
+      key: index,
+      x: index * baselineSlot,
+      width: baselineSlot + 0.2,
+      y: height - baselineHeight,
+      height: baselineHeight,
+    }]);
     // Day sparklines carry the free burn-down behind the bars, one polygon per
     // cycle, clipped by the sparkline's own scale like the full chart.
     const freeAreas: string[] = [];
@@ -78,12 +99,13 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
       for (const group of groups.values()) freeAreas.push([`${group.left},${height}`, ...group.points, `${group.right},${height}`].join(" "));
     }
     const bars = points.flatMap((point, index) => {
+      if (point.missing) return [];
       const x = index * slot;
       // Adjacent bars overlap by a hair so the downscaled SVG shows no seams between days.
       const barWidth = slot + 0.8;
       if (window === "day") {
         // Blue up to the first level, each level's color only above it.
-        const edges = [0, ...levelValues.filter(value => value > 0 && value < point), point];
+        const edges = [0, ...levelValues.filter(value => value > 0 && value < point.value), point.value];
         const bounds = [...new Set(edges)].sort((left, right) => left - right);
         return bounds.slice(1).map((top, segment) => {
           const bottom = bounds[segment]!;
@@ -94,7 +116,7 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
       // Cycle mode: stack the running total into value bands, like the full
       // chart; the included part of the total is green.
       const includedTop = tops[index] ?? 0;
-      const edges = [0, ...[...levelValues, includedTop].map(value => Math.min(value, point)).filter(value => value > 0 && value < point), point];
+      const edges = [0, ...[...levelValues, includedTop].map(value => Math.min(value, point.value)).filter(value => value > 0 && value < point.value), point.value];
       const bounds = [...new Set(edges)].sort((left, right) => left - right);
       return bounds.slice(1).map((top, segment) => {
         const bottom = bounds[segment]!;
@@ -104,13 +126,14 @@ export const MiniChart = memo(function MiniChart({ series, cycles, today, window
         return { key: `${index}-${segment}`, x, width: barWidth, y: yFor(top), height: Math.max(0.4, yFor(bottom) - yFor(top)), color };
       });
     });
-    return { bars, freeAreas };
+    return { coverageGaps, baselines, bars, freeAreas };
   }, [series, cycles, today, window, levels, values, accent, includedPerCycle, poolSeries, aggregationKind]);
   return (
     <svg viewBox="0 0 120 28" className={className} aria-hidden="true" preserveAspectRatio="none">
       {freeAreas.map((points, index) => <polygon key={`free-${index}`} points={points} fill={INCLUDED_COLOR} opacity=".2" />)}
+      {coverageGaps.map(gap => <rect key={`coverage-${gap.key}`} data-spark-coverage="unavailable" x={gap.x} y="0" width={gap.width} height="28" fill="var(--faint)" opacity=".14" shapeRendering="crispEdges" />)}
+      {baselines.map(line => <rect key={`baseline-${line.key}`} data-spark-baseline="measured" x={line.x} y={line.y} width={line.width} height={line.height} fill={accent} shapeRendering="crispEdges" />)}
       {bars.map(bar => <rect key={bar.key} x={bar.x} y={bar.y} width={bar.width} height={bar.height} fill={bar.color} shapeRendering="geometricPrecision" />)}
     </svg>
   );
 });
-

@@ -99,6 +99,7 @@ export function ImportProgressView({
   const quotaWaiting = waiting && !pacing;
   const paused = storagePaused || quotaWaiting;
   const days = ingestion?.days ?? null;
+  const issueCount = days ? importIssueCount(days) : 0;
   const planning = running && (!ingestion?.job || ingestion.job.status === "planning" || !days);
   const state = error ? "error" : quotaWaiting ? "rate_limited" : pacing ? "pacing" : planning ? "planning" : hasGaps && !running ? "complete_with_gaps" : "importing";
   const overall = ingestion && days ? initialIngestionOverallProgress(ingestion, now) : null;
@@ -137,7 +138,7 @@ export function ImportProgressView({
         {days && overall && (
           <span className="flex items-center gap-2">
             {paused && <span className="inline-flex text-warn" aria-label="Import paused"><Icon name="pause" className="size-3.5" /></span>}
-            {days.failedWindows > 0 && <ImportErrors days={days} />}
+            {issueCount > 0 && <ImportErrors days={days} />}
             <span className="text-[11px] tabular-nums text-muted">{overall.percentage}%</span>
           </span>
         )}
@@ -235,7 +236,7 @@ function ImportOverallBar({ days, overall, paused }: {
   const incomplete = finished && days.complete < days.total;
 
   return (
-    <div className="h-1.5 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label="Account history import progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall.percentage} aria-valuetext={`${overall.percentage}% of the 90-day import processed`} data-import-days={days.complete} data-import-progress={overall.percentage} data-import-errors={days.failedWindows}>
+    <div className="h-1.5 min-w-0 overflow-hidden rounded-full bg-line-soft" role="progressbar" aria-label="Account history import progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall.percentage} aria-valuetext={`${overall.percentage}% of the 90-day import processed`} data-import-days={days.complete} data-import-progress={overall.percentage} data-import-errors={importIssueCount(days)}>
       <div className={`h-full transition-[width] duration-500 ${paused || incomplete ? "bg-warn" : finished ? "bg-good" : "bg-orange"}`} style={{ width: `${overall.percentage}%` }} />
     </div>
   );
@@ -246,25 +247,37 @@ function ImportErrors({ days }: { days: InitialIngestionDays }) {
   const anchor = useRef<HTMLSpanElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useOutsideClose([anchor, panel], open, () => setOpen(false));
+  const issues = days.issues ?? [];
+  const count = importIssueCount(days);
 
   return (
     <span ref={anchor} className="inline-flex">
       <button
         type="button"
         className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold tabular-nums text-warn hover:bg-warn-bg focus-visible:outline-2 focus-visible:outline-warn"
-        aria-label={`${days.failedWindows} import errors`}
+        aria-label={`${count} import coverage ${count === 1 ? "issue" : "issues"}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         data-import-error-trigger
         onClick={() => setOpen(value => !value)}
       >
         <Icon name="alert" className="size-3.5" />
-        {days.failedWindows}
+        {count}
       </button>
       <Popover anchor={anchor} open={open} side="top" align="end">
         <div ref={panel} role="dialog" aria-label="Account history import errors" className="w-[min(300px,calc(100vw-24px))] rounded-panel border border-line bg-panel p-3 shadow-panel">
-          <strong className="block text-[12px] text-ink">{days.failedWindows} unavailable import {days.failedWindows === 1 ? "window" : "windows"}</strong>
-          {days.errors.length > 0 && (
+          <strong className="block text-[12px] text-ink">{count} affected {count === 1 ? "dataset" : "datasets"}</strong>
+          {issues.length > 0 ? (
+            <ul className="mt-2 grid gap-2.5 text-[11px] leading-4 text-muted">
+              {issues.map(issue => (
+                <li key={issue.dataset} data-import-coverage-issue={issue.dataset}>
+                  <strong className="block text-ink">{issue.label}</strong>
+                  <span className="block">{issue.affectedDays} affected {issue.affectedDays === 1 ? "day" : "days"} · {formatIssueRange(issue.fromDay, issue.toDay)} span{issue.scope === "zones" && issue.affectedScopes ? ` · ${issue.affectedScopes} ${issue.affectedScopes === 1 ? "zone" : "zones"}` : " · account"}</span>
+                  <span className="block">{issue.reason}</span>
+                </li>
+              ))}
+            </ul>
+          ) : days.errors.length > 0 && (
             <ul className="mt-2 grid gap-1.5 text-[11px] leading-4 text-muted">
               {days.errors.map(item => <li key={item}>{item}</li>)}
             </ul>
@@ -273,6 +286,16 @@ function ImportErrors({ days }: { days: InitialIngestionDays }) {
       </Popover>
     </span>
   );
+}
+
+function importIssueCount(days: InitialIngestionDays): number {
+  return days.issues?.length ?? Math.max(days.failedWindows > 0 ? 1 : 0, new Set(days.errors).size);
+}
+
+function formatIssueRange(fromDay: string, toDay: string): string {
+  const format = (day: string) => new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" })
+    .format(new Date(`${day}T00:00:00Z`));
+  return fromDay === toDay ? format(fromDay) : `${format(fromDay)}–${format(toDay)}`;
 }
 
 function ingestionIsActive(response: InitialIngestionResponse): boolean {

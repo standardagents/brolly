@@ -107,6 +107,13 @@ describe("BudgetWizard", () => {
     ]);
     // Fixture data (the account name supplied to the wizard) reaches the page.
     expect(container.textContent).toContain("test-account");
+    await waitFor(() => expect(container.querySelector("section[data-step='account'] [data-limits-chart='cost']")).not.toBeNull());
+    const accountHistoryRequests = vi.mocked(fetch).mock.calls.filter(([input]) => {
+      const url = new URL(String(input), "https://brolly.test");
+      return url.pathname === "/api/usage-series" && url.searchParams.get("scope") === "account";
+    });
+    expect(accountHistoryRequests).toHaveLength(1);
+    expect(container.querySelector("section[data-step='account']")?.textContent).not.toContain("Loading usage history");
   });
 
   it("opens risk tolerance when Billing is ready while Analytics remains pending", async () => {

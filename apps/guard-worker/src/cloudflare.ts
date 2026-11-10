@@ -167,7 +167,7 @@ export class CloudflareClient {
           const id = stringValue(row.id) ?? stringValue(row.uuid) ?? stringValue(row.queue_id)
             ?? stringValue(row.name) ?? stringValue(row.namespace_id);
           if (!id) continue;
-          const name = stringValue(row.name) ?? stringValue(row.queue_name) ?? stringValue(row.title) ?? id;
+          const name = stringValue(row.name) ?? stringValue(row.queue_name) ?? stringValue(row.title);
           const tags: Record<string, string> = {};
           if (family === "durable_objects") {
             const workerScript = stringValue(row.script);
@@ -184,8 +184,8 @@ export class CloudflareClient {
           }
           assets.push({
             accountId: this.env.BROLLY_ACCOUNT_ID, family, id,
-            name,
-            scope, tier: family === "workers" && (isBrollyScript(id, this.env.BROLLY_SELF_WORKER_NAME) || isBrollyScript(name, this.env.BROLLY_SELF_WORKER_NAME))
+            ...(name ? { name, nameKind: "named" as const } : { nameKind: "id_only" as const }),
+            scope, tier: family === "workers" && (isBrollyScript(id, this.env.BROLLY_SELF_WORKER_NAME) || Boolean(name && isBrollyScript(name, this.env.BROLLY_SELF_WORKER_NAME)))
               ? "control_plane" : "unclassified", tags,
           });
         }
@@ -922,7 +922,7 @@ function metric(asset: AssetRef, name: string, unit: MetricSample["unit"], value
   return { asset, metric: name, unit, value, start, end, source: "graphql", estimatedCostUsd: value * unitPrice + storageCost, sampled };
 }
 function workerMetric(accountId: string, scriptName: string, name: "requests" | "cpu_ms", unit: MetricSample["unit"], value: number, start: number, end: number, sampled: boolean, selfWorker?: string): MetricSample {
-  const asset: AssetRef = { accountId, family: "workers", id: scriptName, name: scriptName, scope: "resource", tier: isBrollyScript(scriptName, selfWorker) ? "control_plane" : "unclassified" };
+  const asset: AssetRef = { accountId, family: "workers", id: scriptName, name: scriptName, nameKind: "named", scope: "resource", tier: isBrollyScript(scriptName, selfWorker) ? "control_plane" : "unclassified" };
   const unitPrice = name === "requests" ? 0.30 / 1_000_000 : 0.02 / 1_000_000;
   return { asset, metric: name, unit, value, start, end, source: "graphql", estimatedCostUsd: value * unitPrice, sampled };
 }

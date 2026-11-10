@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { compactId, dateTime, relativeTime } from "../format";
+import { dateTime, relativeTime } from "../format";
 import type { LedgerResource } from "../types";
-import { Button, CellStack, DetailBlock, Drawer, EmptyState, Eyebrow, Field, Icon, LinkButton, Notice, Panel, PanelHead, ProductIcon, Select, Table, TableScroll, Td, Th, Tr } from "../components/ui";
+import { ResourceIdentity, identityCollisions, identityLabel } from "../components/ResourceIdentity";
+import { Button, CellStack, DetailBlock, Drawer, EmptyState, Eyebrow, Field, Icon, LinkButton, Notice, Panel, PanelHead, Select, Table, TableScroll, Td, Th, Tr } from "../components/ui";
 import type { Route } from "../router";
 import { QualityBadge } from "./UsagePage";
 
@@ -16,7 +17,7 @@ export function ResourcesPage({ token, onNavigate }: { token: string; onNavigate
   const [error, setError] = useState("");
 
   const load = useCallback(async (append = false) => {
-    const params = new URLSearchParams({ limit: "500" });
+    const params = new URLSearchParams({ limit: "100" });
     if (family) params.set("family", family);
     if (search.trim()) params.set("q", search.trim());
     if (append && nextCursor) params.set("cursor", nextCursor);
@@ -31,6 +32,8 @@ export function ResourcesPage({ token, onNavigate }: { token: string; onNavigate
     const timer = window.setTimeout(() => void load(false).catch(cause => setError(message(cause))), search ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [family, search, token]);
+
+  const collisions = useMemo(() => identityCollisions(resources), [resources]);
 
   return (
     <>
@@ -66,13 +69,10 @@ export function ResourcesPage({ token, onNavigate }: { token: string; onNavigate
             <Table>
               <thead><tr><Th>Resource</Th><Th>Type</Th><Th>Coverage</Th><Th>Control</Th><Th>Automatic policy</Th><Th>Last active</Th><Th /></tr></thead>
               <tbody>{resources.map(resource => (
-                <Tr clickable key={resource.id} onClick={() => setSelected(resource)}>
+                <Tr key={resource.id}>
                   <Td>
-                    <CellStack
-                      titleClassName="flex items-center gap-2"
-                      title={<><ProductIcon family={resource.productFamily} />{resource.displayName}</>}
-                      sub={<>{compactId(resource.cloudflareId)} · {resource.childCount} children</>}
-                    />
+                    <ResourceIdentity identity={{ ...resource, productFamily: resource.productFamily }} collision={collisions.has(resource.cloudflareId)} />
+                    {resource.childCount > 0 && <small className="mt-1 block pl-9 text-[11.5px] text-faint">{resource.childCount} children</small>}
                   </Td>
                   <Td>{scope(resource.resourceType)}</Td>
                   <Td><QualityBadge quality={resource.coverageStatus} /></Td>
@@ -80,7 +80,7 @@ export function ResourcesPage({ token, onNavigate }: { token: string; onNavigate
                   <Td>{resource.excluded ? "Excluded" : resource.autoQuarantinePolicy}</Td>
                   <Td>{resource.lastActiveAt ? relativeTime(resource.lastActiveAt) : "No activity observed"}</Td>
                   <Td className="whitespace-nowrap text-right">
-                    <LinkButton onClick={event => { event.stopPropagation(); setSelected(resource); }}>Details <Icon name="arrow" /></LinkButton>
+                    <LinkButton onClick={() => setSelected(resource)}>Details <Icon name="arrow" /></LinkButton>
                   </Td>
                 </Tr>
               ))}</tbody>
@@ -107,6 +107,7 @@ function ResourceDrawer({ resource, token, onClose, onChanged, onUsage }: {
   const [tier, setTier] = useState(resource.tier);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
 
   const detailRow = "grid grid-cols-[125px_1fr] gap-2.5 border-t border-line-soft py-2 text-[12.5px]";
 
@@ -122,15 +123,23 @@ function ResourceDrawer({ resource, token, onClose, onChanged, onUsage }: {
     } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   }
 
+  async function copyId() {
+    await navigator.clipboard.writeText(resource.cloudflareId);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  }
+
   return (
     <Drawer
       onClose={onClose}
       labelledBy="resource-title"
-      header={<div><Eyebrow>{display(resource.productFamily)} · {scope(resource.resourceType)}</Eyebrow><h2 id="resource-title">{resource.displayName}</h2><p>{resource.cloudflareId}</p></div>}
+      header={<div><Eyebrow>{display(resource.productFamily)} · {scope(resource.resourceType)}</Eyebrow><h2 id="resource-title">{identityLabel(resource)}</h2><p>{resource.nameKind === "named" ? resource.cloudflareName : "Cloudflare resource"}</p></div>}
       footer={<Button variant="secondary" onClick={onClose}>Done</Button>}
     >
       <DetailBlock title="Ledger state">
         <dl className="my-3">
+          <div className={detailRow}><dt className="text-faint">Cloudflare ID</dt><dd className="m-0 min-w-0 break-all"><code>{resource.cloudflareId}</code> <LinkButton inline onClick={() => void copyId()}>{copied ? "Copied" : "Copy ID"}</LinkButton></dd></div>
+          {resource.parentIdentity && <div className={detailRow}><dt className="text-faint">Parent</dt><dd className="m-0 min-w-0 break-all">{identityLabel(resource.parentIdentity)}</dd></div>}
           <div className={detailRow}><dt className="text-faint">Coverage</dt><dd className="m-0 min-w-0 break-all"><QualityBadge quality={resource.coverageStatus} /></dd></div>
           <div className={detailRow}><dt className="text-faint">First seen</dt><dd className="m-0 min-w-0 break-all">{dateTime(resource.firstSeenAt)}</dd></div>
           <div className={detailRow}><dt className="text-faint">Last inventoried</dt><dd className="m-0 min-w-0 break-all">{dateTime(resource.lastSeenAt)}</dd></div>
