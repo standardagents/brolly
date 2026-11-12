@@ -1,0 +1,15 @@
+# Brolly
+
+> Brolly is a free, open source tool that adds monitoring, cost guardrails, a circuit breaker, and automatic quarantine for every billable Cloudflare service. It is self-hosted in your own Cloudflare account.
+
+Brolly watches billable Cloudflare usage, alerts when spend moves out of line, and gives operators audited, reversible ways to contain it. Brolly never deletes resources or customer data. Automatic controls are opt-in.
+
+## Documentation
+
+- [Brolly homepage and documentation](https://brolly.standardagents.ai/): Coverage, detection intervals, limits, controls, and installation
+- [Source code and README](https://github.com/standardagents/brolly): MIT-licensed source, install steps, and configuration
+- [Deploy to Cloudflare](https://deploy.workers.cloudflare.com/?url=https://github.com/standardagents/brolly/tree/deploy-template): One-step deployment that provisions the D1 database and deploys the dashboard and guard Worker
+
+## Related
+
+- [Standard Agents](https://standardagents.ai/): The team that builds and maintains Brolly
